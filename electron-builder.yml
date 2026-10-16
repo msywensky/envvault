@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: envvault
+appId: com.envvault.app
+productName: EnvVault
 directories:
   buildResources: build
 files:
