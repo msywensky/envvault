@@ -14,7 +14,6 @@ function invoke<C extends keyof Responses>(
 }
 
 const api: EnvVaultApi = {
-  ping: () => invoke(CH.ping),
   getState: () => invoke(CH.getState),
   activity: () => invoke(CH.activity),
   getSettings: () => invoke(CH.getSettings),

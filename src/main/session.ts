@@ -23,22 +23,29 @@ export function unlock(newKey: Uint8Array, newVaultId: string, autoLockMinutes: 
   touch()
 }
 
-/** Wipe the key and notify the renderer. Safe to call when already locked. */
-export function lock(): void {
+/**
+ * Wipe the key and (unless told not to) notify the renderer. Safe to call
+ * when already locked.
+ */
+export function lock(opts: { notify?: boolean } = {}): void {
   if (timer) clearTimeout(timer)
   timer = null
   const wasUnlocked = key !== null
   if (key) key.fill(0)
   key = null
   vaultId = null
-  if (wasUnlocked) for (const fn of listeners) fn()
+  if (wasUnlocked && opts.notify !== false) notifyLocked()
+}
+
+export function notifyLocked(): void {
+  for (const fn of listeners) fn()
 }
 
 /** Reset the idle timer. Called on every authorised IPC request. */
 export function touch(): void {
   if (!key) return
   if (timer) clearTimeout(timer)
-  timer = setTimeout(lock, idleMs)
+  timer = setTimeout(() => lock(), idleMs)
 }
 
 export function setAutoLockMinutes(minutes: number): void {

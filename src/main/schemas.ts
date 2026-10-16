@@ -22,7 +22,6 @@ export const MachineName = z
 export const AutoLockMinutes = z.int().min(1).max(120)
 
 export const requestSchemas = {
-  [CH.ping]: NoArgs,
   [CH.getState]: NoArgs,
   [CH.activity]: NoArgs,
   [CH.getSettings]: NoArgs,

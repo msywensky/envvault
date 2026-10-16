@@ -79,6 +79,8 @@ export interface PullPreview {
   vault: VaultInfo
   hasLocal: boolean
   ignored: boolean
+  /** Backup and temp files (.env.bak.*) would be ignored too. */
+  backupIgnored: boolean
   tracked: boolean
   /** The vault version is lower than the one last synced here. */
   rollback: boolean
@@ -103,5 +105,7 @@ export interface PullResult {
 
 export interface GitignoreResult {
   ignored: boolean
+  /** Backup and temp files (.env.bak.*) would be ignored too. */
+  backupIgnored: boolean
   tracked: boolean
 }

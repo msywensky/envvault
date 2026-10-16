@@ -47,8 +47,8 @@ if (!app.requestSingleInstanceLock()) {
       // when the machine sleeps or its screen locks, and tell the renderer.
       ipcHooks.onAuthorizedCall = vaultSession.touch
       vaultSession.onLocked(() => getMainWindow()?.webContents.send(EV.locked))
-      powerMonitor.on('suspend', vaultSession.lock)
-      powerMonitor.on('lock-screen', vaultSession.lock)
+      powerMonitor.on('suspend', () => vaultSession.lock())
+      powerMonitor.on('lock-screen', () => vaultSession.lock())
 
       registerIpc()
       createMainWindow()

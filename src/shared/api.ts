@@ -14,7 +14,6 @@ import type {
 // Response payload for each channel. main's `handle()` and the preload's
 // `invoke()` are both typed against this map.
 export interface Responses {
-  'app:ping': 'pong'
   'app:getState': AppState
   'app:activity': null
   'settings:get': Settings
@@ -35,7 +34,6 @@ type R<C extends keyof Responses> = Promise<Result<Responses[C]>>
 
 // The API the preload exposes as `window.envvault`. Type-only.
 export interface EnvVaultApi {
-  ping(): R<'app:ping'>
   getState(): R<'app:getState'>
   /** Throttled by the renderer; resets the idle auto-lock timer. */
   activity(): R<'app:activity'>

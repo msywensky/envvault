@@ -80,6 +80,26 @@ export async function isTracked(repoDir: string, relPath: string): Promise<boole
   return (await git(repoDir, ['ls-files', '--error-unmatch', '--', relPath])) === 0
 }
 
+// Representative names for the files a pull creates next to .env: the
+// backup (.env.bak.<timestamp>) and the plaintext temp file (.env.bak.tmp-<hex>).
+const BACKUP_SAMPLES = ['.env.bak.20000101T000000Z', '.env.bak.tmp-0000000000000000']
+
+/** True if git would ignore the backup and temp files a pull creates. */
+export async function backupsIgnored(repoDir: string): Promise<boolean> {
+  const results = await Promise.all(BACKUP_SAMPLES.map((name) => checkIgnored(repoDir, name)))
+  return results.every(Boolean)
+}
+
+/** The three checks a pull depends on. */
+export async function ignoreStatus(repoDir: string): Promise<GitignoreResult> {
+  const [ignored, backupIgnored, tracked] = await Promise.all([
+    checkIgnored(repoDir, '.env'),
+    backupsIgnored(repoDir),
+    isTracked(repoDir, '.env')
+  ])
+  return { ignored, backupIgnored, tracked }
+}
+
 /** Append the .env ignore lines that are missing, then re-check. */
 export async function addToGitignore(repoDir: string): Promise<GitignoreResult> {
   const file = join(repoDir, '.gitignore')
@@ -99,9 +119,5 @@ export async function addToGitignore(repoDir: string): Promise<GitignoreResult> 
     const sep = existing === '' || existing.endsWith('\n') ? '' : eol
     await writeFile(file, existing + sep + missing.join(eol) + eol)
   }
-  const [ignored, tracked] = await Promise.all([
-    checkIgnored(repoDir, '.env'),
-    isTracked(repoDir, '.env')
-  ])
-  return { ignored, tracked }
+  return ignoreStatus(repoDir)
 }

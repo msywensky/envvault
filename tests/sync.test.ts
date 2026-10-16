@@ -193,11 +193,34 @@ describe('machine A: create vault and push', () => {
     expect(
       await errorCode(m.sync.pull(key, vaultId, { repoName: 'app3', expected: preview.expected }))
     ).toBe('ENV_NOT_IGNORED')
-    expect(await m.sync.addGitignore('app3')).toEqual({ ignored: true, tracked: false })
+    expect(await m.sync.addGitignore('app3')).toEqual({
+      ignored: true,
+      backupIgnored: true,
+      tracked: false
+    })
     expect(readFileSync(join(projA, 'app3', '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
     // Idempotent.
     await m.sync.addGitignore('app3')
     expect(readFileSync(join(projA, 'app3', '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
+  })
+
+  it('reports un-ignored backups in the preview, and the same fix covers them', async () => {
+    const m = await machine('a')
+    const dir = makeRepo(projA, 'envonly', { '.gitignore': '.env\n', '.env': 'E=1\n' })
+    await pushRepo(m, 'envonly')
+    writeFileSync(join(dir, '.env'), 'E=2\n')
+    const { key, vaultId } = await m.open()
+    const preview = await m.sync.previewPull(key, vaultId, 'envonly')
+    expect(preview).toMatchObject({ ignored: true, backupIgnored: false, tracked: false })
+    expect(
+      await errorCode(
+        m.sync.pull(key, vaultId, { repoName: 'envonly', expected: preview.expected })
+      )
+    ).toBe('BACKUP_NOT_IGNORED')
+    expect(await m.sync.addGitignore('envonly')).toMatchObject({ backupIgnored: true })
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(join(vaultDir, 'envonly.env.enc'))
   })
 
   it('blocks pulls when .env is tracked by git', async () => {

@@ -2,7 +2,6 @@
 // preload can import it without bundling zod.
 
 export const CH = {
-  ping: 'app:ping',
   getState: 'app:getState',
   activity: 'app:activity',
   getSettings: 'settings:get',

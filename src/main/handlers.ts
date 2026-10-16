@@ -13,7 +13,6 @@ import { createVault, folderState, openVault } from './vault'
 import { getMainWindow } from './window'
 
 export function registerIpc(): void {
-  handle(CH.ping, () => 'pong' as const)
   handle(CH.activity, () => null)
 
   handle(CH.getState, async () => {
@@ -101,9 +100,16 @@ async function saveFolder(which: 'projects' | 'vault', picked: string): Promise<
     )
   }
   if (which === 'vault') {
-    // The key belongs to the old vault.
-    if (cfg.vaultPath !== picked) session.lock()
-    return updateConfig({ vaultPath: picked })
+    if (cfg.vaultPath === picked) return cfg
+    // The key belongs to the old vault: wipe it now, but tell the renderer
+    // only after the new path is saved, so its refresh sees the new folder.
+    const wasUnlocked = session.isUnlocked()
+    session.lock({ notify: false })
+    try {
+      return await updateConfig({ vaultPath: picked })
+    } finally {
+      if (wasUnlocked) session.notifyLocked()
+    }
   }
   return updateConfig({ projectsPath: picked })
 }

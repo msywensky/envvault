@@ -19,7 +19,7 @@ import type {
 import { getConfig } from './config'
 import { AppError } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
-import { addToGitignore, checkIgnored, isTracked } from './git'
+import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { readLocalEnv, resolveRepo, scanRepos, type ScannedRepo } from './repos'
 import { getLast, setLast } from './state'
 import { entryId, listEntryIds, readEntry, writeEntry } from './vault'
@@ -228,11 +228,7 @@ export function previewPull(
 ): Promise<PullPreview> {
   return withSnapshot(key, repoName, async (s) => {
     if (!s.payload || !s.vault) throw noVaultCopy()
-    const [last, ignored, tracked] = await Promise.all([
-      getLast(vaultId, s.id),
-      checkIgnored(s.repoDir, '.env'),
-      isTracked(s.repoDir, '.env')
-    ])
+    const [last, git] = await Promise.all([getLast(vaultId, s.id), ignoreStatus(s.repoDir)])
     return {
       diff: diffKeys(
         parseAndWipe(decodeEnv(s.payload)),
@@ -240,8 +236,7 @@ export function previewPull(
       ),
       vault: s.vault,
       hasLocal: s.local !== null,
-      ignored,
-      tracked,
+      ...git,
       rollback: last !== null && s.vault.version < last.version,
       sameContent: s.localHash === s.vault.contentHash,
       expected: expectedOf(s)
