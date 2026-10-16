@@ -58,7 +58,8 @@ if (!app.requestSingleInstanceLock()) {
       })
     })
     .catch((err: unknown) => {
-      console.error('[envvault] startup failed', err)
+      // Name only, as in ipc.ts: error messages can quote file contents.
+      console.error(`[envvault] startup failed: ${err instanceof Error ? err.name : 'unknown'}`)
       app.quit()
     })
 
