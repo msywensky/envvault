@@ -1,7 +1,10 @@
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, powerMonitor, session } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { EV } from '../shared/channels'
 import { registerIpc } from './handlers'
+import { ipcHooks } from './ipc'
+import * as vaultSession from './session'
 import { createMainWindow, getMainWindow } from './window'
 
 // Dev-only: ENVVAULT_PROFILE=<name> gives this run its own userData folder, so
@@ -39,6 +42,13 @@ if (!app.requestSingleInstanceLock()) {
 
       // F12 toggles DevTools in dev; Ctrl/Cmd+R reload is disabled in production.
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
+
+      // Session lifecycle: any authorised request counts as activity; lock
+      // when the machine sleeps or its screen locks, and tell the renderer.
+      ipcHooks.onAuthorizedCall = vaultSession.touch
+      vaultSession.onLocked(() => getMainWindow()?.webContents.send(EV.locked))
+      powerMonitor.on('suspend', vaultSession.lock)
+      powerMonitor.on('lock-screen', vaultSession.lock)
 
       registerIpc()
       createMainWindow()

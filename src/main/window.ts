@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { lock } from './session'
 
 export const RENDERER_INDEX = join(__dirname, '../renderer/index.html')
 
@@ -35,6 +36,8 @@ export function createMainWindow(): BrowserWindow {
   win.on('ready-to-show', () => win.show())
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
+    // Closing the window locks the vault (on macOS the app keeps running).
+    lock()
   })
 
   // The app never opens windows, navigates away, or embeds web content.

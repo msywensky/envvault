@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { is } from '@electron-toolkit/utils'
 import type { z } from 'zod'
 import type { Responses } from '../shared/api'
-import { requestSchemas } from '../shared/ipc'
+import { requestSchemas } from './schemas'
 import type { AppErrorInfo, ErrorCode, Result } from '../shared/result'
 import { AppError } from './errors'
 import { getMainWindow, RENDERER_INDEX } from './window'
@@ -32,12 +32,21 @@ export function handle<C extends HandledChannel>(
       return { ok: true, data: await fn(parsed.data) }
     } catch (err) {
       if (err instanceof AppError) return fail(err.code, err.message)
+      // Node fs errors: report the errno code only (messages contain paths).
+      const errno = errnoCode(err)
+      if (errno) return fail('FS_ERROR', `File system error (${errno}).`)
       // Only the error name is logged: messages from JSON.parse and similar
       // can quote the input, which may be secret.
       console.error(`[envvault] ${channel} failed: ${err instanceof Error ? err.name : 'unknown'}`)
       return fail('INTERNAL', 'Unexpected error.')
     }
   })
+}
+
+function errnoCode(err: unknown): string | null {
+  if (typeof err !== 'object' || err === null || !('code' in err)) return null
+  const code = (err as { code: unknown }).code
+  return typeof code === 'string' && /^E[A-Z]+$/.test(code) ? code : null
 }
 
 function fail(code: ErrorCode, message: string): { ok: false; error: AppErrorInfo } {

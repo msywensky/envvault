@@ -1,0 +1,62 @@
+// Holds the derived vault key while unlocked, and the idle auto-lock timer.
+import { AppError } from './errors'
+
+let key: Uint8Array | null = null
+let vaultId: string | null = null
+let timer: NodeJS.Timeout | null = null
+let idleMs = 5 * 60_000
+const listeners = new Set<() => void>()
+
+export function onLocked(fn: () => void): void {
+  listeners.add(fn)
+}
+
+export function isUnlocked(): boolean {
+  return key !== null
+}
+
+export function unlock(newKey: Uint8Array, newVaultId: string, autoLockMinutes: number): void {
+  if (key) key.fill(0)
+  key = newKey
+  vaultId = newVaultId
+  idleMs = autoLockMinutes * 60_000
+  touch()
+}
+
+/** Wipe the key and notify the renderer. Safe to call when already locked. */
+export function lock(): void {
+  if (timer) clearTimeout(timer)
+  timer = null
+  const wasUnlocked = key !== null
+  if (key) key.fill(0)
+  key = null
+  vaultId = null
+  if (wasUnlocked) for (const fn of listeners) fn()
+}
+
+/** Reset the idle timer. Called on every authorised IPC request. */
+export function touch(): void {
+  if (!key) return
+  if (timer) clearTimeout(timer)
+  timer = setTimeout(lock, idleMs)
+}
+
+export function setAutoLockMinutes(minutes: number): void {
+  idleMs = minutes * 60_000
+  touch()
+}
+
+/**
+ * Run `fn` with a private copy of the key, wiped afterwards. Locking while
+ * `fn` runs wipes only the session's copy, so an operation in flight can
+ * never encrypt with an all-zero key.
+ */
+export async function withKey<T>(fn: (key: Uint8Array, vaultId: string) => Promise<T>): Promise<T> {
+  if (!key || !vaultId) throw new AppError('LOCKED', 'The vault is locked.')
+  const copy = key.slice()
+  try {
+    return await fn(copy, vaultId)
+  } finally {
+    copy.fill(0)
+  }
+}

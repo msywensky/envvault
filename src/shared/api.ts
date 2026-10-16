@@ -1,12 +1,57 @@
 import type { Result } from './result'
+import type {
+  AppState,
+  GitignoreResult,
+  PullPreview,
+  PullRequest,
+  PullResult,
+  PushPreview,
+  PushRequest,
+  RepoRow,
+  Settings
+} from './types'
 
 // Response payload for each channel. main's `handle()` and the preload's
 // `invoke()` are both typed against this map.
 export interface Responses {
   'app:ping': 'pong'
+  'app:getState': AppState
+  'app:activity': null
+  'settings:get': Settings
+  'settings:save': Settings
+  'settings:pickFolder': Settings | null
+  'session:createVault': null
+  'session:unlock': null
+  'session:lock': null
+  'repos:list': RepoRow[]
+  'repo:previewPush': PushPreview
+  'repo:push': RepoRow
+  'repo:previewPull': PullPreview
+  'repo:pull': PullResult
+  'repo:addGitignore': GitignoreResult
 }
+
+type R<C extends keyof Responses> = Promise<Result<Responses[C]>>
 
 // The API the preload exposes as `window.envvault`. Type-only.
 export interface EnvVaultApi {
-  ping(): Promise<Result<Responses['app:ping']>>
+  ping(): R<'app:ping'>
+  getState(): R<'app:getState'>
+  /** Throttled by the renderer; resets the idle auto-lock timer. */
+  activity(): R<'app:activity'>
+  getSettings(): R<'settings:get'>
+  saveSettings(patch: { autoLockMinutes: number; machineName: string }): R<'settings:save'>
+  /** Opens a native folder picker. Resolves to null if cancelled. */
+  pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
+  createVault(password: string): R<'session:createVault'>
+  unlock(password: string): R<'session:unlock'>
+  lock(): R<'session:lock'>
+  listRepos(): R<'repos:list'>
+  previewPush(repoName: string): R<'repo:previewPush'>
+  push(request: PushRequest): R<'repo:push'>
+  previewPull(repoName: string): R<'repo:previewPull'>
+  pull(request: PullRequest): R<'repo:pull'>
+  addGitignore(repoName: string): R<'repo:addGitignore'>
+  /** Called when main locks the session. Returns an unsubscribe function. */
+  onLocked(callback: () => void): () => void
 }
