@@ -57,6 +57,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 - The derived key lives only in the main process. Each operation gets its own copy, which is wiped when it finishes. The key is wiped on lock, on idle timeout (default 5 minutes), when the window closes, and when the computer sleeps or its screen locks.
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
+- `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
 - Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
 - Pulls are refused unless `.env` is git-ignored and **not tracked**. The backup and the temp file are named so `.env.bak.*` covers them, and they are checked too, so a crash never leaves secrets in a file git would commit.
 - Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations). `meta.json` is created exclusively, so it can't overwrite a vault that synced in at the same moment.
@@ -80,6 +81,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 - A weak master password. Use a long, unique one, and keep it in your password manager.
 - The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). Delete old backups you don't need.
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
+- Secrets in `.env.example` that don't look like secrets. The same-value check is a heuristic.
 - Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.
 - Someone seeing your screen while a raw diff shows values. The values it showed also stay in the renderer's memory until they are garbage-collected, for the same reason.
 - Metadata: repo names, file sizes and modification times are visible in the vault folder.
@@ -115,6 +117,14 @@ DATA_DIR=/Users/me/data
 - If the vault marks a key but your `.env` doesn't, pushing uploads your value and drops the marker. The push dialog warns you first.
 - A marked key must be assigned only once in the file.
 
+**`.env.example` checks:** if a repo has a `.env.example`, the push and pull dialogs compare it with the `.env` you'll end up with (your file on push, the pulled result on pull). They warn, but never block, about:
+
+- keys `.env.example` lists that your `.env` doesn't have. Keys commented out in the example count as optional;
+- keys your `.env` has that `.env.example` doesn't document;
+- values that are the same in both files and look like secrets, since `.env.example` is usually committed. A value looks like a secret if it is a URL with a password for a non-local host, 8+ characters under a key name such as `*_SECRET`, `*_TOKEN`, `*_PASSWORD` or `*_KEY`, or a long token-like string. Localhost URLs, ports, other plain values and browser-public keys (`VITE_`, `NEXT_PUBLIC_`, ...) are never flagged.
+
+You can turn the checks off in Settings.
+
 **Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
 ## Vault format
@@ -129,12 +139,13 @@ Anything else in the folder (for example Drive's `name (1).ext` conflict copies)
 
 ## Settings
 
-| Setting         | Default   | Notes                                               |
-| --------------- | --------- | --------------------------------------------------- |
-| Projects folder | —         | Repos are its direct subfolders that contain `.git` |
-| Vault folder    | —         | Changing it locks EnvVault                          |
-| Machine name    | hostname  | Shown to other machines as "updated by"             |
-| Auto-lock       | 5 minutes | 1–120 minutes of inactivity                         |
+| Setting             | Default   | Notes                                               |
+| ------------------- | --------- | --------------------------------------------------- |
+| Projects folder     | —         | Repos are its direct subfolders that contain `.git` |
+| Vault folder        | —         | Changing it locks EnvVault                          |
+| Machine name        | hostname  | Shown to other machines as "updated by"             |
+| Auto-lock           | 5 minutes | 1–120 minutes of inactivity                         |
+| .env.example checks | On        | Warnings in the push and pull dialogs               |
 
 Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`.
 
