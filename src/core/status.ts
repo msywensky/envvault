@@ -3,7 +3,10 @@ import type { LastSync, SyncStatus, VaultInfo } from '../shared/types'
 export interface StatusInput {
   /** The repo folder was found in the projects scan. */
   repoExists: boolean
-  /** sha256 of the local .env bytes, or null if there is no .env. */
+  /**
+   * sha256 of the local .env bytes as a push would upload them (values of
+   * machine-specific keys blanked), or null if there is no .env.
+   */
   localHash: string | null
   vault: VaultInfo | null
   last: LastSync | null

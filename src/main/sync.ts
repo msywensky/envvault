@@ -1,10 +1,13 @@
 // Push / pull flows. Every function takes a private copy of the key (see
 // session.withKey) and returns metadata and key names only, never values,
 // except pullRawDiff, which the user asks for explicitly. Serialisation (one
-// write at a time) is done by the IPC handlers.
+// write at a time) is done by the IPC handlers. Machine-specific keys
+// (# envvault:local, see core/localkeys) are blanked in what a push uploads
+// and status hashes, and kept from the local file by a pull.
 import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
 import { lineDiff } from '../core/linediff'
+import { markedKeys, unmarkedKeys } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import type {
   Expected,
@@ -24,6 +27,7 @@ import { getConfig } from './config'
 import { AppError } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
+import { mergedBytes, syncedBytes } from './localkeys'
 import { readLocalEnv, resolveRepo, scanRepos, type ScannedRepo } from './repos'
 import { getLast, setLast } from './state'
 import { entryId, listEntryIds, readEntry, writeEntry } from './vault'
@@ -125,7 +129,12 @@ interface Snapshot {
   id: string
   /** Plaintext local .env. The caller must wipe it (see withSnapshot). */
   local: Buffer | null
+  /** sha256 of the raw local bytes, so `expected` notices any edit. */
   localHash: string | null
+  /** What a push uploads: syncedBytes(local), wiped like `local`. */
+  synced: Buffer | null
+  /** sha256 of `synced`, which is what status compares with the vault. */
+  syncedHash: string | null
   payload: Payload | null
   vault: VaultInfo | null
 }
@@ -140,7 +149,9 @@ async function withSnapshot<T>(
   const repoDir = await resolveRepo(cfg.projectsPath, repoName)
   const id = entryId(repoName)
   const local = await readLocalEnv(repoDir)
+  let synced: Buffer | null = null
   try {
+    synced = local ? syncedBytes(local) : null
     const payload = await readEntry(cfg.vaultPath, key, id)
     return await fn({
       cfg,
@@ -148,10 +159,13 @@ async function withSnapshot<T>(
       id,
       local,
       localHash: local ? sha256Hex(local) : null,
+      synced,
+      syncedHash: synced ? sha256Hex(synced) : null,
       payload,
       vault: payload ? toInfo(payload) : null
     })
   } finally {
+    if (synced !== local) synced?.fill(0)
     local?.fill(0)
   }
 }
@@ -186,16 +200,18 @@ export function previewPush(
   repoName: string
 ): Promise<PushPreview> {
   return withSnapshot(key, repoName, async (s) => {
-    if (!s.local) throw noLocalEnv()
+    if (!s.local || !s.synced) throw noLocalEnv()
     const last = await getLast(vaultId, s.id)
+    const vaultBytes = s.payload ? decodeEnv(s.payload) : null
+    const localText = s.local.toString('utf8')
+    const vaultText = vaultBytes?.toString('utf8') ?? null
     return {
-      diff: diffKeys(
-        parseAndWipe(Buffer.from(s.local)),
-        parseAndWipe(s.payload ? decodeEnv(s.payload) : null)
-      ),
+      diff: diffKeys(parseAndWipe(Buffer.from(s.synced)), parseAndWipe(vaultBytes)),
       needsOverwrite: needsOverwriteConfirm(s.vault, last),
       vault: s.vault,
-      sameContent: s.localHash === s.vault?.contentHash,
+      sameContent: s.syncedHash === s.vault?.contentHash,
+      kept: markedKeys(localText),
+      unmarked: unmarkedKeys(localText, vaultText),
       expected: expectedOf(s)
     }
   })
@@ -203,7 +219,7 @@ export function previewPush(
 
 export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promise<RepoRow> {
   return withSnapshot(key, req.repoName, async (s) => {
-    if (!s.local || !s.localHash) throw noLocalEnv()
+    if (!s.synced || !s.syncedHash) throw noLocalEnv()
     checkExpected(s, req.expected)
     const last = await getLast(vaultId, s.id)
     if (needsOverwriteConfirm(s.vault, last) && !req.overwriteConfirmed) {
@@ -213,8 +229,8 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
       )
     }
     let vault = s.vault
-    if (!vault || vault.contentHash !== s.localHash) {
-      const payload = makePayload(s.local, nextVersion(vault, last), s.cfg.machineName)
+    if (!vault || vault.contentHash !== s.syncedHash) {
+      const payload = makePayload(s.synced, nextVersion(vault, last), s.cfg.machineName)
       await writeEntry(s.cfg.vaultPath, s.id, await encryptPayload(key, s.id, payload))
       vault = toInfo(payload)
     }
@@ -233,16 +249,21 @@ export function previewPull(
   return withSnapshot(key, repoName, async (s) => {
     if (!s.payload || !s.vault) throw noVaultCopy()
     const [last, git] = await Promise.all([getLast(vaultId, s.id), ignoreStatus(s.repoDir)])
+    const merged = mergedBytes(decodeEnv(s.payload), s.local)
+    const mergedHash = sha256Hex(merged.bytes)
     return {
+      // Against what the pull writes, so kept keys don't show as changed.
       diff: diffKeys(
-        parseAndWipe(decodeEnv(s.payload)),
+        parseAndWipe(merged.bytes),
         parseAndWipe(s.local ? Buffer.from(s.local) : null)
       ),
       vault: s.vault,
       hasLocal: s.local !== null,
       ...git,
       rollback: last !== null && s.vault.version < last.version,
-      sameContent: s.localHash === s.vault.contentHash,
+      sameContent: mergedHash === s.localHash,
+      kept: merged.kept,
+      unset: merged.unset,
       expected: expectedOf(s)
     }
   })
@@ -258,14 +279,14 @@ export function pullRawDiff(key: Uint8Array, req: RawDiffRequest): Promise<RawDi
   return withSnapshot(key, req.repoName, async (s) => {
     if (!s.payload || !s.vault) throw noVaultCopy()
     checkExpected(s, req.expected)
-    const vaultBytes = decodeEnv(s.payload)
+    const { bytes } = mergedBytes(decodeEnv(s.payload), s.local)
     try {
-      const lines = lineDiff(s.local?.toString('utf8') ?? '', vaultBytes.toString('utf8'), {
+      const lines = lineDiff(s.local?.toString('utf8') ?? '', bytes.toString('utf8'), {
         mask: !req.values
       })
       return { lines }
     } finally {
-      vaultBytes.fill(0)
+      bytes.fill(0)
     }
   })
 }
@@ -295,27 +316,27 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
     if (!ignored) throw new AppError('ENV_NOT_IGNORED', '.env is not in .gitignore. Add it first.')
 
     let backupName: string | null = null
-    if (s.localHash !== s.vault.contentHash) {
-      // The temp file holds plaintext, so it is named to match .env.bak.*
-      // and checked like the backup: a crash must never leave secrets in an
-      // un-ignored file.
-      const tmpName = `.env.bak.tmp-${randomHex(8)}`
-      const wantBackup = s.local ? `.env.bak.${backupStamp(new Date())}` : null
-      for (const name of [tmpName, wantBackup]) {
-        if (name && !(await checkIgnored(s.repoDir, name))) {
-          throw new AppError(
-            'BACKUP_NOT_IGNORED',
-            `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
-          )
+    const bytes = mergedBytes(decodeEnv(s.payload), s.local).bytes
+    try {
+      if (sha256Hex(bytes) !== s.localHash) {
+        // The temp file holds plaintext, so it is named to match .env.bak.*
+        // and checked like the backup: a crash must never leave secrets in an
+        // un-ignored file.
+        const tmpName = `.env.bak.tmp-${randomHex(8)}`
+        const wantBackup = s.local ? `.env.bak.${backupStamp(new Date())}` : null
+        for (const name of [tmpName, wantBackup]) {
+          if (name && !(await checkIgnored(s.repoDir, name))) {
+            throw new AppError(
+              'BACKUP_NOT_IGNORED',
+              `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
+            )
+          }
         }
-      }
-      if (s.local && wantBackup) backupName = await writeBackup(s.repoDir, wantBackup, s.local)
-      const bytes = decodeEnv(s.payload)
-      try {
+        if (s.local && wantBackup) backupName = await writeBackup(s.repoDir, wantBackup, s.local)
         await atomicWrite(s.repoDir, '.env', bytes, { tmpName, mode: 0o600 })
-      } finally {
-        bytes.fill(0)
       }
+    } finally {
+      bytes.fill(0)
     }
     await setLast(vaultId, s.id, { version: s.vault.version, contentHash: s.vault.contentHash })
     return { backupName }

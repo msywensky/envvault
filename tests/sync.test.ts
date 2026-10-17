@@ -457,6 +457,115 @@ describe('repo edge cases', () => {
   })
 })
 
+describe('machine-specific keys', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const envA = (): string => join(projA, 'local1', '.env')
+  const envB = (): string => join(projB, 'local1', '.env')
+
+  async function stored(m: Machine): Promise<string> {
+    const { key } = await m.open()
+    const payload = await m.vault.readEntry(vaultDir, key, 'local1')
+    return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
+  }
+
+  it('pushes marked keys blanked, and ignores local edits to them', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'local1', {
+      '.gitignore': IGNORE,
+      '.env': 'SHARED=1\n# envvault:local\nDB_PATH=/a/data\n'
+    })
+    const { key, vaultId } = await a.open()
+    const preview = await a.sync.previewPush(key, vaultId, 'local1')
+    expect(preview.kept).toEqual(['DB_PATH'])
+    expect(preview.unmarked).toEqual([])
+    await pushRepo(a, 'local1')
+    expect(await stored(a)).toBe('SHARED=1\n# envvault:local\nDB_PATH=\n')
+    expect((await rows(a))['local1']).toBe('in-sync')
+
+    writeFileSync(envA(), 'SHARED=1\n# envvault:local\nDB_PATH=/a/other\n')
+    expect((await rows(a))['local1']).toBe('in-sync')
+  })
+
+  it("pulls on another machine, keeping that machine's value and adding the marker", async () => {
+    const b = await machine('b')
+    makeRepo(projB, 'local1', { '.gitignore': IGNORE, '.env': 'SHARED=0\nDB_PATH=C:\\b\\data\n' })
+    expect((await rows(b))['local1']).toBe('conflict')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewPull(key, vaultId, 'local1')
+    expect(preview.kept).toEqual(['DB_PATH'])
+    expect(preview.unset).toEqual([])
+    expect(preview.sameContent).toBe(false)
+    expect(preview.diff).toEqual({ added: [], removed: [], changed: ['SHARED'], unchanged: 1 })
+
+    // The raw diff shows what the pull writes, not the vault copy as stored.
+    const raw = await b.sync.pullRawDiff(key, {
+      repoName: 'local1',
+      expected: preview.expected,
+      values: true
+    })
+    expect(raw.lines).toEqual([
+      { kind: 'del', text: 'SHARED=0', oldNo: 1, newNo: null },
+      { kind: 'add', text: 'SHARED=1', oldNo: null, newNo: 1 },
+      { kind: 'add', text: '# envvault:local', oldNo: null, newNo: 2 },
+      { kind: 'same', text: 'DB_PATH=C:\\b\\data', oldNo: 2, newNo: 3 }
+    ])
+
+    const backup = await pullRepo(b, 'local1')
+    expect(readFileSync(join(projB, 'local1', backup as string), 'utf8')).toBe(
+      'SHARED=0\nDB_PATH=C:\\b\\data\n'
+    )
+    expect(readFileSync(envB(), 'utf8')).toBe('SHARED=1\n# envvault:local\nDB_PATH=C:\\b\\data\n')
+    expect((await rows(b))['local1']).toBe('in-sync')
+  })
+
+  it('syncs shared changes back without touching either machine-specific value', async () => {
+    const b = await machine('b')
+    writeFileSync(envB(), 'SHARED=2\n# envvault:local\nDB_PATH=C:\\b\\data\n')
+    expect((await rows(b))['local1']).toBe('local-newer')
+    await pushRepo(b, 'local1')
+    expect(await stored(b)).toBe('SHARED=2\n# envvault:local\nDB_PATH=\n')
+
+    const a = await machine('a')
+    expect((await rows(a))['local1']).toBe('vault-newer')
+    await pullRepo(a, 'local1')
+    expect(readFileSync(envA(), 'utf8')).toBe('SHARED=2\n# envvault:local\nDB_PATH=/a/other\n')
+    expect((await rows(a))['local1']).toBe('in-sync')
+  })
+
+  it('warns before a push would upload a value the vault marks', async () => {
+    const a = await machine('a')
+    writeFileSync(envA(), 'SHARED=2\nDB_PATH=/a/other\n')
+    const { key, vaultId } = await a.open()
+    const preview = await a.sync.previewPush(key, vaultId, 'local1')
+    expect(preview.kept).toEqual([])
+    expect(preview.unmarked).toEqual(['DB_PATH'])
+    expect(preview.diff.changed).toEqual(['DB_PATH'])
+    writeFileSync(envA(), 'SHARED=2\n# envvault:local\nDB_PATH=/a/other\n')
+  })
+
+  it('refuses a marked key that is assigned twice', async () => {
+    const a = await machine('a')
+    writeFileSync(envA(), 'SHARED=2\n# envvault:local\nDB_PATH=/a\nDB_PATH=/b\n')
+    expect((await rows(a))['local1']).toBe('error:ENV_DUPLICATE_KEY')
+    const { key, vaultId } = await a.open()
+    expect(await errorCode(a.sync.previewPull(key, vaultId, 'local1'))).toBe('ENV_DUPLICATE_KEY')
+    writeFileSync(envA(), 'SHARED=2\n# envvault:local\nDB_PATH=/a/other\n')
+  })
+
+  it('writes a marked key empty where this machine has no value', async () => {
+    const b = await machine('b')
+    rmSync(envB())
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewPull(key, vaultId, 'local1')
+    expect(preview.kept).toEqual([])
+    expect(preview.unset).toEqual(['DB_PATH'])
+    await pullRepo(b, 'local1')
+    expect(readFileSync(envB(), 'utf8')).toBe('SHARED=2\n# envvault:local\nDB_PATH=\n')
+    writeFileSync(envB(), 'SHARED=2\n# envvault:local\nDB_PATH=C:\\b\\new\n')
+    expect((await rows(b))['local1']).toBe('in-sync')
+  })
+})
+
 describe('session', () => {
   it('gives each operation its own key copy, so locking mid-operation is safe', async () => {
     const m = await machine('a')
