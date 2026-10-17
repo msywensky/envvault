@@ -274,6 +274,47 @@ describe('machine B: unlock, resolve, push', () => {
 })
 
 describe('machine A again', () => {
+  it('shows the raw diff masked, with values only on request, for the reviewed content', async () => {
+    const m = await machine('a')
+    const { key, vaultId } = await m.open()
+    const preview = await m.sync.previewPull(key, vaultId, 'app1')
+    const req = { repoName: 'app1', expected: preview.expected }
+    // Local A=1\nNEW=2\n -> B's BOM + CRLF copy: line endings don't count, the BOM does.
+    const masked = await m.sync.pullRawDiff(key, { ...req, values: false })
+    expect(masked.lines.map((l) => (l.kind === 'gap' ? l : l.text))).toEqual([
+      'A=••••••••',
+      '\\u{FEFF}A=••••••••',
+      'NEW=••••••••',
+      'FROM_B=••••••••'
+    ])
+    const raw = await m.sync.pullRawDiff(key, { ...req, values: true })
+    expect(raw.lines).toEqual([
+      { kind: 'del', text: 'A=1', oldNo: 1, newNo: null },
+      { kind: 'add', text: '\\u{FEFF}A=1', oldNo: null, newNo: 1 },
+      { kind: 'same', text: 'NEW=2', oldNo: 2, newNo: 2 },
+      { kind: 'add', text: 'FROM_B=1', oldNo: null, newNo: 3 }
+    ])
+
+    const stale = { ...preview.expected, vaultHash: 'f'.repeat(64) }
+    for (const values of [false, true]) {
+      expect(await errorCode(m.sync.pullRawDiff(key, { ...req, expected: stale, values }))).toBe(
+        'VAULT_CHANGED'
+      )
+    }
+
+    const dir = makeRepo(projA, 'novault', { '.gitignore': '.env\n', '.env': 'X=1\n' })
+    expect(
+      await errorCode(
+        m.sync.pullRawDiff(key, {
+          repoName: 'novault',
+          expected: { localHash: null, vaultHash: null },
+          values: false
+        })
+      )
+    ).toBe('VAULT_ENTRY_NOT_FOUND')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it('sees vault-newer and pulls the exact bytes from B', async () => {
     const m = await machine('a')
     expect((await rows(m))['app1']).toBe('vault-newer')

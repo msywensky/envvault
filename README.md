@@ -31,6 +31,8 @@ Projects folder (each machine)          Vault folder (synced by Google Drive etc
 
 Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>`.
 
+To see exactly what a pull would change, click **Show raw diff** in the pull dialog. It shows a line-by-line diff from your `.env` to the vault copy with every value masked (`KEY=••••••••`); comments are shown as they are. Click **Show values** to see the values; they are hidden again after a minute (see [Security design](#security-design)).
+
 ![Resolving a conflict: key names only, explicit overwrite](docs/conflict.png)
 
 ## Security design
@@ -45,7 +47,11 @@ Every push and pull shows a confirmation with the **key names** that will be add
   - its arguments are validated with a strict zod schema (unknown fields are rejected);
   - it always returns a `{ok, data}` / `{ok, error}` envelope, and error messages never echo input.
 - The renderer never supplies file paths: folders come from the native picker in the main process, and repos are referred to by validated name.
-- **Env values never reach the renderer.** Only key names, statuses and metadata cross IPC.
+- **Env values reach the renderer only when you click Show values in a raw pull diff.** Everything else that crosses IPC is key names, statuses and metadata. The raw diff:
+  - arrives masked: the main process replaces every value, the continuation lines of multi-line values and any unrecognised line with `••••••••` before sending it. Key names, comments and blank lines are kept;
+  - is sent with values only when you click **Show values**, and only for the exact local and vault content the preview showed;
+  - contains only the changed lines plus 3 lines of context around them (other unchanged lines are sent as a count);
+  - keeps its values only in the pull dialog (never the app's store), never logs them, and drops them after 60 seconds, when the window is hidden, when the dialog closes and when EnvVault locks.
 
 **Data handling**
 
@@ -73,6 +79,8 @@ Every push and pull shows a confirmation with the **key names** that will be add
 - A weak master password. Use a long, unique one, and keep it in your password manager.
 - The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). Delete old backups you don't need.
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
+- Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.
+- Someone seeing your screen while a raw diff shows values. The values it showed also stay in the renderer's memory until they are garbage-collected, for the same reason.
 - Metadata: repo names, file sizes and modification times are visible in the vault folder.
 - A rollback on a machine that has never synced that repo (there is no earlier version to compare against).
 

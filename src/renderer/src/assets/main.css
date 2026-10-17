@@ -508,6 +508,12 @@ code,
   box-shadow: var(--shadow-lg);
 }
 
+/* Header and footer stay put; only the body scrolls (e.g. a long raw diff). */
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
 .dialog::backdrop {
   background: rgba(10, 12, 16, 0.45);
 }
@@ -520,7 +526,9 @@ code,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
   padding: 16px 20px;
+  overflow-y: auto;
 }
 
 .dialog-footer {
@@ -565,6 +573,71 @@ code,
 .chip-changed {
   background: var(--warn-bg);
   color: var(--warn-text);
+}
+
+/* ---------- raw diff (pull dialog) ---------- */
+
+.dialog.dialog-wide {
+  width: min(900px, calc(100vw - 32px));
+}
+
+.rawdiff-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rawdiff {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.rawdiff table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.rawdiff td {
+  padding: 1px 8px;
+  vertical-align: top;
+}
+
+.rawdiff-no {
+  width: 1%;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.rawdiff-mark {
+  width: 1%;
+  padding-right: 0;
+  user-select: none;
+}
+
+.rawdiff-text code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rawdiff-add {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.rawdiff-del {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.rawdiff-gap td {
+  padding: 3px 8px;
+  color: var(--muted);
+  font-style: italic;
 }
 
 /* ---------- folder field ---------- */

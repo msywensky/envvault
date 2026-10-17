@@ -32,7 +32,7 @@ npm run format                               # prettier
 
 Five source areas with import boundaries **enforced by ESLint** (`eslint.config.mjs`), so a wrong import fails lint:
 
-- `src/core/` — pure logic (crypto, `.env` parsing/key diff, three-way sync status, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
+- `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
 - `src/main/` — Electron main process. Owns the key, all file system and git access.
 - `src/preload/` — sandboxed; may import only `electron` and relative files (they get bundled). Exposes named functions as `window.envvault`, never `ipcRenderer` or IPC event objects.
 - `src/shared/` — channel names and types used by all processes. Relative imports only (no packages, not even zod), because it reaches the sandboxed preload and the renderer. Request schemas therefore live in `src/main/schemas.ts`, not here.
@@ -71,11 +71,12 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Status** comes from `core/status.ts`: local vs vault vs this machine's last sync. The last sync is stored per vault in `state.json` via `src/main/state.ts`.
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
 - **Errors in the list.** `listRepos` turns per-repo failures (a tampered entry, a symlinked `.env`) into rows with `status: 'error'` instead of failing the whole list.
+- **Raw diff.** `pullRawDiff` returns a line diff (`core/linediff.ts`) from the local `.env` to the vault copy, with only changed lines plus 3 context lines. It is masked in main (`maskEnvLines` in `core/envdiff.ts`, which shares `parseEnv`'s scanner; comments are not values and pass through) unless the request has `values: true`, which makes it the one flow that returns env values. It takes the same `expected` as `pull` and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` too, so it always matches the preview.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve
 
-- Env **values** never cross IPC or get logged: only key names, statuses, hashes and metadata. `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
+- Env **values** never get logged, and cross IPC only through `repo:pullRawDiff` with `values: true` (the user's **Show values** click). The renderer keeps them only in `SyncDialog`'s local `rawValues` ref (never the store) and shows them only in `RawDiffView.vue`, which hides them again. Every other channel carries only key names, statuses, hashes and metadata. `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
 - The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
 - Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
@@ -83,7 +84,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
 ## Scope
 
-v1 is manual-password unlock only. Bitwarden CLI unlock and a "Reveal" view are planned follow-ups. Reveal would be the _only_ path for env values to reach the renderer, so it needs an explicit design and a README threat-model update.
+v1 is manual-password unlock only. Bitwarden CLI unlock and a "Reveal" view are planned follow-ups. Reveal (the whole file) would be a second path for env values to reach the renderer, after the raw pull diff, so it needs an explicit design and a README threat-model update.
 
 Packaging (`electron-builder.yml`) is deliberately minimal:
 
@@ -97,7 +98,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{crypto,envdiff,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{crypto,envdiff,linediff,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.

@@ -1,11 +1,14 @@
 <script setup lang="ts">
-// Push or pull confirmation. Shows key names only (main never sends values),
-// the overwrite warning and checkbox, and blocks pulls into a repo whose
-// .env is not git-ignored or is tracked.
+// Push or pull confirmation. Shows key names only, the overwrite warning and
+// checkbox, and blocks pulls into a repo whose .env is not git-ignored or is
+// tracked. A pull can also show the raw line diff, values masked; the values
+// are fetched only when asked for, live only in `rawValues`, and are dropped
+// when hidden or reloaded.
 import { computed, onMounted, ref, watch } from 'vue'
-import type { PullPreview, PushPreview, RepoRow } from '../../../shared/types'
+import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, run, store, toast } from '../store'
 import { absoluteTime, relativeTime } from '../status'
+import RawDiffView from './RawDiffView.vue'
 
 const props = defineProps<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean }>()
 const emit = defineEmits<{ close: []; done: [] }>()
@@ -17,6 +20,11 @@ const error = ref<string | null>(null)
 const pushPreview = ref<PushPreview | null>(null)
 const pullPreview = ref<PullPreview | null>(null)
 const overwrite = ref(false)
+const rawMasked = ref<RawDiffLine[] | null>(null)
+const rawValues = ref<RawDiffLine[] | null>(null)
+const rawLoading = ref(false)
+// Bumped whenever raw lines are dropped, so a response still in flight is discarded.
+let rawGen = 0
 
 const title = computed(() => {
   if (props.conflict) return props.mode === 'push' ? 'Keep local copy' : 'Keep vault copy'
@@ -45,6 +53,9 @@ async function load(): Promise<void> {
   // Never leave an old preview confirmable if this reload fails.
   pushPreview.value = null
   pullPreview.value = null
+  rawGen++
+  rawMasked.value = null
+  rawValues.value = null
   const res =
     props.mode === 'push'
       ? await call(() => window.envvault.previewPush(props.repo.name))
@@ -90,6 +101,29 @@ async function confirm(): Promise<void> {
   }
 }
 
+async function fetchRaw(values: boolean): Promise<void> {
+  if (!pullPreview.value) return
+  rawLoading.value = true
+  error.value = null
+  const gen = rawGen
+  const repoName = props.repo.name
+  // A plain copy: pullPreview.value.expected is a reactive proxy, which IPC can't clone.
+  const { localHash, vaultHash } = pullPreview.value.expected
+  const expected = { localHash, vaultHash }
+  const res = await call(() => window.envvault.pullRawDiff({ repoName, expected, values }))
+  rawLoading.value = false
+  if (!res.ok) return failed(res.error.code, res.error.message)
+  // Hidden or reloaded meanwhile, or the window was hidden: don't show stale values.
+  if (gen !== rawGen || (values && document.hidden)) return
+  if (values) rawValues.value = res.data.lines
+  else rawMasked.value = res.data.lines
+}
+
+function hideValues(): void {
+  rawGen++
+  rawValues.value = null
+}
+
 async function failed(code: string, message: string): Promise<void> {
   if (code === 'LOCKED') return
   if (code === 'LOCAL_CHANGED' || code === 'VAULT_CHANGED') {
@@ -124,14 +158,24 @@ watch(
 </script>
 
 <template>
-  <dialog ref="dialog" class="dialog" aria-labelledby="sync-title" @cancel.prevent="emit('close')">
+  <dialog
+    ref="dialog"
+    class="dialog"
+    :class="{ 'dialog-wide': rawMasked }"
+    aria-labelledby="sync-title"
+    @cancel.prevent="emit('close')"
+  >
     <div class="dialog-header">
       <h2 id="sync-title">{{ title }}: {{ repo.name }}</h2>
       <p class="muted small">
         {{
           mode === 'push'
             ? 'Changes the vault copy will get. Only key names are shown.'
-            : 'Changes your local .env will get. Only key names are shown.'
+            : rawValues
+              ? 'Changes your local .env will get, including values.'
+              : rawMasked
+                ? 'Changes your local .env will get. Values are masked.'
+                : 'Changes your local .env will get. Only key names are shown.'
         }}
       </p>
     </div>
@@ -168,6 +212,30 @@ watch(
         <p v-if="keyChanges > 0 && diff.unchanged > 0" class="muted small">
           {{ diff.unchanged }} other key{{ diff.unchanged === 1 ? '' : 's' }} unchanged.
         </p>
+
+        <!-- Pull: the raw line diff, values masked until asked for. -->
+        <template v-if="pullPreview && !pullPreview.sameContent">
+          <RawDiffView
+            v-if="rawMasked"
+            :lines="rawValues ?? rawMasked"
+            :revealed="rawValues !== null"
+            :loading="rawLoading || busy"
+            @show-values="fetchRaw(true)"
+            @hide-values="hideValues"
+          />
+          <div v-else class="row">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="rawLoading || busy"
+              @click="fetchRaw(false)"
+            >
+              <span v-if="rawLoading" class="spinner" />
+              Show raw diff
+            </button>
+            <span class="muted small">Values stay masked until you show them.</span>
+          </div>
+        </template>
 
         <!-- Push: someone else changed the vault copy. -->
         <template v-if="pushPreview?.needsOverwrite && pushPreview.vault">

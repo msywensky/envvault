@@ -10,6 +10,7 @@ export const Hash = z.string().regex(/^[0-9a-f]{64}$/)
 const RepoName = z.string().max(100).refine(isValidRepoName)
 const Password = z.string().min(1).max(1024)
 const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
+const PullReq = z.strictObject({ repoName: RepoName, expected: Expected })
 
 /** Shown in the UI and stored (encrypted) as `updatedBy`. No control characters. */
 export const MachineName = z
@@ -38,6 +39,7 @@ export const requestSchemas = {
     expected: Expected
   }),
   [CH.previewPull]: z.strictObject({ repoName: RepoName }),
-  [CH.pull]: z.strictObject({ repoName: RepoName, expected: Expected }),
+  [CH.pull]: PullReq,
+  [CH.pullRawDiff]: PullReq.extend({ values: z.boolean() }),
   [CH.addGitignore]: z.strictObject({ repoName: RepoName })
 } as const
