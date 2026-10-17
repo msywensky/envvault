@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Push or pull confirmation. Shows key names only, the overwrite warning and
 // checkbox, and blocks pulls into a repo whose .env is not git-ignored or is
-// tracked. A pull can also show the raw line diff, values masked; the values
-// are fetched only when asked for, live only in `rawValues`, and are dropped
-// when hidden or reloaded.
+// tracked. Lists machine-specific keys (# envvault:local) separately. A pull
+// can also show the raw line diff, values masked; the values are fetched only
+// when asked for, live only in `rawValues`, and are dropped when hidden or
+// reloaded.
 import { computed, onMounted, ref, watch } from 'vue'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, run, store, toast } from '../store'
@@ -36,6 +37,8 @@ const diff = computed(() => preview.value?.diff ?? null)
 const keyChanges = computed(() =>
   diff.value ? diff.value.added.length + diff.value.removed.length + diff.value.changed.length : 0
 )
+// Keys the vault marks machine-specific that a push would upload anyway.
+const unmarked = computed(() => pushPreview.value?.unmarked ?? [])
 const pullBlocked = computed(() => {
   const p = pullPreview.value
   return p !== null && (!p.ignored || !p.backupIgnored || p.tracked)
@@ -184,7 +187,11 @@ watch(
       <div v-if="loading" class="row muted"><span class="spinner" /> Comparing…</div>
 
       <template v-else-if="preview && diff">
-        <p v-if="preview.sameContent" class="notice notice-info">
+        <p v-if="preview.sameContent && preview.kept.length" class="notice notice-info">
+          Local and vault copies already match, apart from machine-specific values. Confirming just
+          records them as in sync.
+        </p>
+        <p v-else-if="preview.sameContent" class="notice notice-info">
           Local and vault copies are already identical. Confirming just records them as in sync.
         </p>
         <p v-else-if="keyChanges === 0" class="notice notice-info">
@@ -212,6 +219,42 @@ watch(
         <p v-if="keyChanges > 0 && diff.unchanged > 0" class="muted small">
           {{ diff.unchanged }} other key{{ diff.unchanged === 1 ? '' : 's' }} unchanged.
         </p>
+
+        <!-- Machine-specific keys (# envvault:local). -->
+        <div v-if="preview.kept.length" class="diff-group">
+          <h3>Kept on this machine ({{ preview.kept.length }})</h3>
+          <div class="chips">
+            <code v-for="k in preview.kept" :key="k" class="chip chip-kept">{{ k }}</code>
+          </div>
+          <p class="muted small">
+            Marked <code class="marker"># envvault:local</code>:
+            {{
+              mode === 'push'
+                ? 'their values stay on this machine and are not uploaded.'
+                : 'your local values stay as they are.'
+            }}
+          </p>
+        </div>
+        <div v-if="pullPreview?.unset.length" class="diff-group">
+          <h3>No value on this machine ({{ pullPreview.unset.length }})</h3>
+          <div class="chips">
+            <code v-for="k in pullPreview.unset" :key="k" class="chip chip-unset">{{ k }}</code>
+          </div>
+          <p class="muted small">
+            Machine-specific keys this machine has no value for. They are written empty; set them
+            after pulling.
+          </p>
+        </div>
+        <div v-if="unmarked.length" class="notice notice-warn stack">
+          <span>
+            <strong>Machine-specific in the vault, but not in your .env.</strong> Pushing uploads
+            your values for these keys and removes their marker. To keep them on this machine, add
+            <code class="marker"># envvault:local</code> above each one.
+          </span>
+          <div class="chips">
+            <code v-for="k in unmarked" :key="k" class="chip chip-changed">{{ k }}</code>
+          </div>
+        </div>
 
         <!-- Pull: the raw line diff, values masked until asked for. -->
         <template v-if="pullPreview && !pullPreview.sameContent">
