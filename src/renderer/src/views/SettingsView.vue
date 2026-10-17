@@ -8,6 +8,7 @@ const busy = ref(false)
 const machineName = ref(store.settings?.machineName ?? '')
 const nameProblem = computed(() => machineNameProblem(machineName.value))
 const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
+const checkExample = ref(store.settings?.checkExample ?? true)
 
 async function pick(which: 'projects' | 'vault'): Promise<void> {
   busy.value = true
@@ -26,7 +27,8 @@ async function save(): Promise<void> {
   const saved = await run(() =>
     window.envvault.saveSettings({
       autoLockMinutes: Number(autoLockMinutes.value),
-      machineName: machineName.value
+      machineName: machineName.value,
+      checkExample: checkExample.value
     })
   )
   busy.value = false
@@ -81,6 +83,16 @@ async function save(): Promise<void> {
             max="120"
             required
           />
+        </div>
+        <div class="field">
+          <label class="checkbox">
+            <input v-model="checkExample" type="checkbox" />
+            <span>Compare with .env.example before a push or pull</span>
+          </label>
+          <p class="muted small">
+            Warns about missing keys and secret-looking values copied into .env.example. Never
+            blocks.
+          </p>
         </div>
         <div class="row">
           <span class="grow" />

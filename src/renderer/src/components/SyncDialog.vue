@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Push or pull confirmation. Shows key names only, the overwrite warning and
 // checkbox, and blocks pulls into a repo whose .env is not git-ignored or is
-// tracked. Lists machine-specific keys (# envvault:local) separately. A pull
+// tracked. Lists machine-specific keys (# envvault:local) separately, and
+// warns (never blocks) about differences from .env.example. A pull
 // can also show the raw line diff, values masked; the values are fetched only
 // when asked for, live only in `rawValues`, and are dropped when hidden or
 // reloaded.
@@ -39,6 +40,20 @@ const keyChanges = computed(() =>
 )
 // Keys the vault marks machine-specific that a push would upload anyway.
 const unmarked = computed(() => pushPreview.value?.unmarked ?? [])
+// The .env.example comparison, split by outcome for the template.
+const example = computed(() => {
+  const e = preview.value?.example
+  return e?.status === 'ok' ? e : null
+})
+const exampleError = computed(() => {
+  const e = preview.value?.example
+  return e?.status === 'unreadable' ? e.message : null
+})
+const exampleTracked = computed(() => {
+  if (example.value?.tracked === true) return 'is committed to git'
+  if (example.value?.tracked === false) return "isn't committed yet, but usually is"
+  return 'is usually committed to git'
+})
 const pullBlocked = computed(() => {
   const p = pullPreview.value
   return p !== null && (!p.ignored || !p.backupIgnored || p.tracked)
@@ -255,6 +270,38 @@ watch(
             <code v-for="k in unmarked" :key="k" class="chip chip-changed">{{ k }}</code>
           </div>
         </div>
+
+        <!-- .env.example: warnings only. -->
+        <p v-if="exampleError" class="muted small">
+          Couldn't check .env.example: {{ exampleError }}
+        </p>
+        <template v-if="example">
+          <div v-if="example.sameValue.length" class="notice notice-warn stack">
+            <span>
+              <strong>Same value as .env.example.</strong> .env.example {{ exampleTracked }}. If any
+              of these is a real secret, replace it there with a placeholder.
+            </span>
+            <div class="chips">
+              <code v-for="k in example.sameValue" :key="k" class="chip chip-changed">{{ k }}</code>
+            </div>
+          </div>
+          <div v-if="example.missing.length" class="diff-group">
+            <h3>Missing from .env ({{ example.missing.length }})</h3>
+            <div class="chips">
+              <code v-for="k in example.missing" :key="k" class="chip chip-unset">{{ k }}</code>
+            </div>
+            <p class="muted small">
+              {{
+                mode === 'push'
+                  ? 'Listed in .env.example but not in your .env.'
+                  : "Listed in .env.example; your .env won't have them after pulling."
+              }}
+            </p>
+          </div>
+          <p v-if="example.undocumented.length" class="muted small">
+            Not in .env.example: <code>{{ example.undocumented.join(', ') }}</code>
+          </p>
+        </template>
 
         <!-- Pull: the raw line diff, values masked until asked for. -->
         <template v-if="pullPreview && !pullPreview.sameContent">

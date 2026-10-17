@@ -51,6 +51,7 @@ function makeRepo(projects: string, name: string, files: Record<string, string>)
 }
 
 interface Machine {
+  config: typeof import('../src/main/config')
   vault: typeof import('../src/main/vault')
   sync: typeof import('../src/main/sync')
   session: typeof import('../src/main/session')
@@ -68,7 +69,7 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
   const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
     vault.openVault(vaultDir, PASSWORD)
-  return { vault, sync, session, open }
+  return { config, vault, sync, session, open }
 }
 
 async function rows(m: Machine): Promise<Record<string, string>> {
@@ -563,6 +564,90 @@ describe('machine-specific keys', () => {
     expect(readFileSync(envB(), 'utf8')).toBe('SHARED=2\n# envvault:local\nDB_PATH=\n')
     writeFileSync(envB(), 'SHARED=2\n# envvault:local\nDB_PATH=C:\\b\\new\n')
     expect((await rows(b))['local1']).toBe('in-sync')
+  })
+})
+
+describe('.env.example checks', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const TOKEN = 'tok_9f8e7d6c5b4a3210zz'
+  const dirA = (): string => join(projA, 'ex1')
+
+  it('reports nothing without a .env.example', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ex1', { '.gitignore': IGNORE, '.env': 'A=1\n' })
+    const { key, vaultId } = await a.open()
+    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toBeNull()
+  })
+
+  it('compares the local .env on push, flagging only secret-looking shared values', async () => {
+    const a = await machine('a')
+    writeFileSync(
+      join(dirA(), '.env'),
+      `URL=http://localhost:3000\nPORT=3000\nAPI_TOKEN=${TOKEN}\n# envvault:local\nDB_PATH=/a/data\nEXTRA=1\n`
+    )
+    writeFileSync(
+      join(dirA(), '.env.example'),
+      `URL=http://localhost:3000\nPORT=3000\nAPI_TOKEN=${TOKEN}\nDB_PATH=\nREDIS_URL=\n# OPTIONAL=\n`
+    )
+    const { key, vaultId } = await a.open()
+    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toEqual({
+      status: 'ok',
+      tracked: false,
+      sameValue: ['API_TOKEN'],
+      missing: ['REDIS_URL'],
+      undocumented: ['EXTRA']
+    })
+    git(dirA(), 'add', '.env.example')
+    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toMatchObject({
+      tracked: true
+    })
+    await pushRepo(a, 'ex1')
+  })
+
+  it('compares what the pull writes, including kept machine-specific keys', async () => {
+    const b = await machine('b')
+    makeRepo(projB, 'ex1', {
+      '.gitignore': IGNORE,
+      '.env': 'DB_PATH=C:\\b\n# envvault:local\nB_ONLY=x\n',
+      '.env.example': 'DB_PATH=\nB_ONLY=\nREDIS_URL=\nAPI_TOKEN=\n'
+    })
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewPull(key, vaultId, 'ex1')
+    // B_ONLY isn't in the vault copy, but the pull keeps it, so it isn't missing.
+    expect(preview.kept).toEqual(['B_ONLY', 'DB_PATH'])
+    expect(preview.example).toEqual({
+      status: 'ok',
+      tracked: null,
+      sameValue: [],
+      missing: ['REDIS_URL'],
+      undocumented: ['EXTRA', 'PORT', 'URL']
+    })
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'reports an unreadable .env.example without failing the preview',
+    async () => {
+      const a = await machine('a')
+      rmSync(join(dirA(), '.env.example'))
+      writeFileSync(join(root, 'outside-example'), 'X=1\n')
+      symlinkSync(join(root, 'outside-example'), join(dirA(), '.env.example'))
+      const { key, vaultId } = await a.open()
+      expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toEqual({
+        status: 'unreadable',
+        message: '.env.example is a symlink, which EnvVault refuses to follow.'
+      })
+      rmSync(join(dirA(), '.env.example'))
+    }
+  )
+
+  it('is on by default and skipped when turned off', async () => {
+    const b = await machine('b')
+    expect((await b.config.getConfig()).checkExample).toBe(true)
+    await b.config.updateConfig({ checkExample: false })
+    const { key, vaultId } = await b.open()
+    expect((await b.sync.previewPull(key, vaultId, 'ex1')).example).toBeNull()
+    expect((await b.sync.previewPush(key, vaultId, 'ex1')).example).toBeNull()
+    await b.config.updateConfig({ checkExample: true })
   })
 })
 

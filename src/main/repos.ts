@@ -59,13 +59,17 @@ export async function resolveRepo(projectsPath: string, name: string): Promise<s
 }
 
 /**
- * Exact bytes of the repo's .env, or null if there is none. Refuses
- * symlinks: lstat rejects them up front, O_NOFOLLOW (macOS/Linux) and an
- * identity check on the opened handle close the window where the file could
- * be swapped for a symlink between the check and the read.
+ * Exact bytes of the file `name` in the repo folder, or null if there is
+ * none. Refuses symlinks: lstat rejects them up front, O_NOFOLLOW
+ * (macOS/Linux) and an identity check on the opened handle close the window
+ * where the file could be swapped for a symlink between the check and the
+ * read.
  */
-export async function readLocalEnv(repoDir: string): Promise<Buffer | null> {
-  const file = resolveInside(repoDir, '.env')
+export async function readRepoFile(repoDir: string, name: string): Promise<Buffer | null> {
+  const file = resolveInside(repoDir, name)
+  const symlink = (): AppError =>
+    new AppError('ENV_SYMLINK', `${name} is a symlink, which EnvVault refuses to follow.`)
+  const tooLarge = (): AppError => new AppError('ENV_TOO_LARGE', `${name} is larger than 1 MiB.`)
   let info
   try {
     info = await lstat(file)
@@ -73,32 +77,32 @@ export async function readLocalEnv(repoDir: string): Promise<Buffer | null> {
     if (isErrno(err, 'ENOENT')) return null
     throw err
   }
-  if (info.isSymbolicLink()) {
-    throw new AppError('ENV_SYMLINK', '.env is a symlink, which EnvVault refuses to follow.')
-  }
-  if (!info.isFile()) throw new AppError('ENV_NOT_FILE', '.env is not a regular file.')
-  if (info.size > MAX_ENV_BYTES) throw new AppError('ENV_TOO_LARGE', '.env is larger than 1 MiB.')
+  if (info.isSymbolicLink()) throw symlink()
+  if (!info.isFile()) throw new AppError('ENV_NOT_FILE', `${name} is not a regular file.`)
+  if (info.size > MAX_ENV_BYTES) throw tooLarge()
 
   let fh
   try {
     fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   } catch (err) {
-    if (isErrno(err, 'ELOOP')) {
-      throw new AppError('ENV_SYMLINK', '.env is a symlink, which EnvVault refuses to follow.')
-    }
+    if (isErrno(err, 'ELOOP')) throw symlink()
     throw err
   }
   try {
     const opened = await fh.stat()
     if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev) {
-      throw new AppError('ENV_NOT_FILE', '.env changed while it was being read. Try again.')
+      throw new AppError('ENV_NOT_FILE', `${name} changed while it was being read. Try again.`)
     }
-    if (opened.size > MAX_ENV_BYTES)
-      throw new AppError('ENV_TOO_LARGE', '.env is larger than 1 MiB.')
+    if (opened.size > MAX_ENV_BYTES) throw tooLarge()
     return await fh.readFile()
   } finally {
     await fh.close()
   }
+}
+
+/** Exact bytes of the repo's .env, or null if there is none (see readRepoFile). */
+export function readLocalEnv(repoDir: string): Promise<Buffer | null> {
+  return readRepoFile(repoDir, '.env')
 }
 
 function syncedHash(env: Buffer): string {
