@@ -1,5 +1,6 @@
-// A small reactive store (no Pinia). It never holds env values: main only
-// ever sends key names, statuses and metadata.
+// A small reactive store (no Pinia). It never holds env values: main sends
+// key names, statuses and metadata, and the one response with values (the
+// raw pull diff after "Show values") is fetched and held only by SyncDialog.
 import { reactive } from 'vue'
 import type { Result } from '../../shared/result'
 import type { AppState, RepoRow, Settings } from '../../shared/types'
