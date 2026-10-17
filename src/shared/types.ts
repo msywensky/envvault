@@ -81,6 +81,24 @@ export interface Expected {
   vaultHash: string | null
 }
 
+/** How a .env compares with the repo's .env.example. Key names only. */
+export interface ExampleDiff {
+  /** Secret-looking values that are identical in both files. */
+  sameValue: string[]
+  /** Keys the example assigns that the .env doesn't. */
+  missing: string[]
+  /** Keys the .env assigns that the example doesn't. */
+  undocumented: string[]
+}
+
+export type ExampleCheck =
+  | ({
+      status: 'ok'
+      /** .env.example is tracked by git; null if unknown. */
+      tracked: boolean | null
+    } & ExampleDiff)
+  | { status: 'unreadable'; message: string }
+
 export interface PushPreview {
   diff: DiffResult
   needsOverwrite: boolean
