@@ -21,7 +21,7 @@ Projects folder (each machine)          Vault folder (synced by Google Drive etc
 
 | Status      | Meaning                                                                                      | Action                  |
 | ----------- | -------------------------------------------------------------------------------------------- | ----------------------- |
-| In sync     | Local and vault are byte-identical                                                           | —                       |
+| In sync     | Local and vault are byte-identical, apart from machine-specific values                       | —                       |
 | Local only  | Never pushed                                                                                 | Push                    |
 | Local newer | Only you changed it since the last sync                                                      | Push                    |
 | Vault newer | Only another machine changed it                                                              | Pull                    |
@@ -57,6 +57,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 - The derived key lives only in the main process. Each operation gets its own copy, which is wiped when it finishes. The key is wiped on lock, on idle timeout (default 5 minutes), when the window closes, and when the computer sleeps or its screen locks.
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
+- Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
 - Pulls are refused unless `.env` is git-ignored and **not tracked**. The backup and the temp file are named so `.env.bak.*` covers them, and they are checked too, so a crash never leaves secrets in a file git would commit.
 - Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations). `meta.json` is created exclusively, so it can't overwrite a vault that synced in at the same moment.
 - `meta.json` is treated as attacker-controlled:
@@ -101,15 +102,28 @@ npm run build      # typecheck and build to out/
 2. **Other machines:** wait for Drive to finish syncing, then choose the same vault folder and unlock it with the same password. EnvVault won't offer to create a vault in a folder that already holds encrypted files.
 3. Push and pull from the Repositories table. For a conflict, pick **Keep local** (push, overwriting the vault copy) or **Keep vault** (pull, backing up your local file first).
 
+**Machine-specific keys:** some values differ between machines, such as a local path. Put `# envvault:local` on the line directly above such a key:
+
+```sh
+API_URL=https://api.example.com
+# envvault:local
+DATA_DIR=/Users/me/data
+```
+
+- A push uploads the key without its value (`DATA_DIR=` under the marker), so the value never leaves this machine, and changing it doesn't make the repo "local newer".
+- A pull never overwrites or deletes a key that is marked in your `.env` or in the vault copy. It keeps your line and adds the marker if your file didn't have it. A marked key you don't have yet is written empty, and the pull dialog lists it so you can fill it in.
+- If the vault marks a key but your `.env` doesn't, pushing uploads your value and drops the marker. The push dialog warns you first.
+- A marked key must be assigned only once in the file.
+
 **Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
 ## Vault format
 
-| File                | Contents                                                                                                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `meta.json`         | `{ formatVersion: 1, vaultId, kdf: { alg: "argon2id", opslimit, memlimit, salt }, keyCheck }` (plaintext)                                                                            |
-| `<repo>.env.enc`    | `"EVV1"` + 24-byte nonce + XChaCha20-Poly1305 ciphertext of `{ version, updatedAt, updatedBy, contentHash, envBase64 }`. The AAD is `envvault:v1:<repo>`. Repo names are lowercased. |
-| `.<file>.<hex>.tmp` | In-flight atomic writes. Stale ones are removed when you unlock.                                                                                                                     |
+| File                | Contents                                                                                                                                                                                                                                            |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `meta.json`         | `{ formatVersion: 1, vaultId, kdf: { alg: "argon2id", opslimit, memlimit, salt }, keyCheck }` (plaintext)                                                                                                                                           |
+| `<repo>.env.enc`    | `"EVV1"` + 24-byte nonce + XChaCha20-Poly1305 ciphertext of `{ version, updatedAt, updatedBy, contentHash, envBase64 }`. The AAD is `envvault:v1:<repo>`. Repo names are lowercased. Machine-specific keys are stored as `KEY=` under their marker. |
+| `.<file>.<hex>.tmp` | In-flight atomic writes. Stale ones are removed when you unlock.                                                                                                                                                                                    |
 
 Anything else in the folder (for example Drive's `name (1).ext` conflict copies) is ignored.
 

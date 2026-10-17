@@ -7,12 +7,14 @@ import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
 import { AppError } from './errors'
 import { isErrno } from './fsutil'
+import { syncedBytes } from './localkeys'
 
 const MAX_ENV_BYTES = 1024 * 1024
 
 export interface ScannedRepo {
   name: string
   dir: string
+  /** sha256 of syncedBytes(.env), or null if there is no .env. */
   localHash: string | null
   /** Set when the .env exists but can't be used (symlink, too large, ...). */
   envError: AppError | null
@@ -99,6 +101,15 @@ export async function readLocalEnv(repoDir: string): Promise<Buffer | null> {
   }
 }
 
+function syncedHash(env: Buffer): string {
+  const synced = syncedBytes(env)
+  try {
+    return sha256Hex(synced)
+  } finally {
+    if (synced !== env) synced.fill(0)
+  }
+}
+
 export async function scanRepos(projectsPath: string): Promise<ScannedRepo[]> {
   const root = await projectsRoot(projectsPath)
   const entries = await readdir(root, { withFileTypes: true })
@@ -110,9 +121,16 @@ export async function scanRepos(projectsPath: string): Promise<ScannedRepo[]> {
         if (!dir) return null
         try {
           const env = await readLocalEnv(dir)
-          const localHash = env ? sha256Hex(env) : null
-          env?.fill(0)
-          return { name: entry.name, dir, localHash, envError: null }
+          try {
+            return {
+              name: entry.name,
+              dir,
+              localHash: env ? syncedHash(env) : null,
+              envError: null
+            }
+          } finally {
+            env?.fill(0)
+          }
         } catch (err) {
           if (!(err instanceof AppError)) throw err
           return { name: entry.name, dir, localHash: null, envError: err }

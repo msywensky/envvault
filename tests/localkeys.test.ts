@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DuplicateLocalKeyError,
+  LOCAL_MARKER,
+  markedKeys,
+  mergePull,
+  projectEnv,
+  unmarkedKeys
+} from '../src/core/localkeys'
+
+const M = LOCAL_MARKER
+const text = (...lines: string[]): string => lines.map((l) => l + '\n').join('')
+
+describe('markedKeys', () => {
+  it('finds keys directly below a marker, in any spacing', () => {
+    expect(
+      markedKeys(
+        text('A=1', M, 'B=2', '  #envvault:local  ', 'export C = 3', '# envvault:local', 'D=4')
+      )
+    ).toEqual(['B', 'C', 'D'])
+  })
+
+  it('ignores a marker that is not directly above an assignment', () => {
+    expect(markedKeys(text(M, '', 'A=1', M, '# other', 'B=2', 'C=3', M))).toEqual([])
+    expect(markedKeys(text('# envvault:localhost', 'A=1', '# not envvault:local', 'B=2'))).toEqual(
+      []
+    )
+  })
+
+  it('ignores a marker inside a multi-line value', () => {
+    expect(markedKeys(text('PEM="-----BEGIN', M, '-----END"', 'A=1'))).toEqual([])
+    expect(markedKeys(text('PEM="-----BEGIN', M, 'B=2', '-----END"'))).toEqual([])
+  })
+})
+
+describe('projectEnv', () => {
+  it('returns null when nothing is marked', () => {
+    expect(projectEnv(text('A=1', '# envvault:other', 'B=2'))).toBeNull()
+    expect(projectEnv('')).toBeNull()
+  })
+
+  it('blanks marked values to a canonical KEY= and keeps everything else', () => {
+    expect(
+      projectEnv(
+        text(
+          '# shared',
+          'A=1',
+          '   #  envvault:local',
+          '  export DB_PATH = "/Users/me/data" # mine',
+          'B=2 # kept comment'
+        )
+      )
+    ).toBe(text('# shared', 'A=1', M, 'DB_PATH=', 'B=2 # kept comment'))
+  })
+
+  it('collapses a marked multi-line value to one line', () => {
+    expect(projectEnv(text('A=1', M, 'PEM="-----BEGIN', 'abc', '-----END"', 'B=2'))).toBe(
+      text('A=1', M, 'PEM=', 'B=2')
+    )
+  })
+
+  it('keeps CRLF endings, a BOM and a missing final newline', () => {
+    expect(projectEnv(`\uFEFF${M}\r\nDB=x\r\nA=1\r\nB=2`)).toBe(`\uFEFF${M}\r\nDB=\r\nA=1\r\nB=2`)
+    expect(projectEnv(`A=1\n${M}\nDB=x`)).toBe(`A=1\n${M}\nDB=`)
+  })
+
+  it('projects differently formatted values on two machines the same', () => {
+    expect(projectEnv(text('A=1', M, 'export DB = x # here'))).toBe(
+      projectEnv(text('A=1', '#envvault:local', "DB='y'"))
+    )
+  })
+
+  it('refuses a marked key that is assigned more than once', () => {
+    expect(() => projectEnv(text('DB=a', M, 'DB=b'))).toThrow(DuplicateLocalKeyError)
+    expect(() => projectEnv(text(M, 'DB=a', 'DB=b'))).toThrow(DuplicateLocalKeyError)
+  })
+})
+
+describe('unmarkedKeys', () => {
+  it('lists keys the vault marks that the local file has without a marker', () => {
+    const vault = text(M, 'DB=', M, 'PORT=', 'A=1')
+    expect(unmarkedKeys(text('DB=x', 'A=1'), vault)).toEqual(['DB'])
+    expect(unmarkedKeys(text(M, 'DB=x', 'A=1'), vault)).toEqual([])
+    expect(unmarkedKeys(text('DB=x'), null)).toEqual([])
+  })
+})
+
+describe('mergePull', () => {
+  it('returns the vault copy unchanged when nothing is kept', () => {
+    expect(mergePull(text('A=2'), text('A=1', 'DB=x'))).toEqual({ text: null, kept: [], unset: [] })
+    expect(mergePull(text('A=2'), null)).toEqual({ text: null, kept: [], unset: [] })
+  })
+
+  it('keeps the local value of a key the vault marks, and the vault marker', () => {
+    const vault = text('A=2', M, 'DB=', 'B=3')
+    const merge = mergePull(vault, text('A=1', '  export DB = "/b/data"', 'OLD=x'))
+    expect(merge).toEqual({
+      text: text('A=2', M, '  export DB = "/b/data"', 'B=3'),
+      kept: ['DB'],
+      unset: []
+    })
+    // No ping-pong: the result projects back to the vault copy.
+    expect(projectEnv(merge.text ?? '')).toBe(vault)
+  })
+
+  it('inserts a local marker the vault copy lacks', () => {
+    expect(mergePull(text('A=2', 'DB=/a'), text(M, 'DB=/b', 'A=1')).text).toBe(
+      text('A=2', M, 'DB=/b')
+    )
+  })
+
+  it('appends a kept key the vault copy does not have', () => {
+    expect(mergePull(text('A=2'), text('A=1', M, 'DB=/b')).text).toBe(text('A=2', M, 'DB=/b'))
+    expect(mergePull('A=2', text(M, 'DB=/b')).text).toBe(text('A=2', M, 'DB=/b'))
+    expect(mergePull('A=2\r\n', `${M}\nDB=/b`).text).toBe(`A=2\r\n${M}\r\nDB=/b\r\n`)
+    expect(mergePull('', text(M, 'DB=/b')).text).toBe(text(M, 'DB=/b'))
+  })
+
+  it('lists vault-marked keys the local file lacks as unset and writes them empty', () => {
+    const vault = text(M, 'DB=', M, 'PORT=', 'A=1')
+    expect(mergePull(vault, null)).toEqual({ text: null, kept: [], unset: ['DB', 'PORT'] })
+    expect(mergePull(vault, text(M, 'DB=/b'))).toEqual({
+      text: text(M, 'DB=/b', M, 'PORT=', 'A=1'),
+      kept: ['DB'],
+      unset: ['PORT']
+    })
+  })
+
+  it('keeps a multi-line local value verbatim, ending like the vault line', () => {
+    expect(
+      mergePull(`${M}\r\nPEM=\r\nA=1\r\n`, text(M, 'PEM="-----BEGIN', 'abc', '-----END"')).text
+    ).toBe(`${M}\r\nPEM="-----BEGIN\nabc\n-----END"\r\nA=1\r\n`)
+  })
+
+  it('keeps the vault copy BOM and drops the local one', () => {
+    expect(mergePull(`\uFEFF${M}\nDB=\n`, `\uFEFFDB=/b\n`).text).toBe(`\uFEFF${M}\nDB=/b\n`)
+    expect(mergePull(`${M}\nDB=\n`, `\uFEFFDB=/b\n`).text).toBe(`${M}\nDB=/b\n`)
+  })
+
+  it('refuses a kept key that is assigned more than once in either file', () => {
+    expect(() => mergePull(text(M, 'DB='), text('DB=a', 'DB=b'))).toThrow(DuplicateLocalKeyError)
+    expect(() => mergePull(text('DB=', 'DB=x'), text(M, 'DB=a'))).toThrow(DuplicateLocalKeyError)
+    // Duplicates of keys that aren't kept are fine.
+    expect(mergePull(text('A=1', 'A=2'), text('A=3', 'A=4')).text).toBeNull()
+  })
+})

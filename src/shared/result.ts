@@ -28,6 +28,8 @@ export type ErrorCode =
   | 'ENV_SYMLINK'
   | 'ENV_NOT_FILE'
   | 'ENV_TOO_LARGE'
+  | 'ENV_NOT_UTF8'
+  | 'ENV_DUPLICATE_KEY'
   | 'ENV_NOT_IGNORED'
   | 'ENV_TRACKED'
   | 'BACKUP_NOT_IGNORED'

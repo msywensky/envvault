@@ -87,6 +87,13 @@ export interface PushPreview {
   vault: VaultInfo | null
   /** Local and vault bytes are identical: nothing to push. */
   sameContent: boolean
+  /** Machine-specific keys (`# envvault:local`): their values are not uploaded. */
+  kept: string[]
+  /**
+   * Keys the vault marks machine-specific that the local .env has without a
+   * marker: their values would be uploaded.
+   */
+  unmarked: string[]
   expected: Expected
 }
 
@@ -100,7 +107,12 @@ export interface PullPreview {
   tracked: boolean
   /** The vault version is lower than the one last synced here. */
   rollback: boolean
+  /** Pulling would leave the local .env as it is. */
   sameContent: boolean
+  /** Machine-specific keys whose local values the pull keeps. */
+  kept: string[]
+  /** Machine-specific keys this machine has no value for: written empty. */
+  unset: string[]
   expected: Expected
 }
 

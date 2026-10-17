@@ -32,7 +32,7 @@ npm run format                               # prettier
 
 Five source areas with import boundaries **enforced by ESLint** (`eslint.config.mjs`), so a wrong import fails lint:
 
-- `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
+- `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, machine-specific keys, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
 - `src/main/` — Electron main process. Owns the key, all file system and git access.
 - `src/preload/` — sandboxed; may import only `electron` and relative files (they get bundled). Exposes named functions as `window.envvault`, never `ipcRenderer` or IPC event objects.
 - `src/shared/` — channel names and types used by all processes. Relative imports only (no packages, not even zod), because it reaches the sandboxed preload and the renderer. Request schemas therefore live in `src/main/schemas.ts`, not here.
@@ -72,6 +72,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
 - **Errors in the list.** `listRepos` turns per-repo failures (a tampered entry, a symlinked `.env`) into rows with `status: 'error'` instead of failing the whole list.
 - **Raw diff.** `pullRawDiff` returns a line diff (`core/linediff.ts`) from the local `.env` to the vault copy, with only changed lines plus 3 context lines. It is masked in main (`maskEnvLines` in `core/envdiff.ts`, which shares `parseEnv`'s scanner; comments are not values and pass through) unless the request has `values: true`, which makes it the one flow that returns env values. It takes the same `expected` as `pull` and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` too, so it always matches the preview.
+- **Machine-specific keys.** A `# envvault:local` line directly above an assignment marks that key (`src/core/localkeys.ts`; byte wrappers and error mapping in `src/main/localkeys.ts`). Status and push use `projectEnv`, which blanks marked values to a canonical `KEY=` so differently formatted files on two machines hash the same. `Snapshot.localHash` stays the hash of the raw bytes, so `expected` catches any edit; `syncedHash` is what's compared with the vault. Pulls and `pullRawDiff` use `mergePull`: the vault copy with local lines kept for keys marked on either side. Both return `null` when there is nothing to change, meaning "use the original bytes", so files without markers still sync byte for byte. A marked key assigned twice fails with `ENV_DUPLICATE_KEY`.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve
@@ -98,7 +99,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{crypto,envdiff,linediff,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{crypto,envdiff,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.

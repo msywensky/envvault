@@ -575,6 +575,21 @@ code,
   color: var(--warn-text);
 }
 
+/* Machine-specific keys (# envvault:local): kept local, or with no local value. */
+.marker {
+  white-space: nowrap;
+}
+
+.chip-kept {
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.chip-unset {
+  border: 1px dashed var(--muted);
+  color: var(--muted);
+}
+
 /* ---------- raw diff (pull dialog) ---------- */
 
 .dialog.dialog-wide {

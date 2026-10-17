@@ -131,7 +131,7 @@ const PayloadSchema = z.strictObject({
   updatedAt: z.iso.datetime(),
   updatedBy: z.string().min(1).max(200),
   contentHash: z.string().regex(/^[0-9a-f]{64}$/),
-  /** The exact bytes of the .env file, base64-encoded. */
+  /** The .env bytes as pushed (machine-specific values blanked), base64-encoded. */
   envBase64: z.base64()
 })
 
