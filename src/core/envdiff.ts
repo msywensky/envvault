@@ -13,7 +13,7 @@ function closingQuote(s: string, quote: string, from: number): number {
 }
 
 /** One KEY=value assignment on lines `first`..`last` (several for a multi-line quoted value). */
-interface Assignment {
+export interface Assignment {
   key: string
   value: string
   first: number
@@ -23,7 +23,7 @@ interface Assignment {
 }
 
 /** The assignments in `lines`, in order. See parseEnv for the rules. */
-function scanEnv(lines: string[]): Assignment[] {
+export function scanEnv(lines: string[]): Assignment[] {
   const out: Assignment[] = []
   for (let i = 0; i < lines.length; i++) {
     let line = (lines[i] ?? '').trimStart()
