@@ -12,18 +12,19 @@ function closingQuote(s: string, quote: string, from: number): number {
   return -1
 }
 
-/**
- * Parse .env text into key -> raw value. Only used to compare values, never
- * to return them. Handles blank lines, # comments, `export KEY=...`,
- * quoted values with backslash escapes (including multi-line ones such as
- * PEM keys) and trailing ` # comments` on unquoted values. A quote with no
- * closing quote anywhere later is treated as part of an unquoted value, as
- * dotenv does. Lines that don't look like KEY=VALUE are ignored, and a later
- * duplicate key wins.
- */
-export function parseEnv(text: string): Map<string, string> {
-  const out = new Map<string, string>()
-  const lines = text.split(/\r?\n/)
+/** One KEY=value assignment on lines `first`..`last` (several for a multi-line quoted value). */
+interface Assignment {
+  key: string
+  value: string
+  first: number
+  last: number
+  /** A `# comment` after the value on its last line, if any. */
+  comment: string | null
+}
+
+/** The assignments in `lines`, in order. See parseEnv for the rules. */
+function scanEnv(lines: string[]): Assignment[] {
+  const out: Assignment[] = []
   for (let i = 0; i < lines.length; i++) {
     let line = (lines[i] ?? '').trimStart()
     if (line === '' || line.startsWith('#')) continue
@@ -47,15 +48,65 @@ export function parseEnv(text: string): Map<string, string> {
         end = closingQuote(body, quote, from)
       }
       if (end !== -1) {
-        out.set(key, body.slice(0, end))
+        const after = body.slice(end + 1).trimStart()
+        const comment = after.startsWith('#') ? after : null
+        out.push({ key, value: body.slice(0, end), first: i, last: j, comment })
         i = j
         continue
       }
       // Unterminated: fall through and treat this line as unquoted.
     }
 
-    const comment = rest.startsWith('#') ? 0 : rest.search(/\s#/)
-    out.set(key, (comment === -1 ? rest : rest.slice(0, comment)).trim())
+    const hash = rest.startsWith('#') ? 0 : rest.search(/\s#/)
+    out.push({
+      key,
+      value: (hash === -1 ? rest : rest.slice(0, hash)).trim(),
+      first: i,
+      last: i,
+      comment: hash === -1 ? null : rest.slice(hash).trimStart()
+    })
+  }
+  return out
+}
+
+/**
+ * Parse .env text into key -> raw value. Only used to compare values, never
+ * to return them. Handles blank lines, # comments, `export KEY=...`,
+ * quoted values with backslash escapes (including multi-line ones such as
+ * PEM keys) and trailing ` # comments` on unquoted values. A quote with no
+ * closing quote anywhere later is treated as part of an unquoted value, as
+ * dotenv does. Lines that don't look like KEY=VALUE are ignored, and a later
+ * duplicate key wins.
+ */
+export function parseEnv(text: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const { key, value } of scanEnv(text.split(/\r?\n/))) out.set(key, value)
+  return out
+}
+
+export const MASK = '••••••••'
+
+/**
+ * `lines` with every value replaced by MASK. Keys, comments (whole-line and
+ * after a value) and blank lines are kept, and so is an assignment with an
+ * empty value. The continuation lines of a multi-line value are masked whole,
+ * and so is anything that isn't an assignment, comment or blank line.
+ */
+export function maskEnvLines(lines: string[]): string[] {
+  const out = lines.map((line) => {
+    const trimmed = line.trimStart()
+    return trimmed === '' || trimmed.startsWith('#') ? line : MASK
+  })
+  for (const { value, first, last, comment } of scanEnv(lines)) {
+    if (value === '') {
+      out[first] = lines[first] ?? ''
+      continue
+    }
+    const line = lines[first] ?? ''
+    const tail = comment === null ? '' : ` ${comment}`
+    // Everything before the first '=' is indentation, `export` and the key.
+    out[first] = line.slice(0, line.indexOf('=') + 1) + MASK + (first === last ? tail : '')
+    for (let k = first + 1; k <= last; k++) out[k] = MASK + (k === last ? tail : '')
   }
   return out
 }

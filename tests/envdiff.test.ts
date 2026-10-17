@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffKeys, parseEnv } from '../src/core/envdiff'
+import { MASK, diffKeys, maskEnvLines, parseEnv } from '../src/core/envdiff'
 
 describe('parseEnv', () => {
   it('parses plain, quoted and exported values', () => {
@@ -74,6 +74,98 @@ describe('parseEnv', () => {
 
   it('returns an empty map for an empty file', () => {
     expect(parseEnv('').size).toBe(0)
+  })
+})
+
+describe('maskEnvLines', () => {
+  const M = MASK
+
+  it('keeps keys and blank lines, and masks every value', () => {
+    expect(
+      maskEnvLines([
+        'PLAIN=value',
+        'export EXPORTED = yes',
+        '  INDENTED=1',
+        '',
+        '   ',
+        'DQ="quoted # not a comment"',
+        'NOSPACE=abc#def'
+      ])
+    ).toEqual([
+      `PLAIN=${M}`,
+      `export EXPORTED =${M}`,
+      `  INDENTED=${M}`,
+      '',
+      '   ',
+      `DQ=${M}`,
+      `NOSPACE=${M}`
+    ])
+  })
+
+  it('shows assignments with an empty value as they are', () => {
+    expect(maskEnvLines(['EMPTY=', 'SPACES=   ', 'QUOTED=""', 'NOTE= # fill in'])).toEqual([
+      'EMPTY=',
+      'SPACES=   ',
+      'QUOTED=""',
+      'NOTE= # fill in'
+    ])
+  })
+
+  it('passes comments through, whole-line and after a value', () => {
+    expect(
+      maskEnvLines([
+        '# Database',
+        '  # indented',
+        '# OLD_KEY=kept-because-comments-are-not-values',
+        'INLINE=val # trailing comment',
+        'DQ="quoted" # after the quote',
+        'JUNK_AFTER="quoted" junk'
+      ])
+    ).toEqual([
+      '# Database',
+      '  # indented',
+      '# OLD_KEY=kept-because-comments-are-not-values',
+      `INLINE=${M} # trailing comment`,
+      `DQ=${M} # after the quote`,
+      `JUNK_AFTER=${M}`
+    ])
+  })
+
+  it('masks the continuation lines of a multi-line value whole', () => {
+    expect(
+      maskEnvLines([
+        'KEY="-----BEGIN-----',
+        'abc',
+        '# not a comment',
+        '-----END-----" # note',
+        'NEXT=1'
+      ])
+    ).toEqual([`KEY=${M}`, M, M, `${M} # note`, `NEXT=${M}`])
+  })
+
+  it('treats an unterminated quote as one line, like parseEnv', () => {
+    expect(maskEnvLines(['A="oops', 'B=1'])).toEqual([`A=${M}`, `B=${M}`])
+  })
+
+  it('masks junk lines and invalid keys whole', () => {
+    expect(maskEnvLines(['just text', '=novalue', '1BAD=x', 'sk_live_secret'])).toEqual([
+      M,
+      M,
+      M,
+      M
+    ])
+  })
+
+  it('never leaves a value behind', () => {
+    const text = [
+      'A=hunter2',
+      'B="hunter2',
+      'hunter2"',
+      "export C = 'hunter2' # a comment",
+      'D=hunter2 # another',
+      'hunter2'
+    ]
+    expect(maskEnvLines(text).join('\n')).not.toContain('hunter2')
   })
 })
 

@@ -1,6 +1,7 @@
 // Plain data types shared by main, core and the renderer. Type-only, so the
-// renderer can import them without pulling in node code. None of these ever
-// carry env values.
+// renderer can import them without pulling in node code. None of these carry
+// env values, except a RawDiff requested with `values: true` (see
+// sync.pullRawDiff).
 import type { AppErrorInfo } from './result'
 
 export type SyncStatus =
@@ -26,6 +27,21 @@ export interface DiffResult {
   removed: string[]
   changed: string[]
   unchanged: number
+}
+
+/**
+ * One row of a line-by-line diff, for the raw diff in the Pull dialog. Its
+ * text is masked unless the diff was requested with `values: true`, in which
+ * case it CARRIES ENV VALUES. Unchanged lines away from any change are sent
+ * as a `gap` count, never as text.
+ */
+export type RawDiffLine =
+  | { kind: 'same' | 'add' | 'del'; text: string; oldNo: number | null; newNo: number | null }
+  | { kind: 'gap'; count: number }
+
+/** Local .env -> vault copy. Empty when no line changes (line endings only). */
+export interface RawDiff {
+  lines: RawDiffLine[]
 }
 
 export interface Settings {
@@ -97,6 +113,11 @@ export interface PushRequest {
 export interface PullRequest {
   repoName: string
   expected: Expected
+}
+
+export interface RawDiffRequest extends PullRequest {
+  /** Return the lines as they are instead of masked. */
+  values: boolean
 }
 
 export interface PullResult {
