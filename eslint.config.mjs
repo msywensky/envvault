@@ -150,5 +150,11 @@ export default defineConfig(
     }
   },
 
+  // Plain JS (scripts/) has no type annotations to add.
+  {
+    files: ['**/*.{js,mjs}'],
+    rules: { '@typescript-eslint/explicit-function-return-type': 'off' }
+  },
+
   eslintConfigPrettier
 )

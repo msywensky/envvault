@@ -130,7 +130,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 
 - `npm run lint`, `npm run typecheck` and `npm test` run in CI on macOS and Windows.
 - `tests/sync.test.ts` exercises the real push/pull flows with real git and real crypto in temp folders, simulating two machines.
-- In development, `ENVVAULT_PROFILE=<name> npm run dev` gives the app its own settings folder, so two "machines" can run on one computer.
+- To test without touching your real settings, run `npm run dev:profile -- [name]` (default name `test`). Each profile keeps its own settings and sync state in `envvault-<name>` next to the real data folder, and profiles can run side by side, so two of them can act as two "machines" on one computer. Add `--reset` to start the profile from scratch. A profile doesn't isolate the folders you pick in it, so choose a scratch vault folder and projects folder. Under the hood this sets `ENVVAULT_PROFILE=<name>`, which works only in unpackaged runs.
 
 ## Roadmap
 
