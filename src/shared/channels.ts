@@ -15,6 +15,7 @@ export const CH = {
   push: 'repo:push',
   previewPull: 'repo:previewPull',
   pull: 'repo:pull',
+  pullRawDiff: 'repo:pullRawDiff',
   addGitignore: 'repo:addGitignore'
 } as const
 

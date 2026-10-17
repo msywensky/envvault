@@ -7,6 +7,8 @@ import type {
   PullResult,
   PushPreview,
   PushRequest,
+  RawDiff,
+  RawDiffRequest,
   RepoRow,
   Settings
 } from './types'
@@ -27,6 +29,7 @@ export interface Responses {
   'repo:push': RepoRow
   'repo:previewPull': PullPreview
   'repo:pull': PullResult
+  'repo:pullRawDiff': RawDiff
   'repo:addGitignore': GitignoreResult
 }
 
@@ -49,6 +52,8 @@ export interface EnvVaultApi {
   push(request: PushRequest): R<'repo:push'>
   previewPull(repoName: string): R<'repo:previewPull'>
   pull(request: PullRequest): R<'repo:pull'>
+  /** Line-by-line diff of what a pull would write, masked unless `values` is set. */
+  pullRawDiff(request: RawDiffRequest): R<'repo:pullRawDiff'>
   addGitignore(repoName: string): R<'repo:addGitignore'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void

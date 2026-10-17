@@ -27,6 +27,7 @@ const api: EnvVaultApi = {
   push: (request) => invoke(CH.push, request),
   previewPull: (repoName) => invoke(CH.previewPull, { repoName }),
   pull: (request) => invoke(CH.pull, request),
+  pullRawDiff: (request) => invoke(CH.pullRawDiff, request),
   addGitignore: (repoName) => invoke(CH.addGitignore, { repoName }),
   onLocked: (callback) => {
     // Never hand the IPC event to the page: event.sender is ipcRenderer.

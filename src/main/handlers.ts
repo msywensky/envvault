@@ -69,6 +69,8 @@ export function registerIpc(): void {
     session.withKey((key, id) => sync.previewPull(key, id, repoName))
   )
   handle(CH.pull, (req) => exclusive(() => session.withKey((key, id) => sync.pull(key, id, req))))
+  // Read-only like the previews. Returns env values when asked (see sync.pullRawDiff).
+  handle(CH.pullRawDiff, (req) => session.withKey((key) => sync.pullRawDiff(key, req)))
   handle(CH.addGitignore, ({ repoName }) =>
     exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
   )

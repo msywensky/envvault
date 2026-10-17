@@ -1,8 +1,10 @@
 // Push / pull flows. Every function takes a private copy of the key (see
-// session.withKey) and returns metadata and key names only, never values.
-// Serialisation (one write at a time) is done by the IPC handlers.
+// session.withKey) and returns metadata and key names only, never values,
+// except pullRawDiff, which the user asks for explicitly. Serialisation (one
+// write at a time) is done by the IPC handlers.
 import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
+import { lineDiff } from '../core/linediff'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import type {
   Expected,
@@ -12,6 +14,8 @@ import type {
   PullResult,
   PushPreview,
   PushRequest,
+  RawDiff,
+  RawDiffRequest,
   RepoRow,
   Settings,
   VaultInfo
@@ -240,6 +244,28 @@ export function previewPull(
       rollback: last !== null && s.vault.version < last.version,
       sameContent: s.localHash === s.vault.contentHash,
       expected: expectedOf(s)
+    }
+  })
+}
+
+/**
+ * The lines a pull would change, with their values masked unless
+ * `req.values` is set: then this is the one place env values leave the main
+ * process. Only for the content the user reviewed, and only changed lines
+ * plus a little context (see lineDiff).
+ */
+export function pullRawDiff(key: Uint8Array, req: RawDiffRequest): Promise<RawDiff> {
+  return withSnapshot(key, req.repoName, async (s) => {
+    if (!s.payload || !s.vault) throw noVaultCopy()
+    checkExpected(s, req.expected)
+    const vaultBytes = decodeEnv(s.payload)
+    try {
+      const lines = lineDiff(s.local?.toString('utf8') ?? '', vaultBytes.toString('utf8'), {
+        mask: !req.values
+      })
+      return { lines }
+    } finally {
+      vaultBytes.fill(0)
     }
   })
 }
