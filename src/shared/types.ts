@@ -49,6 +49,8 @@ export interface Settings {
   vaultPath: string | null
   autoLockMinutes: number
   machineName: string
+  /** Compare .env with .env.example in the push and pull dialogs. */
+  checkExample: boolean
 }
 
 /**
@@ -112,6 +114,8 @@ export interface PushPreview {
    * marker: their values would be uploaded.
    */
   unmarked: string[]
+  /** The local .env against .env.example; null if there is none or the check is off. */
+  example: ExampleCheck | null
   expected: Expected
 }
 
@@ -131,6 +135,8 @@ export interface PullPreview {
   kept: string[]
   /** Machine-specific keys this machine has no value for: written empty. */
   unset: string[]
+  /** The pulled result against .env.example; null if there is none or the check is off. */
+  example: ExampleCheck | null
   expected: Expected
 }
 

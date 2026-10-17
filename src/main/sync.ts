@@ -6,10 +6,12 @@
 // and status hashes, and kept from the local file by a pull.
 import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
+import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import type {
+  ExampleCheck,
   Expected,
   GitignoreResult,
   PullPreview,
@@ -28,7 +30,7 @@ import { AppError } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { mergedBytes, syncedBytes } from './localkeys'
-import { readLocalEnv, resolveRepo, scanRepos, type ScannedRepo } from './repos'
+import { readLocalEnv, readRepoFile, resolveRepo, scanRepos, type ScannedRepo } from './repos'
 import { getLast, setLast } from './state'
 import { entryId, listEntryIds, readEntry, writeEntry } from './vault'
 
@@ -190,6 +192,32 @@ const expectedOf = (s: Snapshot): Expected => ({
   vaultHash: s.vault?.contentHash ?? null
 })
 
+const EXAMPLE = '.env.example'
+
+/**
+ * How `env` compares with the repo's .env.example, or null if there is none.
+ * Advisory only: a file that can't be read is reported, never thrown.
+ */
+async function checkExample(
+  repoDir: string,
+  env: Map<string, string>
+): Promise<ExampleCheck | null> {
+  let bytes: Buffer | null
+  try {
+    bytes = await readRepoFile(repoDir, EXAMPLE)
+  } catch (err) {
+    // Node's own messages contain paths, so only ours are passed on.
+    const message = err instanceof AppError ? err.message : `${EXAMPLE} could not be read.`
+    return { status: 'unreadable', message }
+  }
+  if (!bytes) return null
+  const diff = compareExample(env, parseAndWipe(bytes))
+  // Only needed to word the same-value warning; push previews work without git.
+  const tracked =
+    diff.sameValue.length > 0 ? await isTracked(repoDir, EXAMPLE).catch(() => null) : null
+  return { status: 'ok', tracked, ...diff }
+}
+
 const noLocalEnv = (): AppError => new AppError('ENV_NOT_FOUND', 'This repo has no .env to push.')
 const noVaultCopy = (): AppError =>
   new AppError('VAULT_ENTRY_NOT_FOUND', 'The vault has no copy of this repo.')
@@ -202,6 +230,10 @@ export function previewPush(
   return withSnapshot(key, repoName, async (s) => {
     if (!s.local || !s.synced) throw noLocalEnv()
     const last = await getLast(vaultId, s.id)
+    // The raw file: machine-specific values don't belong in the example either.
+    const example = s.cfg.checkExample
+      ? await checkExample(s.repoDir, parseAndWipe(Buffer.from(s.local)))
+      : null
     const vaultBytes = s.payload ? decodeEnv(s.payload) : null
     const localText = s.local.toString('utf8')
     const vaultText = vaultBytes?.toString('utf8') ?? null
@@ -212,6 +244,7 @@ export function previewPush(
       sameContent: s.syncedHash === s.vault?.contentHash,
       kept: markedKeys(localText),
       unmarked: unmarkedKeys(localText, vaultText),
+      example,
       expected: expectedOf(s)
     }
   })
@@ -251,12 +284,11 @@ export function previewPull(
     const [last, git] = await Promise.all([getLast(vaultId, s.id), ignoreStatus(s.repoDir)])
     const merged = mergedBytes(decodeEnv(s.payload), s.local)
     const mergedHash = sha256Hex(merged.bytes)
+    // Both compare what the pull writes, so kept keys don't show as changed.
+    const mergedEnv = parseAndWipe(merged.bytes)
+    const example = s.cfg.checkExample ? await checkExample(s.repoDir, mergedEnv) : null
     return {
-      // Against what the pull writes, so kept keys don't show as changed.
-      diff: diffKeys(
-        parseAndWipe(merged.bytes),
-        parseAndWipe(s.local ? Buffer.from(s.local) : null)
-      ),
+      diff: diffKeys(mergedEnv, parseAndWipe(s.local ? Buffer.from(s.local) : null)),
       vault: s.vault,
       hasLocal: s.local !== null,
       ...git,
@@ -264,6 +296,7 @@ export function previewPull(
       sameContent: mergedHash === s.localHash,
       kept: merged.kept,
       unset: merged.unset,
+      example,
       expected: expectedOf(s)
     }
   })

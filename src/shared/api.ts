@@ -41,7 +41,11 @@ export interface EnvVaultApi {
   /** Throttled by the renderer; resets the idle auto-lock timer. */
   activity(): R<'app:activity'>
   getSettings(): R<'settings:get'>
-  saveSettings(patch: { autoLockMinutes: number; machineName: string }): R<'settings:save'>
+  saveSettings(patch: {
+    autoLockMinutes: number
+    machineName: string
+    checkExample: boolean
+  }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
   createVault(password: string): R<'session:createVault'>

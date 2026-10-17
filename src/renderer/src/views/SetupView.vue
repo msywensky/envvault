@@ -23,7 +23,11 @@ async function pick(which: 'projects' | 'vault'): Promise<void> {
 async function done(): Promise<void> {
   if (!store.settings) return
   busy.value = true
-  const patch = { autoLockMinutes: store.settings.autoLockMinutes, machineName: machineName.value }
+  const patch = {
+    autoLockMinutes: store.settings.autoLockMinutes,
+    machineName: machineName.value,
+    checkExample: store.settings.checkExample
+  }
   const saved = await run(() => window.envvault.saveSettings(patch))
   busy.value = false
   if (!saved) return
