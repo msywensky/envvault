@@ -40,6 +40,24 @@ export function actionsFor(row: RepoRow): RowAction[] {
   }
 }
 
+/**
+ * Rows whose vault copy can be edited: the repo is in the projects folder and
+ * isn't local-only (push that instead). A No .env row starts an empty copy.
+ */
+export function canEdit(row: RepoRow): boolean {
+  return ['in-sync', 'local-newer', 'vault-newer', 'conflict', 'no-env'].includes(row.status)
+}
+
+/** Same rule as core's KEY_RE (src/core/envdiff.ts) and main's EnvKey schema. */
+export function envKeyProblem(key: string): string | null {
+  if (key === '') return 'Enter a key name.'
+  if (key.length > 200) return 'Use at most 200 characters.'
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key)) {
+    return 'Use letters, digits, _ . or -, starting with a letter or _.'
+  }
+  return null
+}
+
 export const ACTION_LABEL: Record<RowAction, string> = {
   push: 'Push',
   pull: 'Pull',

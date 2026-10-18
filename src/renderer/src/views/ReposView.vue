@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { RepoRow } from '../../../shared/types'
+import EnvEditorDialog from '../components/EnvEditorDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
 import SyncDialog from '../components/SyncDialog.vue'
 import { loadRepos, store } from '../store'
@@ -8,6 +9,7 @@ import { actionsFor, folderName, type RowAction } from '../status'
 
 const loading = ref(false)
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
+const editing = ref<RepoRow | null>(null)
 
 const counts = computed(() => {
   const needsAction = store.repos.filter(
@@ -29,6 +31,7 @@ function onAction(repo: RepoRow, action: RowAction): void {
 
 async function onDone(): Promise<void> {
   open.value = null
+  editing.value = null
   await refresh()
 }
 
@@ -63,7 +66,7 @@ onMounted(refresh)
       <div v-else-if="store.repos.length === 0" class="empty">
         No git repositories found in the projects folder.
       </div>
-      <RepoTable v-else :rows="store.repos" @action="onAction" />
+      <RepoTable v-else :rows="store.repos" @action="onAction" @edit="editing = $event" />
     </div>
 
     <SyncDialog
@@ -73,6 +76,14 @@ onMounted(refresh)
       :mode="open.mode"
       :conflict="open.conflict"
       @close="open = null"
+      @done="onDone"
+    />
+
+    <EnvEditorDialog
+      v-if="editing"
+      :key="editing.name"
+      :repo="editing"
+      @close="editing = null"
       @done="onDone"
     />
   </div>
