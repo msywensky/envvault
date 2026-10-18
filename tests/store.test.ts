@@ -25,6 +25,9 @@ import { MemoryStore } from '../src/main/store/memory'
 import { StoreConflictError, type VaultStore } from '../src/main/store/types'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent' } }))
+// The git store runs a few git processes per call, and those start slowly on
+// Windows (about 100 ms each in CI).
+vi.setConfig({ testTimeout: 30_000 })
 
 const root = mkdtempSync(join(tmpdir(), 'envvault-store-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

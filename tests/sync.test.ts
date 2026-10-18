@@ -1098,7 +1098,8 @@ describe('git resolution', () => {
   })
 })
 
-describe('git vault', () => {
+// Many git processes per test, which start slowly on Windows.
+describe('git vault', { timeout: 30_000 }, () => {
   const IGNORE = '.env\n.env.bak.*\n'
   let remote: string
   let location: VaultLocation
