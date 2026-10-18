@@ -734,6 +734,19 @@ code,
   font-style: italic;
 }
 
+/* A setup code: one click selects all of it, for copying. */
+.setup-code {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  text-align: center;
+  user-select: all;
+}
+
 /* Settings' vault row: the kind before the location. */
 .vault-kind {
   color: var(--muted);

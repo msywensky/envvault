@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Result } from '../../../shared/result'
 import { call, refreshState, store } from '../store'
 import { vaultLabel } from '../vault'
@@ -11,6 +11,14 @@ const confirmPassword = ref('')
 const busy = ref(false)
 const error = ref<string | null>(null)
 const firstInput = ref<HTMLInputElement | null>(null)
+const codeInput = ref<HTMLInputElement | null>(null)
+// Setup codes are credentials: only ever in these local refs, never the
+// store, and cleared once used, when the vault locks and when this screen
+// goes away.
+const requireCode = ref(true)
+const typedCode = ref('')
+const newCode = ref<string | null>(null)
+const confirmGroup = ref('')
 
 const vault = computed(() => store.app?.vault ?? 'not-configured')
 // Messages differ for a synced folder and a git repository.
@@ -24,9 +32,23 @@ const createProblem = computed(() => {
   return null
 })
 const canCreate = computed(() => !createProblem.value && confirmPassword.value === password.value)
+// This machine doesn't have the vault's secret yet: ask for the setup code too.
+const needsCode = computed(() => vault.value === 'ready' && store.app?.setupCode === 'needed')
+const lastGroup = computed(() => newCode.value?.split('-').at(-1) ?? '')
+const confirmed = computed(
+  () =>
+    lastGroup.value !== '' &&
+    confirmGroup.value.replace(/\s/g, '').toUpperCase() === lastGroup.value
+)
 
-/** Send the password, clear the fields, and go to the repo list on success. */
-async function submit(request: (password: string) => Promise<Result<unknown>>): Promise<void> {
+/**
+ * Send the password, clear the fields, and go to the repo list on success,
+ * unless `after` says to stay (to show a new setup code).
+ */
+async function submit<T>(
+  request: (password: string) => Promise<Result<T>>,
+  after?: (data: T) => boolean
+): Promise<void> {
   if (busy.value) return
   busy.value = true
   error.value = null
@@ -40,16 +62,45 @@ async function submit(request: (password: string) => Promise<Result<unknown>>): 
     await focus()
     return
   }
+  if (after && !after(res.data)) return
+  await enter()
+}
+
+async function enter(): Promise<void> {
+  typedCode.value = ''
   store.view = 'repos'
   await refreshState()
 }
 
 function unlock(): void {
-  if (password.value) void submit((pw) => window.envvault.unlock(pw))
+  const code = needsCode.value ? typedCode.value.trim() : undefined
+  if (!password.value || code === '') return
+  void submit((pw) => window.envvault.unlock(pw, code))
 }
 
 function create(): void {
-  if (canCreate.value) void submit((pw) => window.envvault.createVault(pw, false))
+  if (!canCreate.value) return
+  const withCode = git.value || requireCode.value
+  void submit(
+    (pw) => window.envvault.createVault(pw, withCode),
+    (data) => {
+      if (!data.setupCode) return true
+      newCode.value = data.setupCode
+      return false
+    }
+  )
+}
+
+/** The new setup code was saved: forget it here and go on. */
+async function finishCreate(): Promise<void> {
+  if (!confirmed.value) return
+  newCode.value = null
+  confirmGroup.value = ''
+  await enter()
+}
+
+function onRequireCode(event: Event): void {
+  requireCode.value = (event.target as HTMLInputElement).checked
 }
 
 async function recheck(): Promise<void> {
@@ -61,10 +112,24 @@ async function recheck(): Promise<void> {
 // shown again after every lock, so focus explicitly.
 async function focus(): Promise<void> {
   await nextTick()
-  firstInput.value?.focus()
+  ;(needsCode.value && !typedCode.value ? codeInput.value : firstInput.value)?.focus()
 }
 onMounted(focus)
 watch(vault, focus)
+watch(needsCode, focus)
+// Locked (idle, sleep) while a new code was showing: it's in Settings later.
+watch(
+  () => store.lockEpoch,
+  () => {
+    newCode.value = null
+    confirmGroup.value = ''
+    typedCode.value = ''
+  }
+)
+onBeforeUnmount(() => {
+  newCode.value = null
+  typedCode.value = ''
+})
 </script>
 
 <template>
@@ -76,9 +141,64 @@ watch(vault, focus)
           <h1>EnvVault</h1>
         </div>
 
+        <!-- Just created: the setup code, shown once. -->
+        <form v-if="newCode" class="stack" @submit.prevent="finishCreate">
+          <h2>Save your setup code</h2>
+          <p class="muted">
+            You'll need it, with your master password, to unlock this vault on another machine.
+          </p>
+          <div class="setup-code" tabindex="0" aria-label="Setup code">{{ newCode }}</div>
+          <p class="muted small">
+            Click it to select it, then copy it (⌘C or Ctrl+C) into your password manager, next to
+            the master password.
+          </p>
+          <div class="notice notice-warn">
+            <strong>Keep it safe.</strong> If you lose it and every machine that has it, the vault
+            can't be opened, even with the password. You can show it again in Settings.
+          </div>
+          <div class="field">
+            <label for="confirm-code">
+              To continue, type its last group ({{ lastGroup.length }} characters)
+            </label>
+            <input
+              id="confirm-code"
+              v-model="confirmGroup"
+              class="input input-narrow mono"
+              maxlength="8"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <button type="submit" class="btn btn-primary" :disabled="!confirmed">Continue</button>
+        </form>
+
         <!-- Existing vault: unlock. -->
-        <form v-if="vault === 'ready'" class="stack" @submit.prevent="unlock">
-          <p class="muted">Enter your master password to unlock the vault.</p>
+        <form v-else-if="vault === 'ready'" class="stack" @submit.prevent="unlock">
+          <p class="muted">
+            {{
+              needsCode
+                ? "Enter this vault's setup code and your master password to unlock it on this machine."
+                : 'Enter your master password to unlock the vault.'
+            }}
+          </p>
+          <div v-if="needsCode" class="field">
+            <label for="setup-code">Setup code</label>
+            <input
+              id="setup-code"
+              ref="codeInput"
+              v-model="typedCode"
+              class="input mono"
+              placeholder="EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX"
+              maxlength="100"
+              autocomplete="off"
+              spellcheck="false"
+              :disabled="busy"
+            />
+            <p class="muted small">
+              This machine doesn't have this vault's setup code yet. Find it in Settings on a
+              machine that's already set up, or in your password manager.
+            </p>
+          </div>
           <div class="field">
             <label for="password">Master password</label>
             <input
@@ -92,7 +212,11 @@ watch(vault, focus)
               :disabled="busy"
             />
           </div>
-          <button type="submit" class="btn btn-primary" :disabled="busy || !password">
+          <button
+            type="submit"
+            class="btn btn-primary"
+            :disabled="busy || !password || (needsCode && !typedCode.trim())"
+          >
             <span v-if="busy" class="spinner" />
             {{ busy ? 'Unlocking…' : 'Unlock' }}
           </button>
@@ -137,6 +261,25 @@ watch(vault, focus)
               :disabled="busy"
             />
             <p v-if="password && createProblem" class="muted small">{{ createProblem }}</p>
+          </div>
+          <div class="field">
+            <label class="checkbox">
+              <input
+                type="checkbox"
+                :checked="git || requireCode"
+                :disabled="busy || git"
+                @change="onRequireCode"
+              />
+              <span>Require a setup code on every machine (recommended)</span>
+            </label>
+            <p v-if="git" class="muted small">
+              Always on for a git vault: anyone who can read the repository or its history could
+              otherwise try to guess the master password.
+            </p>
+            <p v-else class="muted small">
+              A copy of the vault folder is then no use for guessing the master password. Each new
+              machine needs the code once.
+            </p>
           </div>
           <p class="muted small">
             There is no recovery: if you lose this password, the vault can't be opened. Keep it in

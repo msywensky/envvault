@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import FolderField from '../components/FolderField.vue'
+import SetupCodeField from '../components/SetupCodeField.vue'
 import SkillField from '../components/SkillField.vue'
 import { run, store, toast } from '../store'
 import { machineNameProblem } from '../status'
@@ -70,6 +71,7 @@ async function save(): Promise<void> {
           </div>
           <p class="muted small">Changing it locks EnvVault so you can unlock the other vault.</p>
         </div>
+        <SetupCodeField />
         <div class="field">
           <label for="settings-machine">This machine's name</label>
           <input
