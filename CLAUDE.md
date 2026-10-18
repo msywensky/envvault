@@ -71,12 +71,27 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Two steps.** `previewPush`/`previewPull` return a key-name diff plus `expected: {localHash, vaultHash}`. The commit (`push`/`pull`) re-reads both sides and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` if the hashes differ from what the user reviewed. Pushing over a vault copy that changed elsewhere also needs `overwriteConfirmed`.
 - **Plaintext handling.** `withSnapshot` reads the local file and the decrypted vault payload, and zero-fills the plaintext buffers afterwards.
 - **Status** comes from `core/status.ts`: local vs vault vs this machine's last sync. The last sync is stored per vault in `state.json` via `src/main/state.ts`.
-- **The vault.** `src/main/vault.ts` is the only module that touches the vault folder. Everything else goes through a `Vault` object (`state`, `create`, `open`, `list`, `read`, `write`):
-  - `vaultAt(path)` binds one to a folder;
+- **The vault.** Everything outside `src/main/vault.ts` reaches the vault through a `Vault` object (`state`, `create`, `open`, `list`, `read`, `write`):
+  - `vaultAt(path)` gives the vault in a folder;
+  - `vaultOn(store)` gives the vault in any store;
   - `configuredVault()` returns the one chosen in Settings, or null;
   - `requireVault()` is the same but throws `NOT_CONFIGURED`.
 
-  The path functions behind them aren't exported. `sync.ts`'s `Configured` omits `vaultPath`, so sync can't reach the vault by path.
+  `sync.ts`'s `Configured` omits `vaultPath`, so sync can't reach the vault by path.
+
+- **Stores.** `vault.ts` holds all the policy: meta.json, the KDF and key check, entry names, decryption, vault states. Underneath it, a `VaultStore` (`src/main/store/types.ts`) only moves opaque bytes by name.
+  - **The contract:**
+    - names are one lowercase segment (`STORE_NAME_RE`), and anything else is rejected;
+    - `get` returns null for a missing object;
+    - `create` is exclusive (`StoreExistsError`), with one winner among racing creates;
+    - `put` replaces atomically;
+    - `list` hides the store's own internals;
+    - `reachable` never throws;
+    - `cleanUp` runs after unlock.
+  - **The implementations:**
+    - `FolderStore` (`store/folder.ts`): `writeNew` for `create`, `atomicWrite` for `put`, and removal of its stale `.<name>.<hex>.tmp` files. `list` drops anything that isn't a valid name, such as Drive conflict copies;
+    - `MemoryStore` (`store/memory.ts`): the reference implementation, for tests. Settings never selects it.
+  - **New stores** (git, S3-compatible) must pass `tests/store.test.ts`.
 
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
 - **Errors in the list.** `listRepos` turns per-repo failures (a tampered entry, a symlinked `.env`) into rows with `status: 'error'` instead of failing the whole list.
@@ -121,6 +136,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
 - Background work must never make the renderer call IPC: every request resets the idle auto-lock (`ipcHooks.onAuthorizedCall`), so it would keep the vault unlocked. That's why `EV.autoPulled` and `EV.cliPushed` carry the updated rows and the renderer patches `store.repos` instead of refetching. Main-side background work uses `session.withKey`, which doesn't touch the timer.
 - Requests from the envvault socket never reset the idle timer either: they don't go through `ipcHooks`, so a script or Claude polling `status` can't keep the vault unlocked. Don't add a `touch()` there.
+- A store (`src/main/store/`) only ever sees encrypted entries and the plaintext `meta.json`, never a key or a value. ESLint stops store modules from importing `session`, `kdf`, `sync`, `vault`, `localkeys` and the crypto, env-diff and editor modules of `core`.
 - The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
 - Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
@@ -148,4 +164,5 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.
   - The symlink test is skipped on Windows.
+- `tests/store.test.ts` is the `VaultStore` contract, run with `describe.each` over every store (folder in a temp dir, memory), plus folder-only behaviour (temp files, conflict copies). `tests/vault.test.ts` runs the vault policy on a `MemoryStore`: states, create races, open failures, tampered and swapped entries.
 - `tests/cli.test.ts` runs the envvault command (`src/cli/main.ts`) against the real socket server with a fake command table, in a short `/tmp` folder because Unix socket paths are limited to about 104 bytes. `tests/skill.test.ts` covers the skill text and installing it into a temp folder.
