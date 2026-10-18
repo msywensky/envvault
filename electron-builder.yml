@@ -8,6 +8,9 @@ directories:
 # production dependencies (libsodium, zod, @electron-toolkit/utils) itself.
 files:
   - out/**/*
+# The envvault command runs under plain Node, which can't read app.asar.
+asarUnpack:
+  - out/cli/**
 
 # No native modules (libsodium is WebAssembly), so nothing to rebuild.
 npmRebuild: false

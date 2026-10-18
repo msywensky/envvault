@@ -47,7 +47,7 @@ export default defineConfig(
   // Type-aware rules for the Node side and the tests. (.vue files are left
   // out to avoid configuring type-aware parsing through vue-eslint-parser.)
   {
-    files: ['src/{main,core,preload,shared}/**/*.ts', 'tests/**/*.ts'],
+    files: ['src/{main,core,preload,shared,cli}/**/*.ts', 'tests/**/*.ts'],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname }
     },
@@ -109,6 +109,29 @@ export default defineConfig(
         }
       ],
       'vue/no-v-html': 'error'
+    }
+  },
+
+  // The envvault command is one bundled file for plain Node, and talks to the
+  // app only over its socket: node: built-ins, core and shared, no packages.
+  {
+    files: ['src/cli/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^(?!node:|\\.\\.?/).+',
+              message: 'The envvault command may import only node: built-ins and relative files.'
+            },
+            {
+              group: ['**/main/**', '**/renderer/**', '**/preload/**'],
+              message: 'The envvault command talks to the app only through its socket.'
+            }
+          ]
+        }
+      ]
     }
   },
 
