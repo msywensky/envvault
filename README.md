@@ -73,7 +73,8 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
   - they don't count as activity, so they never keep the vault unlocked;
   - a push is refused if the vault copy changed on another machine.
 - Pulls are refused unless `.env` is git-ignored and **not tracked**. The backup and the temp file are named so `.env.bak.*` covers them, and they are checked too, so a crash never leaves secrets in a file git would commit.
-- Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations). `meta.json` is created exclusively, so it can't overwrite a vault that synced in at the same moment.
+- Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations).
+- Writes are also conditional: EnvVault writes a vault file only if it is still the version it read, so a push can't overwrite a copy that changed after you reviewed it. `meta.json` is written only if there is none, so creating a vault can't overwrite one that synced in at the same moment. In a synced folder this is exact on one machine and best-effort between machines, because Drive brings in another machine's change only when it syncs.
 - `meta.json` is treated as attacker-controlled:
   - KDF parameters must be between MODERATE and SENSITIVE (this stops downgrades and denial of service);
   - the key check is bound to the vault ID;
