@@ -39,6 +39,44 @@ export type RawDiffLine =
   | { kind: 'same' | 'add' | 'del'; text: string; oldNo: number | null; newNo: number | null }
   | { kind: 'gap'; count: number }
 
+/**
+ * One row of the vault-copy editor. Unlike every other type here it carries
+ * a value; it exists only in EnvEditorDialog (see repo:openEditor).
+ */
+export interface EditorEntry {
+  key: string
+  value: string
+  /** Machine-specific (# envvault:local): the vault holds no value for it. */
+  marked: boolean
+}
+
+export interface EditorData {
+  /** In file order. */
+  entries: EditorEntry[]
+  vault: VaultInfo | null
+  /** Pass back to saveEdit, which refuses if the vault copy changed meanwhile. */
+  expectedVaultHash: string | null
+}
+
+export interface EnvChange {
+  key: string
+  value: string
+}
+
+export interface SaveEditRequest {
+  repoName: string
+  expectedVaultHash: string | null
+  set: EnvChange[]
+  add: EnvChange[]
+  remove: string[]
+}
+
+export interface SaveEditResult {
+  vault: VaultInfo | null
+  /** False if the edits left the vault copy as it was, so nothing was written. */
+  changed: boolean
+}
+
 /** Local .env -> vault copy. Empty when no line changes (line endings only). */
 export interface RawDiff {
   lines: RawDiffLine[]
