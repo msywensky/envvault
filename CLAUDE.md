@@ -71,6 +71,13 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Two steps.** `previewPush`/`previewPull` return a key-name diff plus `expected: {localHash, vaultHash}`. The commit (`push`/`pull`) re-reads both sides and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` if the hashes differ from what the user reviewed. Pushing over a vault copy that changed elsewhere also needs `overwriteConfirmed`.
 - **Plaintext handling.** `withSnapshot` reads the local file and the decrypted vault payload, and zero-fills the plaintext buffers afterwards.
 - **Status** comes from `core/status.ts`: local vs vault vs this machine's last sync. The last sync is stored per vault in `state.json` via `src/main/state.ts`.
+- **The vault.** `src/main/vault.ts` is the only module that touches the vault folder. Everything else goes through a `Vault` object (`state`, `create`, `open`, `list`, `read`, `write`):
+  - `vaultAt(path)` binds one to a folder;
+  - `configuredVault()` returns the one chosen in Settings, or null;
+  - `requireVault()` is the same but throws `NOT_CONFIGURED`.
+
+  The path functions behind them aren't exported. `sync.ts`'s `Configured` omits `vaultPath`, so sync can't reach the vault by path.
+
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
 - **Errors in the list.** `listRepos` turns per-repo failures (a tampered entry, a symlinked `.env`) into rows with `status: 'error'` instead of failing the whole list.
 - **Raw diff.** `pullRawDiff` returns a line diff (`core/linediff.ts`) from the local `.env` to the vault copy, with only changed lines plus 3 context lines. It is masked in main (`maskEnvLines` in `core/envdiff.ts`, which shares `parseEnv`'s scanner; comments are not values and pass through) unless the request has `values: true`, which makes it the one flow that returns env values. It takes the same `expected` as `pull` and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` too, so it always matches the preview.

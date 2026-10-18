@@ -43,16 +43,17 @@ import {
   type ScannedRepo
 } from './repos'
 import { getLast, setLast } from './state'
-import { entryId, listEntryIds, readEntry, writeEntry } from './vault'
+import { entryId, vaultAt, type Vault } from './vault'
 
-type Configured = Settings & { projectsPath: string; vaultPath: string }
+// The vault is reached only through `vault` (see vault.ts), never by path.
+type Configured = Omit<Settings, 'vaultPath'> & { projectsPath: string; vault: Vault }
 
 async function configured(): Promise<Configured> {
-  const cfg = await getConfig()
-  if (!cfg.projectsPath || !cfg.vaultPath) {
+  const { vaultPath, ...cfg } = await getConfig()
+  if (!cfg.projectsPath || !vaultPath) {
     throw new AppError('NOT_CONFIGURED', 'Choose a projects folder and a vault folder first.')
   }
-  return { ...cfg, projectsPath: cfg.projectsPath, vaultPath: cfg.vaultPath }
+  return { ...cfg, projectsPath: cfg.projectsPath, vault: vaultAt(vaultPath) }
 }
 
 function toInfo(p: Payload): VaultInfo {
@@ -78,17 +79,14 @@ function parseAndWipe(bytes: Buffer | null): Map<string, string> {
 
 export async function listRepos(key: Uint8Array, vaultId: string): Promise<RepoRow[]> {
   const cfg = await configured()
-  const [scanned, entryIds] = await Promise.all([
-    scanRepos(cfg.projectsPath),
-    listEntryIds(cfg.vaultPath)
-  ])
+  const [scanned, entryIds] = await Promise.all([scanRepos(cfg.projectsPath), cfg.vault.list()])
   const ids = new Set(entryIds)
 
   const row = async (name: string, repo: ScannedRepo | null, id: string): Promise<RepoRow> => {
     const hasEnv = repo !== null && (repo.localHash !== null || repo.envError !== null)
     try {
       if (repo?.envError) throw repo.envError
-      const payload = ids.has(id) ? await readEntry(cfg.vaultPath, key, id) : null
+      const payload = ids.has(id) ? await cfg.vault.read(key, id) : null
       const vault = payload ? toInfo(payload) : null
       const last = await getLast(vaultId, id)
       const status = computeStatus({
@@ -165,7 +163,7 @@ async function withSnapshot<T>(
   let synced: Buffer | null = null
   try {
     synced = local ? syncedBytes(local) : null
-    const payload = await readEntry(cfg.vaultPath, key, id)
+    const payload = await cfg.vault.read(key, id)
     return await fn({
       cfg,
       repoDir,
@@ -275,7 +273,7 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
     let vault = s.vault
     if (!vault || vault.contentHash !== s.syncedHash) {
       const payload = makePayload(s.synced, nextVersion(vault, last), s.cfg.machineName)
-      await writeEntry(s.cfg.vaultPath, s.id, await encryptPayload(key, s.id, payload))
+      await s.cfg.vault.write(s.id, await encryptPayload(key, s.id, payload))
       vault = toInfo(payload)
     }
     await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
@@ -492,7 +490,7 @@ function editing<T>(fn: () => T): T {
 export async function openEditor(key: Uint8Array, repoName: string): Promise<EditorData> {
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, repoName)
-  const payload = await readEntry(cfg.vaultPath, key, entryId(repoName))
+  const payload = await cfg.vault.read(key, entryId(repoName))
   const entries = editing(() => editorEntries(editableText(payload)))
   return {
     entries,
@@ -514,7 +512,7 @@ export async function saveEdit(
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, req.repoName)
   const id = entryId(req.repoName)
-  const payload = await readEntry(cfg.vaultPath, key, id)
+  const payload = await cfg.vault.read(key, id)
   const vault = payload ? toInfo(payload) : null
   if ((vault?.contentHash ?? null) !== req.expectedVaultHash) {
     throw new AppError(
@@ -540,7 +538,7 @@ export async function saveEdit(
       nextVersion(vault, await getLast(vaultId, id)),
       cfg.machineName
     )
-    await writeEntry(cfg.vaultPath, id, await encryptPayload(key, id, next))
+    await cfg.vault.write(id, await encryptPayload(key, id, next))
     return { vault: toInfo(next), changed: true }
   } finally {
     if (synced !== edited) synced?.fill(0)

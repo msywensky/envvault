@@ -12,7 +12,7 @@ import { exclusive } from './mutex'
 import * as session from './session'
 import * as skill from './skill'
 import * as sync from './sync'
-import { createVault, folderState, openVault } from './vault'
+import { configuredVault, requireVault } from './vault'
 import { getMainWindow } from './window'
 
 export function registerIpc(): void {
@@ -20,9 +20,10 @@ export function registerIpc(): void {
 
   handle(CH.getState, async () => {
     const cfg = await getConfig()
+    const vault = await configuredVault()
     return {
-      configured: Boolean(cfg.projectsPath && cfg.vaultPath),
-      vault: await folderState(cfg.vaultPath),
+      configured: Boolean(cfg.projectsPath && vault),
+      vault: vault ? await vault.state() : 'not-configured',
       locked: !session.isUnlocked()
     }
   })
@@ -48,8 +49,7 @@ export function registerIpc(): void {
   handle(CH.createVault, async ({ password }) => {
     await exclusive(async () => {
       const cfg = await getConfig()
-      if (!cfg.vaultPath) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
-      const { key, vaultId } = await createVault(cfg.vaultPath, password)
+      const { key, vaultId } = await (await requireVault()).create(password)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
     })
     kickAutoPull()
@@ -58,8 +58,7 @@ export function registerIpc(): void {
   handle(CH.unlock, async ({ password }) => {
     await exclusive(async () => {
       const cfg = await getConfig()
-      if (!cfg.vaultPath) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
-      const { key, vaultId } = await openVault(cfg.vaultPath, password)
+      const { key, vaultId } = await (await requireVault()).open(password)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
     })
     kickAutoPull()
