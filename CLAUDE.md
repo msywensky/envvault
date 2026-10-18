@@ -80,6 +80,12 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - A save refuses with `VAULT_CHANGED` if the copy changed since it opened (`expectedVaultHash`), and runs `syncedBytes` like a push.
   - It never touches the local `.env` or `state.json`'s last sync, so a local `.env` shows vault-newer and is pulled as usual.
   - `src/core/envlines.ts` is the line-level scanner shared with `localkeys.ts`.
+- **Automatic pull** (`src/main/autopull.ts`, `autoPull` in `src/main/sync.ts`, setting `autoPull`, default on).
+  - `runAutoPull` lists repos and pulls each `vault-newer` one through `exclusive(() => session.withKey(...))`, one repo per `exclusive()`.
+  - `autoPull` re-checks inside it: `computeStatus` must say `vault-newer` and `ignoreStatus` must pass. It then shares `applyPull` with `pull`.
+  - It runs on a 60 s interval and on `kickAutoPull()` after unlock, a Settings save with it on, and a changed editor save. `kickAutoPull` is always called after `exclusive()` has resolved, never inside it.
+  - Pulled rows go to the renderer as `EV.autoPulled`. When the window isn't focused, `src/main/notify.ts` also shows a system notification. If that fails or isn't supported, it falls back to a Dock badge and one bounce (macOS) or a flashing taskbar button (Windows), cleared on focus.
+  - macOS delivers notifications only for code-signed apps. Dev runs (ad-hoc signed Electron) and the unsigned build get Electron's `failed` event (`UNErrorDomain error 1`), so on macOS the Dock fallback is what you'll actually see. `show()` returning means nothing: listen for `failed`.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve
@@ -90,6 +96,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
   Every other channel carries only key names, statuses, hashes and metadata. Error messages from the editor flows never contain keys or values (`EditError` messages are fixed strings). `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
 
+- Background work must never make the renderer call IPC: every request resets the idle auto-lock (`ipcHooks.onAuthorizedCall`), so it would keep the vault unlocked. That's why `EV.autoPulled` carries the updated rows and the renderer patches `store.repos` instead of refetching. Main-side background work uses `session.withKey`, which doesn't touch the timer.
 - The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
 - Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
@@ -103,7 +110,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 - macOS (dmg) and Windows (nsis) only. `build:linux` has no config and isn't supported.
 - Only `out/` is shipped. electron-builder adds `package.json` and the production dependencies itself.
-- No auto-update (`publish: null`), unsigned, not notarized.
+- No auto-update (`publish: null`), unsigned, not notarized. Unsigned also means macOS system notifications fail (see automatic pull above).
 - The macOS entitlements allow only V8's JIT (needed for libsodium's WebAssembly).
 - `npm run build:unpack` produces `dist/win-unpacked/`. The packaged app ignores `ENVVAULT_PROFILE` and keeps its data in `%APPDATA%\envvault`.
 - The Argon2 worker loads from inside `app.asar` (verified on Windows).
