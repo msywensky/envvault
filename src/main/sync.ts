@@ -359,32 +359,47 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
     }
     if (!ignored) throw new AppError('ENV_NOT_IGNORED', '.env is not in .gitignore. Add it first.')
 
-    let backupName: string | null = null
-    const bytes = mergedBytes(decodeEnv(s.payload), s.local).bytes
-    try {
-      if (sha256Hex(bytes) !== s.localHash) {
-        // The temp file holds plaintext, so it is named to match .env.bak.*
-        // and checked like the backup: a crash must never leave secrets in an
-        // un-ignored file.
-        const tmpName = `.env.bak.tmp-${randomHex(8)}`
-        const wantBackup = s.local ? `.env.bak.${backupStamp(new Date())}` : null
-        for (const name of [tmpName, wantBackup]) {
-          if (name && !(await checkIgnored(s.repoDir, name))) {
-            throw new AppError(
-              'BACKUP_NOT_IGNORED',
-              `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
-            )
-          }
-        }
-        if (s.local && wantBackup) backupName = await writeBackup(s.repoDir, wantBackup, s.local)
-        await atomicWrite(s.repoDir, '.env', bytes, { tmpName, mode: 0o600 })
-      }
-    } finally {
-      bytes.fill(0)
-    }
-    await setLast(vaultId, s.id, { version: s.vault.version, contentHash: s.vault.contentHash })
-    return { backupName }
+    return { backupName: await applyPull(s, s.payload, s.vault, vaultId) }
   })
+}
+
+/**
+ * Write the vault copy, merged with this machine's machine-specific lines,
+ * over the local .env (backing it up first) and record the sync. The caller
+ * has checked that .env is git-ignored and untracked. Returns the backup's
+ * name, or null if there was nothing to back up or nothing changed.
+ */
+async function applyPull(
+  s: Snapshot,
+  payload: Payload,
+  vault: VaultInfo,
+  vaultId: string
+): Promise<string | null> {
+  let backupName: string | null = null
+  const bytes = mergedBytes(decodeEnv(payload), s.local).bytes
+  try {
+    if (sha256Hex(bytes) !== s.localHash) {
+      // The temp file holds plaintext, so it is named to match .env.bak.*
+      // and checked like the backup: a crash must never leave secrets in an
+      // un-ignored file.
+      const tmpName = `.env.bak.tmp-${randomHex(8)}`
+      const wantBackup = s.local ? `.env.bak.${backupStamp(new Date())}` : null
+      for (const name of [tmpName, wantBackup]) {
+        if (name && !(await checkIgnored(s.repoDir, name))) {
+          throw new AppError(
+            'BACKUP_NOT_IGNORED',
+            `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
+          )
+        }
+      }
+      if (s.local && wantBackup) backupName = await writeBackup(s.repoDir, wantBackup, s.local)
+      await atomicWrite(s.repoDir, '.env', bytes, { tmpName, mode: 0o600 })
+    }
+  } finally {
+    bytes.fill(0)
+  }
+  await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+  return backupName
 }
 
 /**
