@@ -164,7 +164,13 @@ async function createVault(store: VaultStore, password: string): Promise<OpenedV
   const kdf = { ...KDF_DEFAULTS }
   const key = await derive(password, salt, kdf)
   try {
-    const meta = serializeMeta({ vaultId, kdf, salt, keyCheck: await makeKeyCheck(key, vaultId) })
+    const meta = serializeMeta({
+      vaultId,
+      kdf,
+      salt,
+      secretId: null,
+      keyCheck: await makeKeyCheck(key, vaultId)
+    })
     // Re-check right before writing: another machine may have created one
     // (and Drive synced it in) while we were deriving the key.
     const appeared = (): AppError =>

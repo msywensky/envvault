@@ -4,7 +4,7 @@
 // Pure logic: no electron, fs or child_process imports. Used by the main
 // process, the KDF worker and the unit tests.
 import sodium from 'libsodium-wrappers-sumo'
-import { createHash } from 'node:crypto'
+import { createHash, hkdfSync, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
 /** A vault file failed authentication or validation. Never retry or "repair". */
@@ -41,6 +41,9 @@ export const KDF_MAX: Readonly<KdfParams> = { opslimit: 4, memlimit: 1024 * MiB 
 
 export const SALT_BYTES = 16
 export const KEY_BYTES = 32
+/** A format 2 vault's secret, kept on each machine and never in the vault. */
+export const SECRET_BYTES = 16
+const SECRET_ID_BYTES = 16
 const NONCE_BYTES = 24
 const TAG_BYTES = 16
 const MAGIC = Uint8Array.from([0x45, 0x56, 0x56, 0x31]) // "EVV1"
@@ -86,6 +89,46 @@ export async function deriveKey(
 
 export async function randomSalt(): Promise<Uint8Array> {
   return (await lib()).randombytes_buf(SALT_BYTES)
+}
+
+export async function randomSecret(): Promise<Uint8Array> {
+  return (await lib()).randombytes_buf(SECRET_BYTES)
+}
+
+/**
+ * A format 2 vault's key: the Argon2id output (`derived`) combined with the
+ * vault's secret. A copy of the vault alone (salt, key check, entries) can't
+ * be used to guess the password without the secret. The caller wipes
+ * `derived` and the result.
+ */
+export function vaultKey(derived: Uint8Array, secret: Uint8Array, vaultId: string): Uint8Array {
+  if (secret.length !== SECRET_BYTES) throw new Error('The vault secret must be 16 bytes.')
+  return new Uint8Array(
+    hkdfSync('sha256', derived, secret, `envvault:v2:key:${vaultId}`, KEY_BYTES)
+  )
+}
+
+/**
+ * The public fingerprint of a vault's secret, stored in meta.json so a wrong
+ * setup code can be told apart from a wrong password. 128 random bits stand
+ * behind it, so it gives nothing away.
+ */
+export function secretIdOf(secret: Uint8Array, vaultId: string): Uint8Array {
+  return new Uint8Array(
+    hkdfSync(
+      'sha256',
+      secret,
+      new Uint8Array(0),
+      `envvault:v2:secret-id:${vaultId}`,
+      SECRET_ID_BYTES
+    )
+  )
+}
+
+/** True if `secret` is the one `meta` was made with. */
+export function secretMatches(meta: Meta, secret: Uint8Array): boolean {
+  if (!meta.secretId || secret.length !== SECRET_BYTES) return false
+  return timingSafeEqual(secretIdOf(secret, meta.vaultId), meta.secretId)
 }
 
 /** Overwrite key material in place. */
@@ -230,17 +273,30 @@ export async function verifyKeyCheck(
 // ---------------------------------------------------------------------------
 // meta.json (plaintext, in the vault folder; treat as attacker-controlled)
 
-const MetaSchema = z.strictObject({
-  formatVersion: z.literal(1),
-  vaultId: z.uuid(),
-  kdf: z.strictObject({
-    alg: z.literal('argon2id'),
-    opslimit: z.int(),
-    memlimit: z.int(),
-    salt: z.base64()
-  }),
-  keyCheck: z.base64()
+const KdfSchema = z.strictObject({
+  alg: z.literal('argon2id'),
+  opslimit: z.int(),
+  memlimit: z.int(),
+  salt: z.base64()
 })
+
+// Format 1: the key comes from the password alone. Format 2 adds a secret
+// kept on each machine (see vaultKey); secretId is its public fingerprint.
+const MetaSchema = z.discriminatedUnion('formatVersion', [
+  z.strictObject({
+    formatVersion: z.literal(1),
+    vaultId: z.uuid(),
+    kdf: KdfSchema,
+    keyCheck: z.base64()
+  }),
+  z.strictObject({
+    formatVersion: z.literal(2),
+    vaultId: z.uuid(),
+    kdf: KdfSchema,
+    secretId: z.base64(),
+    keyCheck: z.base64()
+  })
+])
 
 export type MetaJson = z.infer<typeof MetaSchema>
 
@@ -248,6 +304,8 @@ export interface Meta {
   vaultId: string
   kdf: KdfParams
   salt: Uint8Array
+  /** Format 2: the fingerprint of the vault's secret. Format 1: null. */
+  secretId: Uint8Array | null
   keyCheck: string
 }
 
@@ -259,10 +317,18 @@ export function parseMeta(json: unknown): Meta {
   assertKdfParams(kdf)
   const salt = Buffer.from(kdf.salt, 'base64')
   if (salt.length !== SALT_BYTES) throw new MetaInvalidError('meta.json salt must be 16 bytes.')
+  let secretId: Uint8Array | null = null
+  if (parsed.data.formatVersion === 2) {
+    secretId = new Uint8Array(Buffer.from(parsed.data.secretId, 'base64'))
+    if (secretId.length !== SECRET_ID_BYTES) {
+      throw new MetaInvalidError('meta.json secretId must be 16 bytes.')
+    }
+  }
   return {
     vaultId,
     kdf: { opslimit: kdf.opslimit, memlimit: kdf.memlimit },
     salt: new Uint8Array(salt),
+    secretId,
     keyCheck
   }
 }
@@ -277,15 +343,20 @@ export function assertKdfParams(kdf: KdfParams): void {
 }
 
 export function serializeMeta(meta: Meta): MetaJson {
+  const kdf = {
+    alg: 'argon2id' as const,
+    opslimit: meta.kdf.opslimit,
+    memlimit: meta.kdf.memlimit,
+    salt: Buffer.from(meta.salt).toString('base64')
+  }
+  if (!meta.secretId) {
+    return { formatVersion: 1, vaultId: meta.vaultId, kdf, keyCheck: meta.keyCheck }
+  }
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     vaultId: meta.vaultId,
-    kdf: {
-      alg: 'argon2id',
-      opslimit: meta.kdf.opslimit,
-      memlimit: meta.kdf.memlimit,
-      salt: Buffer.from(meta.salt).toString('base64')
-    },
+    kdf,
+    secretId: Buffer.from(meta.secretId).toString('base64'),
     keyCheck: meta.keyCheck
   }
 }

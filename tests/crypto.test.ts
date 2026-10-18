@@ -12,8 +12,12 @@ import {
   makePayload,
   parseMeta,
   randomSalt,
+  randomSecret,
+  secretIdOf,
+  secretMatches,
   serializeMeta,
   sha256Hex,
+  vaultKey,
   verifyKeyCheck,
   zero,
   type KdfParams
@@ -190,6 +194,7 @@ describe('parseMeta', () => {
       vaultId,
       kdf: { ...KDF_DEFAULTS },
       salt,
+      secretId: null,
       keyCheck: await makeKeyCheck(await key('pw', salt), vaultId)
     }) as unknown as Record<string, unknown>
   }
@@ -227,8 +232,66 @@ describe('parseMeta', () => {
     expect(() => parseMeta(withKdf(m, { salt: 'AAAA' }))).toThrow('16 bytes')
     expect(() => parseMeta({ ...m, extra: 1 })).toThrow(MetaInvalidError)
     expect(() => parseMeta(withKdf(m, { alg: 'scrypt' }))).toThrow(MetaInvalidError)
+    // Format 2 needs a secretId, and format 1 must not have one.
     expect(() => parseMeta({ ...m, formatVersion: 2 })).toThrow(MetaInvalidError)
+    expect(() => parseMeta({ ...m, secretId: 'AAAAAAAAAAAAAAAAAAAAAA==' })).toThrow(
+      MetaInvalidError
+    )
+    expect(() => parseMeta({ ...m, formatVersion: 3 })).toThrow(MetaInvalidError)
     expect(() => parseMeta({ ...m, vaultId: 'not-a-uuid' })).toThrow(MetaInvalidError)
     expect(() => parseMeta(null)).toThrow(MetaInvalidError)
+  })
+})
+
+// HKDF-SHA256 (RFC 5869) of fixed inputs, checked against an independent
+// implementation (Python's hmac module).
+const VECTOR_KEY = '6be2e72a948f0d2f1bba5073d94ca57bad49a1e3ec576e4d658679a3f7206620'
+const VECTOR_ID = '949079d2727ee506b9452512d86a4f4c'
+
+describe('format 2: a vault secret', () => {
+  const VAULT = '3f1c2b8e-5d4a-4c3b-9a2e-1f0e9d8c7b6a'
+  const OTHER = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d'
+  const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex')
+
+  it('derives the key from the password result and the secret, per vault', async () => {
+    const derived = await key('pw', new Uint8Array(16))
+    const secret = await randomSecret()
+    const k = vaultKey(derived, secret, VAULT)
+    expect(k).toHaveLength(32)
+    expect(hex(vaultKey(derived, secret, VAULT))).toBe(hex(k))
+    expect(hex(k)).not.toBe(hex(derived))
+    expect(hex(vaultKey(derived, await randomSecret(), VAULT))).not.toBe(hex(k))
+    expect(hex(vaultKey(derived, secret, OTHER))).not.toBe(hex(k))
+    expect(() => vaultKey(derived, new Uint8Array(15), VAULT)).toThrow()
+  })
+
+  it('keeps a fixed derivation (test vector)', () => {
+    const derived = Uint8Array.from({ length: 32 }, (_, i) => i)
+    const secret = Uint8Array.from({ length: 16 }, (_, i) => 255 - i)
+    expect(hex(vaultKey(derived, secret, VAULT))).toBe(VECTOR_KEY)
+    expect(hex(secretIdOf(secret, VAULT))).toBe(VECTOR_ID)
+  })
+
+  it('writes and reads format 2, and matches only its own secret', async () => {
+    const secret = await randomSecret()
+    const salt = await randomSalt()
+    const json = serializeMeta({
+      vaultId: VAULT,
+      kdf: { ...KDF_DEFAULTS },
+      salt,
+      secretId: secretIdOf(secret, VAULT),
+      keyCheck: await makeKeyCheck(await key('pw', salt), VAULT)
+    })
+    expect(json.formatVersion).toBe(2)
+    const meta = parseMeta(json)
+    expect(secretMatches(meta, secret)).toBe(true)
+    expect(secretMatches(meta, await randomSecret())).toBe(false)
+    expect(secretMatches(meta, secret.subarray(0, 8))).toBe(false)
+    expect(secretMatches({ ...meta, vaultId: OTHER }, secret)).toBe(false)
+    expect(secretMatches({ ...meta, secretId: null }, secret)).toBe(false)
+    expect(() => parseMeta({ ...json, secretId: 'AAAA' })).toThrow('16 bytes')
+    const withoutId: Record<string, unknown> = { ...json }
+    delete withoutId['secretId']
+    expect(() => parseMeta(withoutId)).toThrow(MetaInvalidError)
   })
 })
