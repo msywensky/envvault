@@ -9,7 +9,7 @@ import { AppError } from './errors'
 import { isErrno } from './fsutil'
 import { syncedBytes } from './localkeys'
 
-const MAX_ENV_BYTES = 1024 * 1024
+export const MAX_ENV_BYTES = 1024 * 1024
 
 export interface ScannedRepo {
   name: string

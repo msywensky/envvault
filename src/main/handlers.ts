@@ -71,6 +71,12 @@ export function registerIpc(): void {
   handle(CH.pull, (req) => exclusive(() => session.withKey((key, id) => sync.pull(key, id, req))))
   // Read-only like the previews. Returns env values when asked (see sync.pullRawDiff).
   handle(CH.pullRawDiff, (req) => session.withKey((key) => sync.pullRawDiff(key, req)))
+  // The editor: open returns env values (read-only, like the previews); save
+  // writes the vault copy (like push).
+  handle(CH.openEditor, ({ repoName }) => session.withKey((key) => sync.openEditor(key, repoName)))
+  handle(CH.saveEdit, (req) =>
+    exclusive(() => session.withKey((key, id) => sync.saveEdit(key, id, req)))
+  )
   handle(CH.addGitignore, ({ repoName }) =>
     exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
   )

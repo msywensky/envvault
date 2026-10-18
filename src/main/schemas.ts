@@ -1,6 +1,7 @@
 // Request schemas for every channel. Main-process only (it imports core), so
 // zod never reaches the renderer or the sandboxed preload.
 import { z } from 'zod'
+import { KEY_RE } from '../core/envdiff'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
 
@@ -11,6 +12,8 @@ const RepoName = z.string().max(100).refine(isValidRepoName)
 const Password = z.string().min(1).max(1024)
 const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
 const PullReq = z.strictObject({ repoName: RepoName, expected: Expected })
+const EnvKey = z.string().max(200).regex(KEY_RE)
+const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
 
 /** Shown in the UI and stored (encrypted) as `updatedBy`. No control characters. */
 export const MachineName = z
@@ -45,5 +48,13 @@ export const requestSchemas = {
   [CH.previewPull]: z.strictObject({ repoName: RepoName }),
   [CH.pull]: PullReq,
   [CH.pullRawDiff]: PullReq.extend({ values: z.boolean() }),
+  [CH.openEditor]: z.strictObject({ repoName: RepoName }),
+  [CH.saveEdit]: z.strictObject({
+    repoName: RepoName,
+    expectedVaultHash: Hash.nullable(),
+    set: z.array(EnvChange).max(1000),
+    add: z.array(EnvChange).max(1000),
+    remove: z.array(EnvKey).max(1000)
+  }),
   [CH.addGitignore]: z.strictObject({ repoName: RepoName })
 } as const

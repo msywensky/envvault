@@ -6,11 +6,13 @@
 // and status hashes, and kept from the local file by a pull.
 import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
+import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import type {
+  EditorData,
   ExampleCheck,
   Expected,
   GitignoreResult,
@@ -22,6 +24,8 @@ import type {
   RawDiff,
   RawDiffRequest,
   RepoRow,
+  SaveEditRequest,
+  SaveEditResult,
   Settings,
   VaultInfo
 } from '../shared/types'
@@ -30,7 +34,14 @@ import { AppError } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { mergedBytes, syncedBytes } from './localkeys'
-import { readLocalEnv, readRepoFile, resolveRepo, scanRepos, type ScannedRepo } from './repos'
+import {
+  MAX_ENV_BYTES,
+  readLocalEnv,
+  readRepoFile,
+  resolveRepo,
+  scanRepos,
+  type ScannedRepo
+} from './repos'
 import { getLast, setLast } from './state'
 import { entryId, listEntryIds, readEntry, writeEntry } from './vault'
 
@@ -391,6 +402,109 @@ async function writeBackup(repoDir: string, name: string, bytes: Buffer): Promis
   }
   throw new AppError('FS_ERROR', 'Could not create a unique backup file name.')
 }
+
+// ---------------------------------------------------------------------------
+// Editing the vault copy. Like pullRawDiff, these carry env values: openEditor
+// sends them to the editor, saveEdit receives the changed ones back.
+
+/** The vault copy as text, or '' if there is none. Refuses bytes that aren't UTF-8. */
+function editableText(payload: Payload | null): string {
+  if (!payload) return ''
+  const bytes = decodeEnv(payload)
+  let again: Buffer | null = null
+  try {
+    const text = bytes.toString('utf8')
+    again = Buffer.from(text, 'utf8')
+    if (!again.equals(bytes)) {
+      throw new AppError(
+        'ENV_NOT_UTF8',
+        "The vault copy isn't valid UTF-8, so it can't be edited here."
+      )
+    }
+    return text
+  } finally {
+    bytes.fill(0)
+    again?.fill(0)
+  }
+}
+
+function editing<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    if (err instanceof DuplicateKeyError) {
+      throw new AppError(
+        'ENV_DUPLICATE_KEY',
+        "A key is assigned more than once in the vault copy, so it can't be edited here. Fix it in a .env and push it."
+      )
+    }
+    // EditError messages are fixed strings that never contain keys or values.
+    if (err instanceof EditError) throw new AppError('EDIT_INVALID', err.message)
+    throw err
+  }
+}
+
+/** The vault copy of a repo in the projects folder, as editor rows. */
+export async function openEditor(key: Uint8Array, repoName: string): Promise<EditorData> {
+  const cfg = await configured()
+  await resolveRepo(cfg.projectsPath, repoName)
+  const payload = await readEntry(cfg.vaultPath, key, entryId(repoName))
+  const entries = editing(() => editorEntries(editableText(payload)))
+  return {
+    entries,
+    vault: payload ? toInfo(payload) : null,
+    expectedVaultHash: payload?.contentHash ?? null
+  }
+}
+
+/**
+ * Apply the editor's changes to the vault copy as a new version, if it is
+ * still the one the editor opened. Leaves the local .env and this machine's
+ * last sync alone, so a local .env shows as vault-newer and is pulled as usual.
+ */
+export async function saveEdit(
+  key: Uint8Array,
+  vaultId: string,
+  req: SaveEditRequest
+): Promise<SaveEditResult> {
+  const cfg = await configured()
+  await resolveRepo(cfg.projectsPath, req.repoName)
+  const id = entryId(req.repoName)
+  const payload = await readEntry(cfg.vaultPath, key, id)
+  const vault = payload ? toInfo(payload) : null
+  if ((vault?.contentHash ?? null) !== req.expectedVaultHash) {
+    throw new AppError(
+      'VAULT_CHANGED',
+      'The vault copy changed since you opened the editor. Reload it and make your changes again.'
+    )
+  }
+  const edited = Buffer.from(
+    editing(() => applyEdits(editableText(payload), req)),
+    'utf8'
+  )
+  let synced: Buffer | null = null
+  try {
+    if (edited.length > MAX_ENV_BYTES) {
+      throw new AppError('ENV_TOO_LARGE', 'The edited .env would be larger than 1 MiB.')
+    }
+    // Keeps machine-specific keys canonical, as a push would.
+    synced = syncedBytes(edited)
+    const unchanged = vault ? sha256Hex(synced) === vault.contentHash : synced.length === 0
+    if (unchanged) return { vault, changed: false }
+    const next = makePayload(
+      synced,
+      nextVersion(vault, await getLast(vaultId, id)),
+      cfg.machineName
+    )
+    await writeEntry(cfg.vaultPath, id, await encryptPayload(key, id, next))
+    return { vault: toInfo(next), changed: true }
+  } finally {
+    if (synced !== edited) synced?.fill(0)
+    edited.fill(0)
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 export async function addGitignore(repoName: string): Promise<GitignoreResult> {
   const cfg = await configured()

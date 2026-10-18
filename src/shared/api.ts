@@ -1,6 +1,7 @@
 import type { Result } from './result'
 import type {
   AppState,
+  EditorData,
   GitignoreResult,
   PullPreview,
   PullRequest,
@@ -10,6 +11,8 @@ import type {
   RawDiff,
   RawDiffRequest,
   RepoRow,
+  SaveEditRequest,
+  SaveEditResult,
   Settings
 } from './types'
 
@@ -30,6 +33,8 @@ export interface Responses {
   'repo:previewPull': PullPreview
   'repo:pull': PullResult
   'repo:pullRawDiff': RawDiff
+  'repo:openEditor': EditorData
+  'repo:saveEdit': SaveEditResult
   'repo:addGitignore': GitignoreResult
 }
 
@@ -58,6 +63,10 @@ export interface EnvVaultApi {
   pull(request: PullRequest): R<'repo:pull'>
   /** Line-by-line diff of what a pull would write, masked unless `values` is set. */
   pullRawDiff(request: RawDiffRequest): R<'repo:pullRawDiff'>
+  /** The vault copy as editor rows, values included (see EnvEditorDialog). */
+  openEditor(repoName: string): R<'repo:openEditor'>
+  /** Apply edits to the vault copy, if it is still the one openEditor returned. */
+  saveEdit(request: SaveEditRequest): R<'repo:saveEdit'>
   addGitignore(repoName: string): R<'repo:addGitignore'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void

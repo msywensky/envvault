@@ -16,6 +16,8 @@ export const CH = {
   previewPull: 'repo:previewPull',
   pull: 'repo:pull',
   pullRawDiff: 'repo:pullRawDiff',
+  openEditor: 'repo:openEditor',
+  saveEdit: 'repo:saveEdit',
   addGitignore: 'repo:addGitignore'
 } as const
 
