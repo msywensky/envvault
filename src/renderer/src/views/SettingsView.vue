@@ -4,6 +4,7 @@ import FolderField from '../components/FolderField.vue'
 import SkillField from '../components/SkillField.vue'
 import { run, store, toast } from '../store'
 import { machineNameProblem } from '../status'
+import { vaultKindLabel, vaultLabel } from '../vault'
 
 const busy = ref(false)
 const machineName = ref(store.settings?.machineName ?? '')
@@ -13,10 +14,8 @@ const checkExample = ref(store.settings?.checkExample ?? true)
 const autoPull = ref(store.settings?.autoPull ?? true)
 const cliAccess = ref(store.settings?.cliAccess ?? false)
 
-async function pick(which: 'projects' | 'vault'): Promise<void> {
+async function pick(which: 'projects'): Promise<void> {
   busy.value = true
-  // Choosing a different vault folder locks the app (the key belongs to the
-  // old vault); main sends the lock event and the lock screen appears.
   const next = await run(() => window.envvault.pickFolder(which))
   busy.value = false
   if (next) {
@@ -57,13 +56,20 @@ async function save(): Promise<void> {
           :busy="busy"
           @pick="pick('projects')"
         />
-        <FolderField
-          label="Vault folder"
-          :path="store.settings?.vault?.kind === 'folder' ? store.settings.vault.path : null"
-          hint="Changing this locks EnvVault so you can unlock the other vault."
-          :busy="busy"
-          @pick="pick('vault')"
-        />
+        <!-- Changing it is done in Setup, which offers both kinds of vault. -->
+        <div class="field">
+          <label>Vault</label>
+          <div class="folder">
+            <span class="vault-kind">{{ vaultKindLabel(store.settings?.vault) }}</span>
+            <span class="folder-path" :title="vaultLabel(store.settings?.vault)">
+              {{ vaultLabel(store.settings?.vault) }}
+            </span>
+            <button type="button" class="btn btn-sm" :disabled="busy" @click="store.view = 'setup'">
+              Change…
+            </button>
+          </div>
+          <p class="muted small">Changing it locks EnvVault so you can unlock the other vault.</p>
+        </div>
         <div class="field">
           <label for="settings-machine">This machine's name</label>
           <input

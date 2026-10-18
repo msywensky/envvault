@@ -13,6 +13,8 @@ const error = ref<string | null>(null)
 const firstInput = ref<HTMLInputElement | null>(null)
 
 const vault = computed(() => store.app?.vault ?? 'not-configured')
+// Messages differ for a synced folder and a git repository.
+const git = computed(() => store.settings?.vault?.kind === 'git')
 const length = computed(() => [...password.value].length)
 const createProblem = computed(() => {
   if (length.value < MIN_CHARS) return `Use at least ${MIN_CHARS} characters.`
@@ -96,10 +98,17 @@ watch(vault, focus)
           </button>
         </form>
 
-        <!-- Empty folder: create a vault. -->
+        <!-- Empty folder or repository: create a vault. -->
         <form v-else-if="vault === 'empty'" class="stack" @submit.prevent="create">
-          <p class="muted">This folder has no vault yet. Create one with a master password.</p>
-          <div class="notice notice-warn">
+          <p class="muted">
+            This {{ git ? 'repository' : 'folder' }} has no vault yet. Create one with a master
+            password.
+          </p>
+          <div v-if="git" class="notice notice-warn">
+            <strong>Only do this on your first machine.</strong> On your other machines, select the
+            same repository; they will find the existing vault.
+          </div>
+          <div v-else class="notice notice-warn">
             <strong>Only do this on your first machine.</strong> On your other machines, wait for
             Drive to finish syncing; they will find the existing vault.
           </div>
@@ -139,9 +148,15 @@ watch(vault, focus)
           </button>
         </form>
 
-        <!-- Folder problems: never offer "create" here. -->
+        <!-- Folder or repository problems: never offer "create" here. -->
         <div v-else-if="vault === 'meta-missing'" class="stack">
-          <div class="notice notice-error">
+          <div v-if="git" class="notice notice-error">
+            <strong>The vault's meta.json is missing</strong>, but encrypted files are in the
+            repository. If it was deleted, restore it from the repository's history (revert the
+            commit that removed it). EnvVault won't create a new vault here, because that would
+            orphan those files.
+          </div>
+          <div v-else class="notice notice-error">
             <strong>The vault's meta.json is missing</strong>, but encrypted files are present.
             Drive may still be syncing. If it was deleted, restore it from Drive's trash or version
             history. EnvVault won't create a new vault here, because that would orphan those files.
@@ -149,7 +164,11 @@ watch(vault, focus)
           <button type="button" class="btn" @click="recheck">Check again</button>
         </div>
         <div v-else-if="vault === 'folder-missing'" class="stack">
-          <div class="notice notice-error">
+          <div v-if="git" class="notice notice-error">
+            <strong>Couldn't reach the vault repository.</strong> Check your network and your git
+            access to it.
+          </div>
+          <div v-else class="notice notice-error">
             <strong>The vault folder was not found.</strong> Is Google Drive running and signed in?
           </div>
           <button type="button" class="btn" @click="recheck">Check again</button>
@@ -162,7 +181,7 @@ watch(vault, focus)
             {{ vaultLabel(store.settings?.vault) }}
           </span>
           <button type="button" class="btn-link btn" @click="store.view = 'setup'">
-            Change folders
+            Folders and vault
           </button>
         </div>
       </div>
