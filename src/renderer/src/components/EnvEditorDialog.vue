@@ -142,7 +142,9 @@ async function save(): Promise<void> {
     const { vault, changed: wrote } = res.data
     if (!wrote) toast('success', `Nothing changed in ${props.repo.name}.`)
     else {
-      const pull = props.repo.hasEnv ? ' Pull to update your local .env.' : ''
+      // With automatic pull on, its own toast follows when the local .env updates.
+      const pull =
+        props.repo.hasEnv && !store.settings?.autoPull ? ' Pull to update your local .env.' : ''
       toast('success', `Saved ${props.repo.name} (v${vault?.version ?? '?'}).${pull}`)
     }
     emit('done')
