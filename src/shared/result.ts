@@ -37,6 +37,7 @@ export type ErrorCode =
   | 'GITIGNORE_SYMLINK'
   | 'GIT_MISSING'
   | 'GIT_ERROR'
+  | 'CLI_UNAVAILABLE'
 
 export interface AppErrorInfo {
   code: ErrorCode

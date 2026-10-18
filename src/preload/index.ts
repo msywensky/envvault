@@ -46,6 +46,13 @@ const api: EnvVaultApi = {
     return () => {
       ipcRenderer.removeListener(EV.autoPulled, listener)
     }
+  },
+  onCliPushed: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, row: RepoRow): void => callback(row)
+    ipcRenderer.on(EV.cliPushed, listener)
+    return () => {
+      ipcRenderer.removeListener(EV.cliPushed, listener)
+    }
   }
 }
 

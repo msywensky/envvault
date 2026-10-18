@@ -51,6 +51,7 @@ export interface EnvVaultApi {
     machineName: string
     checkExample: boolean
     autoPull: boolean
+    cliAccess: boolean
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
@@ -76,4 +77,6 @@ export interface EnvVaultApi {
    * every request counts as activity and would keep the vault unlocked.
    */
   onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
+  /** Called with the row the envvault command just pushed. Must not trigger IPC either. */
+  onCliPushed(callback: (row: RepoRow) => void): () => void
 }

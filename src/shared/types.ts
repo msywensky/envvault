@@ -91,6 +91,8 @@ export interface Settings {
   checkExample: boolean
   /** Pull one-sided vault changes in the background while unlocked. */
   autoPull: boolean
+  /** Let the envvault command check status and push (see src/main/cliserver.ts). */
+  cliAccess: boolean
 }
 
 /**

@@ -27,7 +27,8 @@ async function done(): Promise<void> {
     autoLockMinutes: store.settings.autoLockMinutes,
     machineName: machineName.value,
     checkExample: store.settings.checkExample,
-    autoPull: store.settings.autoPull
+    autoPull: store.settings.autoPull,
+    cliAccess: store.settings.cliAccess
   }
   const saved = await run(() => window.envvault.saveSettings(patch))
   busy.value = false

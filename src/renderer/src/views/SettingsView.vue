@@ -10,6 +10,7 @@ const nameProblem = computed(() => machineNameProblem(machineName.value))
 const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
 const checkExample = ref(store.settings?.checkExample ?? true)
 const autoPull = ref(store.settings?.autoPull ?? true)
+const cliAccess = ref(store.settings?.cliAccess ?? false)
 
 async function pick(which: 'projects' | 'vault'): Promise<void> {
   busy.value = true
@@ -30,7 +31,8 @@ async function save(): Promise<void> {
       autoLockMinutes: Number(autoLockMinutes.value),
       machineName: machineName.value,
       checkExample: checkExample.value,
-      autoPull: autoPull.value
+      autoPull: autoPull.value,
+      cliAccess: cliAccess.value
     })
   )
   busy.value = false
@@ -104,6 +106,16 @@ async function save(): Promise<void> {
           <p class="muted small">
             While EnvVault is unlocked. Only when your local .env hasn't changed since the last
             sync; conflicts are left for you. Creates a missing .env, and saves a backup first.
+          </p>
+        </div>
+        <div class="field">
+          <label class="checkbox">
+            <input v-model="cliAccess" type="checkbox" />
+            <span>Allow command-line access</span>
+          </label>
+          <p class="muted small">
+            Lets the envvault command and the Claude Code skill check status and push while EnvVault
+            is unlocked. Any program running as you can use it. It never receives values.
           </p>
         </div>
         <div class="row">

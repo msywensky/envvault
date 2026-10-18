@@ -4,6 +4,7 @@ import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
 import type { Settings } from '../shared/types'
 import { kickAutoPull } from './autopull'
+import { setCliAccess } from './cliserver'
 import { getConfig, updateConfig } from './config'
 import { AppError } from './errors'
 import { handle } from './ipc'
@@ -31,6 +32,12 @@ export function registerIpc(): void {
     const next = await updateConfig(patch)
     session.setAutoLockMinutes(next.autoLockMinutes)
     if (next.autoPull) kickAutoPull()
+    if (!(await setCliAccess(next.cliAccess))) {
+      throw new AppError(
+        'CLI_UNAVAILABLE',
+        "Settings saved, but command-line access couldn't start."
+      )
+    }
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))

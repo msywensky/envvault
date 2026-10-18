@@ -2,7 +2,7 @@
 // key names, statuses and metadata, and the one response with values (the
 // raw pull diff after "Show values") is fetched and held only by SyncDialog.
 import { reactive } from 'vue'
-import { autoPullMessage } from '../../shared/messages'
+import { autoPullMessage, cliPushMessage } from '../../shared/messages'
 import type { Result } from '../../shared/result'
 import type { AppState, RepoRow, Settings } from '../../shared/types'
 
@@ -103,16 +103,26 @@ export async function handleLocked(): Promise<void> {
   await refreshState()
 }
 
-/**
- * Rows main pulled in the background. No IPC here: any request counts as
- * activity, so refetching would keep the vault from ever auto-locking.
- */
-export function applyAutoPulled(rows: RepoRow[]): void {
+// Rows that changed without the renderer asking (automatic pull, the
+// envvault command). No IPC here: any request counts as activity, so
+// refetching would keep the vault from ever auto-locking.
+function patchRepos(rows: RepoRow[]): void {
   for (const row of rows) {
     const i = store.repos.findIndex((r) => r.name === row.name)
     if (i !== -1) store.repos[i] = row
   }
+}
+
+/** Rows main pulled in the background. */
+export function applyAutoPulled(rows: RepoRow[]): void {
+  patchRepos(rows)
   toast('success', autoPullMessage(rows))
+}
+
+/** A row the envvault command pushed. */
+export function applyCliPushed(row: RepoRow): void {
+  patchRepos([row])
+  toast('success', cliPushMessage(row))
 }
 
 export async function loadRepos(): Promise<void> {

@@ -27,5 +27,7 @@ export type Channel = (typeof CH)[keyof typeof CH]
 export const EV = {
   locked: 'session:locked',
   /** Rows (metadata only) that automatic pull just pulled. */
-  autoPulled: 'repos:autoPulled'
+  autoPulled: 'repos:autoPulled',
+  /** The row (metadata only) the envvault command just pushed. */
+  cliPushed: 'repos:cliPushed'
 } as const

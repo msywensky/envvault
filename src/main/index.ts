@@ -1,21 +1,23 @@
 import { app, BrowserWindow, powerMonitor, session } from 'electron'
 import { join } from 'node:path'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { EV } from '../shared/channels'
 import { startAutoPull } from './autopull'
+import { cliCommands } from './clicommands'
+import { configureCli, setCliAccess, stopCliNow } from './cliserver'
+import { getConfig } from './config'
 import { registerIpc } from './handlers'
 import { ipcHooks } from './ipc'
 import { notifyPulled } from './notify'
+import { devProfile } from './profile'
 import * as vaultSession from './session'
 import { createMainWindow, getMainWindow } from './window'
 
 // Dev-only: ENVVAULT_PROFILE=<name> gives this run its own userData folder, so
 // two "machines" can be simulated on one computer. Must run before the
 // single-instance lock, which is keyed on userData.
-const profile = process.env['ENVVAULT_PROFILE']
-if (is.dev && profile && /^[A-Za-z0-9-]{1,20}$/.test(profile)) {
-  app.setPath('userData', join(app.getPath('appData'), `envvault-${profile}`))
-}
+const profile = devProfile()
+if (profile) app.setPath('userData', join(app.getPath('appData'), `envvault-${profile}`))
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -56,8 +58,17 @@ if (!app.requestSingleInstanceLock()) {
         notifyPulled(rows)
       })
 
+      // The envvault command. Its pushes reach the renderer like automatic
+      // pulls do: as rows, so the renderer needn't call IPC.
+      configureCli(
+        app.getPath('userData'),
+        cliCommands((row) => getMainWindow()?.webContents.send(EV.cliPushed, row))
+      )
+      app.on('will-quit', stopCliNow)
+
       registerIpc()
       createMainWindow()
+      void getConfig().then((cfg) => setCliAccess(cfg.cliAccess))
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createMainWindow()

@@ -8,9 +8,9 @@ import { CH } from '../shared/channels'
 const NoArgs = z.undefined()
 /** A sha256 hex digest. */
 export const Hash = z.string().regex(/^[0-9a-f]{64}$/)
-const RepoName = z.string().max(100).refine(isValidRepoName)
+export const RepoName = z.string().max(100).refine(isValidRepoName)
 const Password = z.string().min(1).max(1024)
-const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
+export const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
 const PullReq = z.strictObject({ repoName: RepoName, expected: Expected })
 const EnvKey = z.string().max(200).regex(KEY_RE)
 const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
@@ -33,7 +33,8 @@ export const requestSchemas = {
     autoLockMinutes: AutoLockMinutes,
     machineName: MachineName,
     checkExample: z.boolean(),
-    autoPull: z.boolean()
+    autoPull: z.boolean(),
+    cliAccess: z.boolean()
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
   [CH.createVault]: z.strictObject({ password: Password }),
