@@ -23,9 +23,14 @@ export function registerIpc(): void {
   handle(CH.getState, async () => {
     const cfg = await getConfig()
     const vault = await configuredVault()
+    const state = vault ? await vault.state() : 'not-configured'
+    // Unlocking reports a meta.json it can't read; the lock screen just needs to know.
+    const setupCode =
+      vault && state === 'ready' ? await vault.setupCodeState().catch(() => null) : null
     return {
       configured: Boolean(cfg.projectsPath && vault),
-      vault: vault ? await vault.state() : 'not-configured',
+      vault: state,
+      setupCode,
       locked: !session.isUnlocked()
     }
   })
@@ -65,24 +70,32 @@ export function registerIpc(): void {
 
   // Automatic pull starts once exclusive() has finished: it takes exclusive()
   // itself, which isn't re-entrant.
-  handle(CH.createVault, async ({ password }) => {
+  handle(CH.createVault, async ({ password, setupCode }) => {
+    const created = await exclusive(async () => {
+      const cfg = await getConfig()
+      const vault = await (await requireVault()).create(password, { setupCode })
+      session.unlock(vault.key, vault.vaultId, cfg.autoLockMinutes)
+      return vault
+    })
+    kickAutoPull()
+    // The setup code crosses IPC here once, to be shown and saved by the user.
+    return { setupCode: created.setupCode }
+  })
+  handle(CH.unlock, async ({ password, setupCode }) => {
     await exclusive(async () => {
       const cfg = await getConfig()
-      const { key, vaultId } = await (await requireVault()).create(password)
+      const { key, vaultId } = await (await requireVault()).open(password, setupCode)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
     })
     kickAutoPull()
     return null
   })
-  handle(CH.unlock, async ({ password }) => {
-    await exclusive(async () => {
-      const cfg = await getConfig()
-      const { key, vaultId } = await (await requireVault()).open(password)
-      session.unlock(key, vaultId, cfg.autoLockMinutes)
-    })
-    kickAutoPull()
-    return null
-  })
+  // Read-only, but only while unlocked, and only with the password again.
+  handle(CH.showSetupCode, ({ password }) =>
+    session.withKey(async () => ({
+      setupCode: await (await requireVault()).showSetupCode(password)
+    }))
+  )
   handle(CH.lock, () => {
     session.lock()
     return null

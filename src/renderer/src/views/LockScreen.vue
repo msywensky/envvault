@@ -26,7 +26,7 @@ const createProblem = computed(() => {
 const canCreate = computed(() => !createProblem.value && confirmPassword.value === password.value)
 
 /** Send the password, clear the fields, and go to the repo list on success. */
-async function submit(request: (password: string) => Promise<Result<null>>): Promise<void> {
+async function submit(request: (password: string) => Promise<Result<unknown>>): Promise<void> {
   if (busy.value) return
   busy.value = true
   error.value = null
@@ -49,7 +49,7 @@ function unlock(): void {
 }
 
 function create(): void {
-  if (canCreate.value) void submit((pw) => window.envvault.createVault(pw))
+  if (canCreate.value) void submit((pw) => window.envvault.createVault(pw, false))
 }
 
 async function recheck(): Promise<void> {

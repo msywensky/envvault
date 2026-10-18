@@ -32,9 +32,10 @@ export interface Responses {
   'git:listRepos': GitRepoChoice[]
   'git:createRepo': Settings
   'git:openNewRepoPage': null
-  'session:createVault': null
+  'session:createVault': { setupCode: string | null }
   'session:unlock': null
   'session:lock': null
+  'vault:showSetupCode': { setupCode: string }
   'repos:list': RepoRow[]
   'repo:previewPush': PushPreview
   'repo:push': RepoRow
@@ -79,9 +80,13 @@ export interface EnvVaultApi {
   createGitRepo(name: string): R<'git:createRepo'>
   /** Open GitHub's new-repository page (a fixed URL) in the browser. */
   openNewRepoPage(): R<'git:openNewRepoPage'>
-  createVault(password: string): R<'session:createVault'>
-  unlock(password: string): R<'session:unlock'>
+  /** Create the vault and unlock it. With `setupCode` (always for git), returns the code to show. */
+  createVault(password: string, setupCode: boolean): R<'session:createVault'>
+  /** `setupCode` only when this machine doesn't have it yet (AppState.setupCode 'needed'). */
+  unlock(password: string, setupCode?: string): R<'session:unlock'>
   lock(): R<'session:lock'>
+  /** This machine's setup code for the vault, after checking the password. Unlocked only. */
+  showSetupCode(password: string): R<'vault:showSetupCode'>
   listRepos(): R<'repos:list'>
   previewPush(repoName: string): R<'repo:previewPush'>
   push(request: PushRequest): R<'repo:push'>

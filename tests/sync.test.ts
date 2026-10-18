@@ -23,9 +23,21 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CliTable } from '../src/main/cliserver'
 import type { RepoRow, VaultLocation } from '../src/shared/types'
 
-const h = vi.hoisted(() => ({ userData: '' }))
+const h = vi.hoisted(() => ({ userData: '', setupCode: undefined as string | undefined }))
 
-vi.mock('electron', () => ({ app: { getPath: () => h.userData } }))
+// safeStorage: a reversible stand-in for the Keychain / DPAPI.
+vi.mock('electron', () => ({
+  app: { getPath: () => h.userData },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (text: string) => Buffer.from(`sealed:${text}`),
+    decryptString: (blob: Buffer) => {
+      const text = blob.toString()
+      if (!text.startsWith('sealed:')) throw new Error('not ours')
+      return text.slice('sealed:'.length)
+    }
+  }
+}))
 // Git vaults in these tests are local bare repositories, which only
 // allowLocal accepts (it also skips the https privacy check).
 vi.mock('../src/main/store/git', async (importOriginal) => {
@@ -91,8 +103,13 @@ async function machine(
     projectsPath: where?.projects ?? (name === 'a' ? projA : projB),
     vault: location
   })
-  const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
-    vault.vaultFor(location).open(PASSWORD)
+  // A git vault is format 2: a machine's first unlock needs the setup code
+  // from its creation (h.setupCode); after that the machine has it.
+  const open = async (): Promise<{ key: Uint8Array; vaultId: string }> => {
+    const v = vault.vaultFor(location)
+    const needsCode = (await v.setupCodeState()) === 'needed'
+    return v.open(PASSWORD, needsCode ? h.setupCode : undefined)
+  }
   return { config, vault, sync, session, autopull, clicommands, open }
 }
 
@@ -1123,13 +1140,21 @@ describe('git vault', { timeout: 30_000 }, () => {
   it('syncs between two machines: push, pull, edit, automatic pull', async () => {
     const a = await on('a')
     expect(await a.vault.vaultFor(location).state()).toBe('empty')
-    await a.vault.vaultFor(location).create(PASSWORD)
+    // Always format 2 in a git repository, even when not asked for.
+    const created = await a.vault.vaultFor(location).create(PASSWORD)
+    expect(created.setupCode).toMatch(/^EV-/)
+    h.setupCode = created.setupCode ?? undefined
     expect(await a.vault.vaultFor(location).state()).toBe('ready')
+    expect(await a.vault.vaultFor(location).setupCodeState()).toBe('saved')
+    expect(JSON.parse(inRemote('show', 'main:meta.json'))).toMatchObject({ formatVersion: 2 })
     await pushRepo(a, 'gv1')
     expect((await rows(a))['gv1']).toBe('in-sync')
 
     const b = await on('b')
+    expect(await b.vault.vaultFor(location).setupCodeState()).toBe('needed')
+    expect(await errorCode(b.vault.vaultFor(location).open(PASSWORD))).toBe('SETUP_CODE_REQUIRED')
     expect((await rows(b))['gv1']).toBe('vault-newer')
+    expect(await b.vault.vaultFor(location).setupCodeState()).toBe('saved')
     await pullRepo(b, 'gv1')
     expect(readFileSync(join(gpB, 'gv1', '.env'), 'utf8')).toBe('A=1\n# envvault:local\nDB=\n')
 

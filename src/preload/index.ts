@@ -25,9 +25,11 @@ const api: EnvVaultApi = {
   listGitRepos: () => invoke(CH.listGitRepos),
   createGitRepo: (name) => invoke(CH.createGitRepo, { name }),
   openNewRepoPage: () => invoke(CH.openNewRepoPage),
-  createVault: (password) => invoke(CH.createVault, { password }),
-  unlock: (password) => invoke(CH.unlock, { password }),
+  createVault: (password, setupCode) => invoke(CH.createVault, { password, setupCode }),
+  unlock: (password, setupCode) =>
+    invoke(CH.unlock, setupCode === undefined ? { password } : { password, setupCode }),
   lock: () => invoke(CH.lock),
+  showSetupCode: (password) => invoke(CH.showSetupCode, { password }),
   listRepos: () => invoke(CH.listRepos),
   previewPush: (repoName) => invoke(CH.previewPush, { repoName }),
   push: (request) => invoke(CH.push, request),

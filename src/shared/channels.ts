@@ -15,6 +15,7 @@ export const CH = {
   createVault: 'session:createVault',
   unlock: 'session:unlock',
   lock: 'session:lock',
+  showSetupCode: 'vault:showSetupCode',
   listRepos: 'repos:list',
   previewPush: 'repo:previewPush',
   push: 'repo:push',

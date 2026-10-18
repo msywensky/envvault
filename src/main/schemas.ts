@@ -56,9 +56,14 @@ export const requestSchemas = {
   [CH.listGitRepos]: NoArgs,
   [CH.createGitRepo]: z.strictObject({ name: z.string().regex(REPO_NAME_RE) }),
   [CH.openNewRepoPage]: NoArgs,
-  [CH.createVault]: z.strictObject({ password: Password }),
-  [CH.unlock]: z.strictObject({ password: Password }),
+  [CH.createVault]: z.strictObject({ password: Password, setupCode: z.boolean() }),
+  // Bounded only: parseSetupCode reads it.
+  [CH.unlock]: z.strictObject({
+    password: Password,
+    setupCode: z.string().min(1).max(100).optional()
+  }),
   [CH.lock]: NoArgs,
+  [CH.showSetupCode]: z.strictObject({ password: Password }),
   [CH.listRepos]: NoArgs,
   [CH.previewPush]: z.strictObject({ repoName: RepoName }),
   [CH.push]: z.strictObject({

@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { decodeEnv, encryptPayload, makePayload } from '../src/core/crypto'
 import { AppError } from '../src/main/errors'
+import { MemorySecrets } from '../src/main/secrets'
 import { MemoryStore } from '../src/main/store/memory'
 import type { StoreSnapshot } from '../src/main/store/types'
 import { vaultOn } from '../src/main/vault'
@@ -175,5 +176,136 @@ describe('vault policy on a memory store', () => {
     expect(await errorCode(vault.write('web', await encrypt('A=3\n'), null))).toBe('VAULT_CHANGED')
     const now = await (await vault.snapshot()).read(key, 'web')
     expect(now && decodeEnv(now.payload).toString('utf8')).toBe('A=2\n')
+  })
+})
+
+describe('format 2: a secret on each machine, moved as a setup code', () => {
+  const meta = async (store: MemoryStore): Promise<Record<string, unknown>> =>
+    JSON.parse(Buffer.from(await stored(store, 'meta.json')).toString('utf8')) as Record<
+      string,
+      unknown
+    >
+  const putMeta = async (store: MemoryStore, json: Record<string, unknown>): Promise<void> =>
+    put(store, 'meta.json', Buffer.from(JSON.stringify(json)))
+
+  it('creates with a code, and opens on the same machine without one', async () => {
+    const store = new MemoryStore()
+    const a = vaultOn(store, new MemorySecrets())
+    const created = await a.create(PASSWORD, { setupCode: true })
+    expect(created.setupCode).toMatch(/^EV(-[0-9A-Z]{5}){5}-[0-9A-Z]{4}$/)
+    expect(await meta(store)).toMatchObject({ formatVersion: 2, secretId: expect.any(String) })
+    expect(JSON.stringify(await meta(store))).not.toContain(created.setupCode?.slice(3, 8))
+    expect(await a.setupCodeState()).toBe('saved')
+    const opened = await a.open(PASSWORD)
+    expect(Buffer.from(opened.key).equals(Buffer.from(created.key))).toBe(true)
+  })
+
+  it('needs the code on another machine, and keeps it only once the password is right', async () => {
+    const store = new MemoryStore()
+    const { setupCode } = await vaultOn(store, new MemorySecrets()).create(PASSWORD, {
+      setupCode: true
+    })
+    const other = await vaultOn(new MemoryStore(), new MemorySecrets()).create(PASSWORD, {
+      setupCode: true
+    })
+    const machineB = new MemorySecrets()
+    const b = vaultOn(store, machineB)
+    expect(await b.setupCodeState()).toBe('needed')
+    expect(await errorCode(b.open(PASSWORD))).toBe('SETUP_CODE_REQUIRED')
+    expect(await errorCode(b.open(PASSWORD, 'not a code'))).toBe('SETUP_CODE_INVALID')
+    expect(await errorCode(b.open(PASSWORD, other.setupCode ?? ''))).toBe('SETUP_CODE_WRONG')
+    expect(await errorCode(b.open('wrong password!!', setupCode ?? ''))).toBe('WRONG_PASSWORD')
+    expect(await b.setupCodeState()).toBe('needed')
+    await b.open(PASSWORD, (setupCode ?? '').toLowerCase().replace(/-/g, ' '))
+    expect(await b.setupCodeState()).toBe('saved')
+    await b.open(PASSWORD)
+  })
+
+  it('shows the code again only with the right password', async () => {
+    const store = new MemoryStore()
+    const a = vaultOn(store, new MemorySecrets())
+    const { setupCode } = await a.create(PASSWORD, { setupCode: true })
+    expect(await a.showSetupCode(PASSWORD)).toBe(setupCode)
+    expect(await errorCode(a.showSetupCode('wrong password!!'))).toBe('WRONG_PASSWORD')
+    expect(await errorCode(vaultOn(store, new MemorySecrets()).showSetupCode(PASSWORD))).toBe(
+      'SETUP_CODE_REQUIRED'
+    )
+  })
+
+  it('fails closed when meta.json is edited', async () => {
+    const store = new MemoryStore()
+    const a = vaultOn(store, new MemorySecrets())
+    const { setupCode } = await a.create(PASSWORD, { setupCode: true })
+    const original = await meta(store)
+
+    // Back to format 1: the password alone derives a different key.
+    const { secretId: _secretId, ...v1 } = original
+    void _secretId
+    await putMeta(store, { ...v1, formatVersion: 1 })
+    expect(await a.setupCodeState()).toBe('not-used')
+    expect(await errorCode(a.open(PASSWORD))).toBe('WRONG_PASSWORD')
+
+    // Another secretId: neither the saved secret nor the real code matches it.
+    await putMeta(store, { ...original, secretId: Buffer.alloc(16, 7).toString('base64') })
+    expect(await a.setupCodeState()).toBe('needed')
+    expect(await errorCode(a.open(PASSWORD))).toBe('SETUP_CODE_REQUIRED')
+    expect(await errorCode(a.open(PASSWORD, setupCode ?? ''))).toBe('SETUP_CODE_WRONG')
+
+    await putMeta(store, original)
+    await a.open(PASSWORD)
+  })
+
+  it('keeps format 1 for a vault made without a code', async () => {
+    const store = new MemoryStore()
+    const secrets = new MemorySecrets()
+    const v = vaultOn(store, secrets)
+    const created = await v.create(PASSWORD)
+    expect(created.setupCode).toBeNull()
+    expect(await meta(store)).toMatchObject({ formatVersion: 1 })
+    expect(await meta(store)).not.toHaveProperty('secretId')
+    expect(await v.setupCodeState()).toBe('not-used')
+    expect(await errorCode(v.showSetupCode(PASSWORD))).toBe('NO_SETUP_CODE')
+    await vaultOn(store, new MemorySecrets()).open(PASSWORD)
+  })
+
+  it("doesn't keep a secret for a vault that wasn't created", async () => {
+    class RacingCreate extends MemoryStore {
+      override async write(
+        name: string,
+        bytes: Uint8Array,
+        expected: string | null
+      ): Promise<string> {
+        if (name === 'meta.json') await super.write(name, THEIRS, null)
+        return super.write(name, bytes, expected)
+      }
+    }
+    const saved: string[] = []
+    class Watching extends MemorySecrets {
+      override async forget(vaultId: string): Promise<void> {
+        saved.splice(saved.indexOf(vaultId), 1)
+        return super.forget(vaultId)
+      }
+      override async save(vaultId: string, secret: Uint8Array): Promise<void> {
+        saved.push(vaultId)
+        return super.save(vaultId, secret)
+      }
+    }
+    const v = vaultOn(new RacingCreate(), new Watching())
+    expect(await errorCode(v.create(PASSWORD, { setupCode: true }))).toBe('VAULT_EXISTS')
+    expect(saved).toEqual([])
+  })
+
+  it('writes nothing when this machine cannot keep the secret', async () => {
+    class Unavailable extends MemorySecrets {
+      override async save(): Promise<void> {
+        throw new AppError('SECRET_STORE_UNAVAILABLE', 'no')
+      }
+    }
+    const store = new MemoryStore()
+    const v = vaultOn(store, new Unavailable())
+    expect(await errorCode(v.create(PASSWORD, { setupCode: true }))).toBe(
+      'SECRET_STORE_UNAVAILABLE'
+    )
+    expect(await v.state()).toBe('empty')
   })
 })

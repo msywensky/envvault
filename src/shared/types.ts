@@ -142,9 +142,19 @@ export interface SkillInfo {
 export type VaultFolderState =
   'not-configured' | 'folder-missing' | 'empty' | 'meta-missing' | 'ready'
 
+/**
+ * Whether this machine can unlock the vault without its setup code:
+ * - not-used: a format 1 vault (password only)
+ * - saved: format 2, and this machine has the secret
+ * - needed: format 2, and the setup code must be entered with the password
+ */
+export type SetupCodeState = 'not-used' | 'saved' | 'needed'
+
 export interface AppState {
   configured: boolean
   vault: VaultFolderState
+  /** Set when `vault` is ready and meta.json could be read. */
+  setupCode: SetupCodeState | null
   locked: boolean
 }
 
