@@ -19,6 +19,7 @@ import {
 } from '../core/crypto'
 import { isValidRepoName, resolveInside } from '../core/paths'
 import type { VaultFolderState } from '../shared/types'
+import { getConfig } from './config'
 import { AppError } from './errors'
 import { atomicWrite, isErrno, writeNew } from './fsutil'
 import { deriveKeyInWorker } from './kdf'
@@ -39,8 +40,49 @@ export interface OpenedVault {
   vaultId: string
 }
 
-export async function folderState(vaultPath: string | null): Promise<VaultFolderState> {
-  if (!vaultPath) return 'not-configured'
+/**
+ * The vault folder, with everything that touches it. Nothing outside this
+ * module reads or writes the vault except through one of these.
+ */
+export interface Vault {
+  state(): Promise<FolderState>
+  create(password: string): Promise<OpenedVault>
+  open(password: string): Promise<OpenedVault>
+  /** Entry ids in the vault. */
+  list(): Promise<string[]>
+  /** Decrypt one entry, or null if the vault has none for this id. */
+  read(key: Uint8Array, id: string): Promise<Payload | null>
+  /** Replace one entry with already-encrypted bytes. */
+  write(id: string, bytes: Uint8Array): Promise<void>
+}
+
+export function vaultAt(vaultPath: string): Vault {
+  return {
+    state: () => folderState(vaultPath),
+    create: (password) => createVault(vaultPath, password),
+    open: (password) => openVault(vaultPath, password),
+    list: () => listEntryIds(vaultPath),
+    read: (key, id) => readEntry(vaultPath, key, id),
+    write: (id, bytes) => writeEntry(vaultPath, id, bytes)
+  }
+}
+
+/** The vault chosen in Settings, or null if none is chosen yet. */
+export async function configuredVault(): Promise<Vault | null> {
+  const { vaultPath } = await getConfig()
+  return vaultPath ? vaultAt(vaultPath) : null
+}
+
+/** The vault chosen in Settings, or NOT_CONFIGURED. */
+export async function requireVault(): Promise<Vault> {
+  const vault = await configuredVault()
+  if (!vault) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
+  return vault
+}
+
+type FolderState = Exclude<VaultFolderState, 'not-configured'>
+
+async function folderState(vaultPath: string): Promise<FolderState> {
   try {
     if (!(await stat(vaultPath)).isDirectory()) return 'folder-missing'
   } catch {
@@ -55,7 +97,7 @@ export async function folderState(vaultPath: string | null): Promise<VaultFolder
   return (await listEntryIds(vaultPath)).length > 0 ? 'meta-missing' : 'empty'
 }
 
-export async function listEntryIds(vaultPath: string): Promise<string[]> {
+async function listEntryIds(vaultPath: string): Promise<string[]> {
   const ids: string[] = []
   for (const name of await readdir(vaultPath)) {
     const id = ENTRY_RE.exec(name)?.[1]
@@ -64,7 +106,7 @@ export async function listEntryIds(vaultPath: string): Promise<string[]> {
   return ids
 }
 
-async function requireFolder(vaultPath: string): Promise<VaultFolderState> {
+async function requireFolder(vaultPath: string): Promise<FolderState> {
   const state = await folderState(vaultPath)
   if (state === 'folder-missing') {
     throw new AppError(
@@ -75,7 +117,7 @@ async function requireFolder(vaultPath: string): Promise<VaultFolderState> {
   return state
 }
 
-export async function createVault(vaultPath: string, password: string): Promise<OpenedVault> {
+async function createVault(vaultPath: string, password: string): Promise<OpenedVault> {
   const state = await requireFolder(vaultPath)
   if (state === 'ready') throw new AppError('VAULT_EXISTS', 'This folder already contains a vault.')
   if (state === 'meta-missing') {
@@ -115,7 +157,7 @@ export async function createVault(vaultPath: string, password: string): Promise<
   }
 }
 
-export async function openVault(vaultPath: string, password: string): Promise<OpenedVault> {
+async function openVault(vaultPath: string, password: string): Promise<OpenedVault> {
   await requireFolder(vaultPath)
   let raw: string
   try {
@@ -153,12 +195,7 @@ async function derive(
   }
 }
 
-/** Decrypt one entry, or null if the vault has none for this id. */
-export async function readEntry(
-  vaultPath: string,
-  key: Uint8Array,
-  id: string
-): Promise<Payload | null> {
+async function readEntry(vaultPath: string, key: Uint8Array, id: string): Promise<Payload | null> {
   let bytes: Buffer
   try {
     bytes = await readFile(resolveInside(vaultPath, entryFile(id)))
@@ -179,7 +216,7 @@ export async function readEntry(
   }
 }
 
-export async function writeEntry(vaultPath: string, id: string, bytes: Uint8Array): Promise<void> {
+async function writeEntry(vaultPath: string, id: string, bytes: Uint8Array): Promise<void> {
   // atomicWrite's default temp name (".<file>.<16 hex>.tmp", matched by
   // TEMP_RE) has a random suffix, so two machines' in-flight temp files
   // (which Drive may sync) never collide.

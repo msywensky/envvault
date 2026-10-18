@@ -74,7 +74,7 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   const clicommands = await import('../src/main/clicommands')
   await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
   const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
-    vault.openVault(vaultDir, PASSWORD)
+    vault.vaultAt(vaultDir).open(PASSWORD)
   return { config, vault, sync, session, autopull, clicommands, open }
 }
 
@@ -133,11 +133,11 @@ afterAll(() => {
 describe('machine A: create vault and push', () => {
   it('creates a vault only with a long enough password, and only once', async () => {
     const m = await machine('a')
-    expect(await m.vault.folderState(vaultDir)).toBe('empty')
-    expect(await errorCode(m.vault.createVault(vaultDir, 'short'))).toBe('PASSWORD_TOO_SHORT')
-    await m.vault.createVault(vaultDir, PASSWORD)
-    expect(await m.vault.folderState(vaultDir)).toBe('ready')
-    expect(await errorCode(m.vault.createVault(vaultDir, PASSWORD))).toBe('VAULT_EXISTS')
+    expect(await m.vault.vaultAt(vaultDir).state()).toBe('empty')
+    expect(await errorCode(m.vault.vaultAt(vaultDir).create('short'))).toBe('PASSWORD_TOO_SHORT')
+    await m.vault.vaultAt(vaultDir).create(PASSWORD)
+    expect(await m.vault.vaultAt(vaultDir).state()).toBe('ready')
+    expect(await errorCode(m.vault.vaultAt(vaultDir).create(PASSWORD))).toBe('VAULT_EXISTS')
     const meta = JSON.parse(readFileSync(join(vaultDir, 'meta.json'), 'utf8'))
     expect(Object.keys(meta).sort()).toEqual(['formatVersion', 'kdf', 'keyCheck', 'vaultId'])
   })
@@ -247,7 +247,9 @@ describe('machine A: create vault and push', () => {
 describe('machine B: unlock, resolve, push', () => {
   it('rejects a wrong password', async () => {
     const m = await machine('b')
-    expect(await errorCode(m.vault.openVault(vaultDir, 'wrong password!!'))).toBe('WRONG_PASSWORD')
+    expect(await errorCode(m.vault.vaultAt(vaultDir).open('wrong password!!'))).toBe(
+      'WRONG_PASSWORD'
+    )
   })
 
   it('sees a conflict (never synced here) and vault-only repos', async () => {
@@ -416,14 +418,14 @@ describe('hostile or broken vault folders', () => {
   it('refuses to create a new vault over orphaned entries', async () => {
     const m = await machine('a')
     renameSync(join(vaultDir, 'meta.json'), join(root, 'meta.json.bak'))
-    expect(await m.vault.folderState(vaultDir)).toBe('meta-missing')
-    expect(await errorCode(m.vault.createVault(vaultDir, PASSWORD))).toBe('VAULT_META_MISSING')
+    expect(await m.vault.vaultAt(vaultDir).state()).toBe('meta-missing')
+    expect(await errorCode(m.vault.vaultAt(vaultDir).create(PASSWORD))).toBe('VAULT_META_MISSING')
     renameSync(join(root, 'meta.json.bak'), join(vaultDir, 'meta.json'))
   })
 
   it('reports a missing vault folder instead of offering to create one', async () => {
     const m = await machine('a')
-    expect(await m.vault.folderState(join(root, 'no-such-folder'))).toBe('folder-missing')
+    expect(await m.vault.vaultAt(join(root, 'no-such-folder')).state()).toBe('folder-missing')
   })
 
   it('ignores Drive conflict copies and removes only stale temp files of ours', async () => {
@@ -471,7 +473,7 @@ describe('machine-specific keys', () => {
 
   async function stored(m: Machine): Promise<string> {
     const { key } = await m.open()
-    const payload = await m.vault.readEntry(vaultDir, key, 'local1')
+    const payload = await m.vault.vaultAt(vaultDir).read(key, 'local1')
     return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
   }
 
@@ -666,7 +668,7 @@ describe('editing the vault copy', () => {
 
   async function stored(m: Machine, id: string): Promise<string> {
     const { key } = await m.open()
-    const payload = await m.vault.readEntry(vaultDir, key, id)
+    const payload = await m.vault.vaultAt(vaultDir).read(key, id)
     return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
   }
 
@@ -998,6 +1000,22 @@ describe('command line', () => {
     } finally {
       m.session.lock()
     }
+  })
+})
+
+describe('the configured vault', () => {
+  it('comes from Settings, and is required wherever a vault is needed', async () => {
+    const m = await machine('a')
+    expect(await (await m.vault.requireVault()).state()).toBe('ready')
+    await m.config.updateConfig({ vaultPath: null })
+    try {
+      expect(await m.vault.configuredVault()).toBeNull()
+      expect(await errorCode(m.vault.requireVault())).toBe('NOT_CONFIGURED')
+      expect(await errorCode(m.sync.listRepos(new Uint8Array(32), 'any'))).toBe('NOT_CONFIGURED')
+    } finally {
+      await m.config.updateConfig({ vaultPath: vaultDir })
+    }
+    expect(await (await m.vault.configuredVault())?.state()).toBe('ready')
   })
 })
 
