@@ -30,6 +30,7 @@ export type ErrorCode =
   | 'ENV_TOO_LARGE'
   | 'ENV_NOT_UTF8'
   | 'ENV_DUPLICATE_KEY'
+  | 'EDIT_INVALID'
   | 'ENV_NOT_IGNORED'
   | 'ENV_TRACKED'
   | 'BACKUP_NOT_IGNORED'

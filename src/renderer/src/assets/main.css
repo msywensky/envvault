@@ -590,6 +590,55 @@ code,
   color: var(--muted);
 }
 
+/* ---------- vault-copy editor ---------- */
+
+.editor-table td {
+  vertical-align: top;
+}
+
+.editor-key {
+  width: 34%;
+  word-break: break-all;
+}
+
+.editor-value .input {
+  width: 100%;
+}
+
+/* .input's `font: inherit` would otherwise override .mono. */
+.editor-table .input {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.editor-textarea {
+  height: auto;
+  padding: 6px 10px;
+  resize: vertical;
+}
+
+.editor-problem {
+  margin-top: 4px;
+  color: var(--danger-text);
+}
+
+/* A coloured bar on the key cell marks added and changed rows. */
+.editor-added td:first-child {
+  box-shadow: inset 3px 0 var(--ok-text);
+}
+
+.editor-changed td:first-child {
+  box-shadow: inset 3px 0 var(--warn-text);
+}
+
+.editor-removed td {
+  opacity: 0.55;
+}
+
+.editor-removed code {
+  text-decoration: line-through;
+}
+
 /* ---------- raw diff (pull dialog) ---------- */
 
 .dialog.dialog-wide {

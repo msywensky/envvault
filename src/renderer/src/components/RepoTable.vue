@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import type { RepoRow } from '../../../shared/types'
-import { ACTION_LABEL, absoluteTime, actionsFor, relativeTime, type RowAction } from '../status'
+import {
+  ACTION_LABEL,
+  absoluteTime,
+  actionsFor,
+  canEdit,
+  relativeTime,
+  type RowAction
+} from '../status'
 import StatusBadge from './StatusBadge.vue'
 
 defineProps<{ rows: RepoRow[] }>()
-defineEmits<{ action: [row: RepoRow, action: RowAction] }>()
+defineEmits<{ action: [row: RepoRow, action: RowAction]; edit: [row: RepoRow] }>()
 </script>
 
 <template>
@@ -44,6 +51,14 @@ defineEmits<{ action: [row: RepoRow, action: RowAction] }>()
               @click="$emit('action', row, action)"
             >
               {{ ACTION_LABEL[action] }}
+            </button>
+            <button
+              v-if="canEdit(row)"
+              type="button"
+              class="btn btn-sm"
+              @click="$emit('edit', row)"
+            >
+              Edit
             </button>
           </div>
         </td>

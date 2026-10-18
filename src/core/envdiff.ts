@@ -1,7 +1,11 @@
 import type { DiffResult } from '../shared/types'
 
-const KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/
-const QUOTES = new Set(['"', "'", '`'])
+/** A key name EnvVault recognises. */
+export const KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+
+export type Quote = '"' | "'" | '`'
+const QUOTES = new Set<string>(['"', "'", '`'])
+const isQuote = (c: string | undefined): c is Quote => c !== undefined && QUOTES.has(c)
 
 /** Index of the first unescaped `quote` in `s` at or after `from`, or -1. */
 function closingQuote(s: string, quote: string, from: number): number {
@@ -20,6 +24,8 @@ export interface Assignment {
   last: number
   /** A `# comment` after the value on its last line, if any. */
   comment: string | null
+  /** The quote around the value, or null if it is unquoted. */
+  quote: Quote | null
 }
 
 /** The assignments in `lines`, in order. See parseEnv for the rules. */
@@ -36,7 +42,7 @@ export function scanEnv(lines: string[]): Assignment[] {
     const rest = line.slice(eq + 1).trimStart()
 
     const quote = rest[0]
-    if (quote !== undefined && QUOTES.has(quote)) {
+    if (isQuote(quote)) {
       // Look for the closing quote on this line, then on following lines.
       let body = rest.slice(1)
       let end = closingQuote(body, quote, 0)
@@ -50,7 +56,7 @@ export function scanEnv(lines: string[]): Assignment[] {
       if (end !== -1) {
         const after = body.slice(end + 1).trimStart()
         const comment = after.startsWith('#') ? after : null
-        out.push({ key, value: body.slice(0, end), first: i, last: j, comment })
+        out.push({ key, value: body.slice(0, end), first: i, last: j, comment, quote })
         i = j
         continue
       }
@@ -63,7 +69,8 @@ export function scanEnv(lines: string[]): Assignment[] {
       value: (hash === -1 ? rest : rest.slice(0, hash)).trim(),
       first: i,
       last: i,
-      comment: hash === -1 ? null : rest.slice(hash).trimStart()
+      comment: hash === -1 ? null : rest.slice(hash).trimStart(),
+      quote: null
     })
   }
   return out

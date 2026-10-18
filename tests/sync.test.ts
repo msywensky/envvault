@@ -651,6 +651,136 @@ describe('.env.example checks', () => {
   })
 })
 
+describe('editing the vault copy', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const envA = (): string => join(projA, 'ed1', '.env')
+  const ORIGINAL =
+    '# shared\r\nexport API_URL=https://api.example.com\r\nSECRET="s3cret value" # rotate\r\n' +
+    '# envvault:local\r\nDB_PATH=/a/data\r\nOLD=1\r\n'
+
+  async function stored(m: Machine, id: string): Promise<string> {
+    const { key } = await m.open()
+    const payload = await m.vault.readEntry(vaultDir, key, id)
+    return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
+  }
+
+  it('opens the vault copy as rows, with machine-specific values empty', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ed1', { '.gitignore': IGNORE, '.env': ORIGINAL })
+    await pushRepo(a, 'ed1')
+    const { key } = await a.open()
+    const data = await a.sync.openEditor(key, 'ed1')
+    expect(data.entries).toEqual([
+      { key: 'API_URL', value: 'https://api.example.com', marked: false },
+      { key: 'SECRET', value: 's3cret value', marked: false },
+      { key: 'DB_PATH', value: '', marked: true },
+      { key: 'OLD', value: '1', marked: false }
+    ])
+    expect(data.vault?.version).toBe(1)
+    expect(data.expectedVaultHash).toBe(data.vault?.contentHash)
+  })
+
+  it('saves edits to the vault copy only; a pull then brings them, keeping local values', async () => {
+    const a = await machine('a')
+    const { key, vaultId } = await a.open()
+    const { expectedVaultHash } = await a.sync.openEditor(key, 'ed1')
+    const result = await a.sync.saveEdit(key, vaultId, {
+      repoName: 'ed1',
+      expectedVaultHash,
+      set: [{ key: 'SECRET', value: 'new # secret' }],
+      add: [{ key: 'NEW_KEY', value: 'line1\nline2' }],
+      remove: ['OLD']
+    })
+    expect(result).toMatchObject({ changed: true, vault: { version: 2 } })
+    const edited =
+      "# shared\r\nexport API_URL=https://api.example.com\r\nSECRET='new # secret' # rotate\r\n" +
+      "# envvault:local\r\nDB_PATH=\r\nNEW_KEY='line1\r\nline2'\r\n"
+    expect(await stored(a, 'ed1')).toBe(edited)
+    expect(readFileSync(envA(), 'utf8')).toBe(ORIGINAL)
+    expect((await rows(a))['ed1']).toBe('vault-newer')
+
+    await pullRepo(a, 'ed1')
+    expect(readFileSync(envA(), 'utf8')).toBe(edited.replace('DB_PATH=\r\n', 'DB_PATH=/a/data\r\n'))
+    expect((await rows(a))['ed1']).toBe('in-sync')
+  })
+
+  it('refuses to save over a vault copy that changed after the editor opened', async () => {
+    const a = await machine('a')
+    const opened = await a.sync.openEditor((await a.open()).key, 'ed1')
+    const b = await machine('b')
+    makeRepo(projB, 'ed1', { '.gitignore': IGNORE, '.env': 'FROM_B=1\n' })
+    await pushRepo(b, 'ed1', true)
+
+    const a2 = await machine('a')
+    const { key, vaultId } = await a2.open()
+    const save = a2.sync.saveEdit(key, vaultId, {
+      repoName: 'ed1',
+      expectedVaultHash: opened.expectedVaultHash,
+      set: [],
+      add: [{ key: 'X', value: '1' }],
+      remove: []
+    })
+    expect(await errorCode(save)).toBe('VAULT_CHANGED')
+  })
+
+  it('reports a save that changes nothing without writing a version', async () => {
+    const a = await machine('a')
+    const { key, vaultId } = await a.open()
+    const opened = await a.sync.openEditor(key, 'ed1')
+    const result = await a.sync.saveEdit(key, vaultId, {
+      repoName: 'ed1',
+      expectedVaultHash: opened.expectedVaultHash,
+      set: [{ key: 'FROM_B', value: '1' }],
+      add: [],
+      remove: []
+    })
+    expect(result).toEqual({ vault: opened.vault, changed: false })
+  })
+
+  it('creates a vault copy for a repo with no .env', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ed2', { '.gitignore': IGNORE })
+    const { key, vaultId } = await a.open()
+    expect(await a.sync.openEditor(key, 'ed2')).toEqual({
+      entries: [],
+      vault: null,
+      expectedVaultHash: null
+    })
+    const empty = { repoName: 'ed2', expectedVaultHash: null, set: [], add: [], remove: [] }
+    expect(await a.sync.saveEdit(key, vaultId, empty)).toEqual({ vault: null, changed: false })
+    const result = await a.sync.saveEdit(key, vaultId, {
+      ...empty,
+      add: [{ key: 'API_KEY', value: 'abc' }]
+    })
+    expect(result.vault?.version).toBe(1)
+    expect(await stored(a, 'ed2')).toBe('API_KEY=abc\n')
+    expect(existsSync(join(projA, 'ed2', '.env'))).toBe(false)
+    expect((await rows(a))['ed2']).toBe('vault-newer')
+  })
+
+  it('refuses duplicated keys and bad edits, without echoing them', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ed3', { '.gitignore': IGNORE, '.env': 'A=1\nA=2\n' })
+    await pushRepo(a, 'ed3')
+    const { key, vaultId } = await a.open()
+    expect(await errorCode(a.sync.openEditor(key, 'ed3'))).toBe('ENV_DUPLICATE_KEY')
+
+    const opened = await a.sync.openEditor(key, 'ed2')
+    const err = await a.sync
+      .saveEdit(key, vaultId, {
+        repoName: 'ed2',
+        expectedVaultHash: opened.expectedVaultHash,
+        set: [{ key: 'MISSING_SECRET_KEY', value: 'hunter2-secret' }],
+        add: [],
+        remove: []
+      })
+      .catch((e: unknown) => e as { code?: string; message?: string })
+    expect(err).toMatchObject({ code: 'EDIT_INVALID' })
+    expect(JSON.stringify(err)).not.toMatch(/MISSING_SECRET_KEY|hunter2/)
+    expect(String((err as { message?: string }).message)).not.toMatch(/MISSING_SECRET_KEY|hunter2/)
+  })
+})
+
 describe('session', () => {
   it('gives each operation its own key copy, so locking mid-operation is safe', async () => {
     const m = await machine('a')

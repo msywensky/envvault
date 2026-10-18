@@ -74,11 +74,22 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Raw diff.** `pullRawDiff` returns a line diff (`core/linediff.ts`) from the local `.env` to the vault copy, with only changed lines plus 3 context lines. It is masked in main (`maskEnvLines` in `core/envdiff.ts`, which shares `parseEnv`'s scanner; comments are not values and pass through) unless the request has `values: true`, which makes it the one flow that returns env values. It takes the same `expected` as `pull` and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` too, so it always matches the preview.
 - **Machine-specific keys.** A `# envvault:local` line directly above an assignment marks that key (`src/core/localkeys.ts`; byte wrappers and error mapping in `src/main/localkeys.ts`). Status and push use `projectEnv`, which blanks marked values to a canonical `KEY=` so differently formatted files on two machines hash the same. `Snapshot.localHash` stays the hash of the raw bytes, so `expected` catches any edit; `syncedHash` is what's compared with the vault. Pulls and `pullRawDiff` use `mergePull`: the vault copy with local lines kept for keys marked on either side. Both return `null` when there is nothing to change, meaning "use the original bytes", so files without markers still sync byte for byte. A marked key assigned twice fails with `ENV_DUPLICATE_KEY`.
 - **`.env.example` checks** (`src/core/example.ts`, `checkExample` in `src/main/sync.ts`). Advisory only. Both previews compare the example with the `.env` you'll end up with: the raw local file on push (machine-specific values included), the merged result on pull. They return key names in `example`. The check isn't part of `expected`, the commit steps never read the example, and a file that can't be read becomes `status: 'unreadable'` instead of an error. `isTracked` runs only when there are same-value warnings, so push previews still work without git. Skipped when the `checkExample` setting is off.
+- **Editing the vault copy** (`openEditor`/`saveEdit` in `src/main/sync.ts`, pure logic in `src/core/envedit.ts`).
+  - `decodeValue`/`encodeValue` follow dotenv 16's parser exactly. `tests/envedit.test.ts` checks them against the real `dotenv.parse`, a pinned devDependency.
+  - `applyEdits` splices changes into the original text, so untouched lines stay byte for byte. Machine-specific values can't be set from it.
+  - A save refuses with `VAULT_CHANGED` if the copy changed since it opened (`expectedVaultHash`), and runs `syncedBytes` like a push.
+  - It never touches the local `.env` or `state.json`'s last sync, so a local `.env` shows vault-newer and is pulled as usual.
+  - `src/core/envlines.ts` is the line-level scanner shared with `localkeys.ts`.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve
 
-- Env **values** never get logged, and cross IPC only through `repo:pullRawDiff` with `values: true` (the user's **Show values** click). The renderer keeps them only in `SyncDialog`'s local `rawValues` ref (never the store) and shows them only in `RawDiffView.vue`, which hides them again. Every other channel carries only key names, statuses, hashes and metadata. `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
+- Env **values** never get logged, and cross IPC only through:
+  - `repo:pullRawDiff` with `values: true` (the user's **Show values** click). The renderer keeps them only in `SyncDialog`'s local `rawValues` ref (never the store) and shows them only in `RawDiffView.vue`, which hides them again;
+  - `repo:openEditor` (main → renderer) and `repo:saveEdit` (renderer → main, changed values only). The renderer keeps them only in `EnvEditorDialog.vue`'s local `rows`, masked until shown and re-masked when the window is hidden or the editor is idle.
+
+  Every other channel carries only key names, statuses, hashes and metadata. Error messages from the editor flows never contain keys or values (`EditError` messages are fixed strings). `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
+
 - The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
 - Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
@@ -86,7 +97,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
 ## Scope
 
-v1 is manual-password unlock only. Bitwarden CLI unlock and a "Reveal" view are planned follow-ups. Reveal (the whole file) would be a second path for env values to reach the renderer, after the raw pull diff, so it needs an explicit design and a README threat-model update.
+v1 is manual-password unlock only. Bitwarden CLI unlock and a run mode (a CLI that starts a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a README threat-model update first.
 
 Packaging (`electron-builder.yml`) is deliberately minimal:
 
@@ -100,7 +111,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{crypto,envdiff,example,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{crypto,envdiff,envedit,example,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.
