@@ -32,7 +32,8 @@ export const requestSchemas = {
   [CH.saveSettings]: z.strictObject({
     autoLockMinutes: AutoLockMinutes,
     machineName: MachineName,
-    checkExample: z.boolean()
+    checkExample: z.boolean(),
+    autoPull: z.boolean()
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
   [CH.createVault]: z.strictObject({ password: Password }),

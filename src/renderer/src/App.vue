@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
 import ToastHost from './components/ToastHost.vue'
-import { call, handleLocked, refreshState, run, store } from './store'
+import { applyAutoPulled, call, handleLocked, refreshState, run, store } from './store'
 import LockScreen from './views/LockScreen.vue'
 import ReposView from './views/ReposView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -19,15 +19,18 @@ function onActivity(): void {
 }
 
 let unsubscribe: (() => void) | null = null
+let unsubscribeAutoPulled: (() => void) | null = null
 
 onMounted(async () => {
   unsubscribe = window.envvault.onLocked(() => void handleLocked())
+  unsubscribeAutoPulled = window.envvault.onAutoPulled(applyAutoPulled)
   for (const e of ACTIVITY_EVENTS) window.addEventListener(e, onActivity, { passive: true })
   await refreshState()
 })
 
 onBeforeUnmount(() => {
   unsubscribe?.()
+  unsubscribeAutoPulled?.()
   for (const e of ACTIVITY_EVENTS) window.removeEventListener(e, onActivity)
 })
 

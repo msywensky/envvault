@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EV } from '../shared/channels'
 import type { EnvVaultApi, Responses } from '../shared/api'
 import type { Result } from '../shared/result'
+import type { RepoRow } from '../shared/types'
 
 // Ties each channel to its response type (ipcRenderer.invoke returns any).
 function invoke<C extends keyof Responses>(
@@ -37,6 +38,13 @@ const api: EnvVaultApi = {
     ipcRenderer.on(EV.locked, listener)
     return () => {
       ipcRenderer.removeListener(EV.locked, listener)
+    }
+  },
+  onAutoPulled: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, rows: RepoRow[]): void => callback(rows)
+    ipcRenderer.on(EV.autoPulled, listener)
+    return () => {
+      ipcRenderer.removeListener(EV.autoPulled, listener)
     }
   }
 }

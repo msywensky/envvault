@@ -17,7 +17,8 @@ const ConfigSchema = z.strictObject({
   vaultPath: z.string().min(1).nullable(),
   autoLockMinutes: AutoLockMinutes,
   machineName: MachineName,
-  checkExample: z.boolean()
+  checkExample: z.boolean(),
+  autoPull: z.boolean()
 })
 
 // Loading is forgiving: a bad or missing field falls back to its default.
@@ -26,7 +27,8 @@ const LoadSchema = z.object({
   vaultPath: ConfigSchema.shape.vaultPath.catch(null),
   autoLockMinutes: AutoLockMinutes.catch(5),
   machineName: MachineName.catch(() => defaultMachineName()),
-  checkExample: z.boolean().catch(true)
+  checkExample: z.boolean().catch(true),
+  autoPull: z.boolean().catch(true)
 })
 
 function defaultMachineName(): string {

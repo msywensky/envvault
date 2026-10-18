@@ -2,6 +2,7 @@
 // key names, statuses and metadata, and the one response with values (the
 // raw pull diff after "Show values") is fetched and held only by SyncDialog.
 import { reactive } from 'vue'
+import { autoPullMessage } from '../../shared/messages'
 import type { Result } from '../../shared/result'
 import type { AppState, RepoRow, Settings } from '../../shared/types'
 
@@ -100,6 +101,18 @@ export async function handleLocked(): Promise<void> {
   store.lockEpoch++
   if (store.view === 'repos' || store.view === 'settings') store.view = 'lock'
   await refreshState()
+}
+
+/**
+ * Rows main pulled in the background. No IPC here: any request counts as
+ * activity, so refetching would keep the vault from ever auto-locking.
+ */
+export function applyAutoPulled(rows: RepoRow[]): void {
+  for (const row of rows) {
+    const i = store.repos.findIndex((r) => r.name === row.name)
+    if (i !== -1) store.repos[i] = row
+  }
+  toast('success', autoPullMessage(rows))
 }
 
 export async function loadRepos(): Promise<void> {

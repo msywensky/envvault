@@ -25,5 +25,7 @@ export type Channel = (typeof CH)[keyof typeof CH]
 
 // Events pushed from main to the renderer.
 export const EV = {
-  locked: 'session:locked'
+  locked: 'session:locked',
+  /** Rows (metadata only) that automatic pull just pulled. */
+  autoPulled: 'repos:autoPulled'
 } as const

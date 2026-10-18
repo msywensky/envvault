@@ -65,6 +65,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
 - `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
 - Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
+- Automatic pull applies only one-sided changes (the vault copy is newer and your `.env` is unchanged since the last sync, or missing), never a conflict or a rollback, with the same git checks and backup as a manual pull. It runs only while EnvVault is unlocked and doesn't count as activity, so it never keeps the vault unlocked.
 - Pulls are refused unless `.env` is git-ignored and **not tracked**. The backup and the temp file are named so `.env.bak.*` covers them, and they are checked too, so a crash never leaves secrets in a file git would commit.
 - Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations). `meta.json` is created exclusively, so it can't overwrite a vault that synced in at the same moment.
 - `meta.json` is treated as attacker-controlled:
@@ -137,7 +138,14 @@ You can turn the checks off in Settings.
 - You can add, change and remove keys. Machine-specific keys are listed but have no value to edit, since the vault doesn't store one.
 - Comments, blank lines, `export`, spacing and line endings stay as they are. A changed value keeps its line's prefix and trailing comment, and is quoted only as much as dotenv needs to read it back exactly.
 - **Review changes** lists the key names that change. **Save to vault** writes a new version, unless the vault copy changed since you opened the editor; then reload and edit again.
-- Saving never touches your local `.env`. A repo that has one shows "Vault newer" afterwards, and pulling brings the edit in, keeping machine-specific values.
+- Saving never touches your local `.env` directly. A repo that has one shows "Vault newer" afterwards; automatic pull brings the edit in right away (or click **Pull** if it's off), keeping machine-specific values.
+
+**Automatic pull:** while EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for repos whose vault copy changed on another machine while your `.env` didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
+
+- It never pulls a conflict, a rollback, or a repo whose `.env` isn't git-ignored or is tracked; those keep their **Pull** button.
+- It creates a missing `.env` when the vault has a copy, including one you deleted.
+- It saves a backup first, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
+- It stops when EnvVault locks; it doesn't keep the vault unlocked. Turn it off in Settings.
 
 **Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
@@ -160,6 +168,7 @@ Anything else in the folder (for example Drive's `name (1).ext` conflict copies)
 | Machine name        | hostname  | Shown to other machines as "updated by"             |
 | Auto-lock           | 5 minutes | 1–120 minutes of inactivity                         |
 | .env.example checks | On        | Warnings in the push and pull dialogs               |
+| Automatic pull      | On        | Every minute while unlocked; one-sided changes only |
 
 Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`.
 

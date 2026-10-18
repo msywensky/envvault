@@ -3,6 +3,7 @@ import { relative, resolve } from 'node:path'
 import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
 import type { Settings } from '../shared/types'
+import { kickAutoPull } from './autopull'
 import { getConfig, updateConfig } from './config'
 import { AppError } from './errors'
 import { handle } from './ipc'
@@ -29,28 +30,33 @@ export function registerIpc(): void {
   handle(CH.saveSettings, async (patch) => {
     const next = await updateConfig(patch)
     session.setAutoLockMinutes(next.autoLockMinutes)
+    if (next.autoPull) kickAutoPull()
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))
 
-  handle(CH.createVault, ({ password }) =>
-    exclusive(async () => {
+  // Automatic pull starts once exclusive() has finished: it takes exclusive()
+  // itself, which isn't re-entrant.
+  handle(CH.createVault, async ({ password }) => {
+    await exclusive(async () => {
       const cfg = await getConfig()
       if (!cfg.vaultPath) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
       const { key, vaultId } = await createVault(cfg.vaultPath, password)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
-      return null
     })
-  )
-  handle(CH.unlock, ({ password }) =>
-    exclusive(async () => {
+    kickAutoPull()
+    return null
+  })
+  handle(CH.unlock, async ({ password }) => {
+    await exclusive(async () => {
       const cfg = await getConfig()
       if (!cfg.vaultPath) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
       const { key, vaultId } = await openVault(cfg.vaultPath, password)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
-      return null
     })
-  )
+    kickAutoPull()
+    return null
+  })
   handle(CH.lock, () => {
     session.lock()
     return null
@@ -74,9 +80,12 @@ export function registerIpc(): void {
   // The editor: open returns env values (read-only, like the previews); save
   // writes the vault copy (like push).
   handle(CH.openEditor, ({ repoName }) => session.withKey((key) => sync.openEditor(key, repoName)))
-  handle(CH.saveEdit, (req) =>
-    exclusive(() => session.withKey((key, id) => sync.saveEdit(key, id, req)))
-  )
+  handle(CH.saveEdit, async (req) => {
+    const result = await exclusive(() => session.withKey((key, id) => sync.saveEdit(key, id, req)))
+    // Bring the edit into the local .env right away rather than within a minute.
+    if (result.changed) kickAutoPull()
+    return result
+  })
   handle(CH.addGitignore, ({ repoName }) =>
     exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
   )
