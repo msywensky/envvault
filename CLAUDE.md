@@ -71,7 +71,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Two steps.** `previewPush`/`previewPull` return a key-name diff plus `expected: {localHash, vaultHash}`. The commit (`push`/`pull`) re-reads both sides and refuses with `LOCAL_CHANGED`/`VAULT_CHANGED` if the hashes differ from what the user reviewed. Pushing over a vault copy that changed elsewhere also needs `overwriteConfirmed`.
 - **Plaintext handling.** `withSnapshot` reads the local file and the decrypted vault payload, and zero-fills the plaintext buffers afterwards.
 - **Status** comes from `core/status.ts`: local vs vault vs this machine's last sync. The last sync is stored per vault in `state.json` via `src/main/state.ts`.
-- **The vault.** Everything outside `src/main/vault.ts` reaches the vault through a `Vault` object (`state`, `create`, `open`, `list`, `read`, `write`):
+- **The vault.** Everything outside `src/main/vault.ts` reaches the vault through a `Vault` object (`state`, `create`, `open`, `snapshot`, `write`):
   - `vaultAt(path)` gives the vault in a folder;
   - `vaultOn(store)` gives the vault in any store;
   - `configuredVault()` returns the one chosen in Settings, or null;
@@ -79,18 +79,20 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
   `sync.ts`'s `Configured` omits `vaultPath`, so sync can't reach the vault by path.
 
+- **Snapshots and compare-and-swap.** Reads go through `vault.snapshot()`, whose `read(key, id)` returns the payload with its storage `version`. Take one snapshot per operation: `listRepos` uses one for every row, and `withSnapshot` (`Snapshot.vaultVersion`) one per push or pull. `vault.write(id, bytes, expected)` writes only if the entry is still at that version (`null`: there is none), and otherwise throws `VAULT_CHANGED`; `saveEdit` rewords it with the editor's message. This is on top of the content-level `expected` the user reviewed, which stays.
+
 - **Stores.** `vault.ts` holds all the policy: meta.json, the KDF and key check, entry names, decryption, vault states. Underneath it, a `VaultStore` (`src/main/store/types.ts`) only moves opaque bytes by name.
   - **The contract:**
     - names are one lowercase segment (`STORE_NAME_RE`), and anything else is rejected;
-    - `get` returns null for a missing object;
-    - `create` is exclusive (`StoreExistsError`), with one winner among racing creates;
-    - `put` replaces atomically;
-    - `list` hides the store's own internals;
+    - `snapshot()` is a read view: `names` hides the store's own internals, and `get` returns `{ bytes, version }`, or null for a missing object. Versions are opaque strings;
+    - `write(name, bytes, expected)` is a compare-and-swap: it writes only if the object is still at `expected` (`null`: there is none), otherwise `StoreConflictError`. It replaces atomically, returns the new version, and of racing writes with the same `expected` exactly one wins. `meta.json` is written with `expected: null`, which keeps it exclusive;
+    - `check()` runs before create and open, and throws an `AppError` if the store mustn't be used now;
     - `reachable` never throws;
     - `cleanUp` runs after unlock.
   - **The implementations:**
-    - `FolderStore` (`store/folder.ts`): `writeNew` for `create`, `atomicWrite` for `put`, and removal of its stale `.<name>.<hex>.tmp` files. `list` drops anything that isn't a valid name, such as Drive conflict copies;
-    - `MemoryStore` (`store/memory.ts`): the reference implementation, for tests. Settings never selects it.
+    - `FolderStore` (`store/folder.ts`): best-effort, as a folder allows. A snapshot lists the folder now and reads each file when asked; the version is the sha256 of the bytes. Writes are queued (`createSerial`), re-read the file and compare its hash, then `atomicWrite`: exact within this process, as good as Drive allows between machines. It removes its stale `.<name>.<hex>.tmp` files, and `names` drops anything that isn't a valid name, such as Drive conflict copies;
+    - `MemoryStore` (`store/memory.ts`): the reference implementation, for tests, with exact snapshots. Settings never selects it.
+  - **`storeFor(location)`** (`store/index.ts`) returns one store instance per location, so a store can queue its own writes. `vaultAt` uses it.
   - **New stores** (git, S3-compatible) must pass `tests/store.test.ts`.
 
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
@@ -164,5 +166,5 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.
   - The symlink test is skipped on Windows.
-- `tests/store.test.ts` is the `VaultStore` contract, run with `describe.each` over every store (folder in a temp dir, memory), plus folder-only behaviour (temp files, conflict copies). `tests/vault.test.ts` runs the vault policy on a `MemoryStore`: states, create races, open failures, tampered and swapped entries.
+- `tests/store.test.ts` is the `VaultStore` contract, run with `describe.each` over every store (folder in a temp dir, memory): creating with `expected: null`, writes at the current and at a stale version, racing writes, versions read back, names, copied bytes. Then folder-only behaviour (temp files, conflict copies, a file changed outside the store). `tests/vault.test.ts` runs the vault policy on a `MemoryStore`: states, `check()` stopping create and open before the key is derived, create races, open failures, tampered and swapped entries, a write against a stale snapshot.
 - `tests/cli.test.ts` runs the envvault command (`src/cli/main.ts`) against the real socket server with a fake command table, in a short `/tmp` folder because Unix socket paths are limited to about 104 bytes. `tests/skill.test.ts` covers the skill text and installing it into a temp folder.

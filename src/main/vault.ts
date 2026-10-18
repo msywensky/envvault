@@ -20,8 +20,8 @@ import type { VaultFolderState } from '../shared/types'
 import { getConfig } from './config'
 import { AppError } from './errors'
 import { deriveKeyInWorker } from './kdf'
-import { FolderStore } from './store/folder'
-import { StoreExistsError, type VaultStore } from './store/types'
+import { storeFor } from './store'
+import { StoreConflictError, type StoreSnapshot, type VaultStore } from './store/types'
 
 const META = 'meta.json'
 const ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.env\.enc$/
@@ -45,12 +45,26 @@ export interface Vault {
   state(): Promise<FolderState>
   create(password: string): Promise<OpenedVault>
   open(password: string): Promise<OpenedVault>
+  /** A read view of the entries: take one per operation. */
+  snapshot(): Promise<VaultSnapshot>
+  /**
+   * Replace one entry with already-encrypted bytes, if it is still at
+   * `expected` (a version from a snapshot, or null for none); otherwise
+   * VAULT_CHANGED. Returns the new version.
+   */
+  write(id: string, bytes: Uint8Array, expected: string | null): Promise<string>
+}
+
+export interface VaultSnapshot {
   /** Entry ids in the vault. */
-  list(): Promise<string[]>
-  /** Decrypt one entry, or null if the vault has none for this id. */
-  read(key: Uint8Array, id: string): Promise<Payload | null>
-  /** Replace one entry with already-encrypted bytes. */
-  write(id: string, bytes: Uint8Array): Promise<void>
+  readonly ids: string[]
+  /** Decrypt one entry, with the version to write against, or null if there is none. */
+  read(key: Uint8Array, id: string): Promise<VaultEntry | null>
+}
+
+export interface VaultEntry {
+  payload: Payload
+  version: string
 }
 
 /** The vault kept in `store`. */
@@ -59,15 +73,14 @@ export function vaultOn(store: VaultStore): Vault {
     state: () => vaultState(store),
     create: (password) => createVault(store, password),
     open: (password) => openVault(store, password),
-    list: () => listEntryIds(store),
-    read: (key, id) => readEntry(store, key, id),
-    write: (id, bytes) => store.put(entryFile(id), bytes)
+    snapshot: async () => entriesOf(await store.snapshot()),
+    write: (id, bytes, expected) => writeEntry(store, id, bytes, expected)
   }
 }
 
 /** The vault in a folder. */
 export function vaultAt(vaultPath: string): Vault {
-  return vaultOn(new FolderStore(vaultPath))
+  return vaultOn(storeFor({ kind: 'folder', path: vaultPath }))
 }
 
 /** The vault chosen in Settings, or null if none is chosen yet. */
@@ -87,7 +100,7 @@ type FolderState = Exclude<VaultFolderState, 'not-configured'>
 
 async function vaultState(store: VaultStore): Promise<FolderState> {
   if (!(await store.reachable())) return 'folder-missing'
-  const names = await store.list()
+  const { names } = await store.snapshot()
   if (names.includes(META)) return 'ready'
   return entryIds(names).length > 0 ? 'meta-missing' : 'empty'
 }
@@ -99,10 +112,6 @@ function entryIds(names: string[]): string[] {
     if (id && isValidRepoName(id)) ids.push(id)
   }
   return ids
-}
-
-async function listEntryIds(store: VaultStore): Promise<string[]> {
-  return entryIds(await store.list())
 }
 
 async function requireFolder(store: VaultStore): Promise<FolderState> {
@@ -128,6 +137,7 @@ async function createVault(store: VaultStore, password: string): Promise<OpenedV
   if ([...password].length < MIN_PASSWORD_CHARS) {
     throw new AppError('PASSWORD_TOO_SHORT', `Use at least ${MIN_PASSWORD_CHARS} characters.`)
   }
+  await store.check()
   const salt = await randomSalt()
   const vaultId = randomUUID()
   const kdf = { ...KDF_DEFAULTS }
@@ -139,12 +149,12 @@ async function createVault(store: VaultStore, password: string): Promise<OpenedV
     if ((await vaultState(store)) !== 'empty') {
       throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
     }
-    // Exclusive create: if a meta.json lands in the meantime it wins, and we
-    // fail instead of orphaning its entries.
+    // Written only if there is none: if a meta.json lands in the meantime it
+    // wins, and we fail instead of orphaning its entries.
     try {
-      await store.create(META, Buffer.from(JSON.stringify(meta, null, 2) + '\n', 'utf8'))
+      await store.write(META, Buffer.from(JSON.stringify(meta, null, 2) + '\n', 'utf8'), null)
     } catch (err) {
-      if (err instanceof StoreExistsError) {
+      if (err instanceof StoreConflictError) {
         throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
       }
       throw err
@@ -158,7 +168,8 @@ async function createVault(store: VaultStore, password: string): Promise<OpenedV
 
 async function openVault(store: VaultStore, password: string): Promise<OpenedVault> {
   await requireFolder(store)
-  const raw = await store.get(META)
+  await store.check()
+  const raw = (await (await store.snapshot()).get(META))?.bytes
   if (!raw) throw new AppError('VAULT_NOT_FOUND', 'No vault (meta.json) in this folder.')
   let meta
   try {
@@ -188,16 +199,46 @@ async function derive(
   }
 }
 
-async function readEntry(store: VaultStore, key: Uint8Array, id: string): Promise<Payload | null> {
-  const bytes = await store.get(entryFile(id))
-  if (!bytes) return null
+function entriesOf(snapshot: StoreSnapshot): VaultSnapshot {
+  return {
+    ids: entryIds(snapshot.names),
+    read: (key, id) => readEntry(snapshot, key, id)
+  }
+}
+
+async function readEntry(
+  snapshot: StoreSnapshot,
+  key: Uint8Array,
+  id: string
+): Promise<VaultEntry | null> {
+  const found = await snapshot.get(entryFile(id))
+  if (!found) return null
   try {
-    return await decryptPayload(key, id, bytes)
+    return { payload: await decryptPayload(key, id, found.bytes), version: found.version }
   } catch (err) {
     if (err instanceof VaultTamperError) {
       throw new AppError(
         'VAULT_TAMPERED',
         `The vault copy of "${id}" failed verification (corrupted, tampered with, or from a different vault). ${err.message}`
+      )
+    }
+    throw err
+  }
+}
+
+async function writeEntry(
+  store: VaultStore,
+  id: string,
+  bytes: Uint8Array,
+  expected: string | null
+): Promise<string> {
+  try {
+    return await store.write(entryFile(id), bytes, expected)
+  } catch (err) {
+    if (err instanceof StoreConflictError) {
+      throw new AppError(
+        'VAULT_CHANGED',
+        'The vault copy changed since you reviewed it. Review again.'
       )
     }
     throw err

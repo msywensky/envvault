@@ -1,9 +1,19 @@
 // A VaultStore in memory: the reference implementation of the contract in
-// types.ts, used by the tests. Settings never selects it.
-import { checkName, StoreExistsError, type VaultStore } from './types'
+// types.ts, used by the tests. Settings never selects it. Snapshots are
+// exact, and a write checks and sets in one synchronous step.
+import {
+  checkName,
+  contentVersion,
+  StoreConflictError,
+  type StoreObject,
+  type StoreSnapshot,
+  type VaultStore
+} from './types'
 
 export class MemoryStore implements VaultStore {
-  private readonly objects = new Map<string, Uint8Array>()
+  readonly kind = 'memory'
+  // Stored objects are never mutated, so a snapshot can share them.
+  private readonly objects = new Map<string, StoreObject>()
   private readonly isReachable: boolean
 
   /** `reachable: false` behaves like a vault folder that doesn't exist. */
@@ -11,7 +21,7 @@ export class MemoryStore implements VaultStore {
     this.isReachable = opts.reachable ?? true
   }
 
-  private check(name?: string): void {
+  private guard(name?: string): void {
     if (!this.isReachable) throw new Error('The store is not reachable.')
     if (name !== undefined) checkName(name)
   }
@@ -20,30 +30,33 @@ export class MemoryStore implements VaultStore {
     return this.isReachable
   }
 
-  async list(): Promise<string[]> {
-    this.check()
-    return [...this.objects.keys()]
+  async check(): Promise<void> {
+    return undefined
   }
 
-  // Copies in and out: callers wipe their buffers.
-  async get(name: string): Promise<Uint8Array | null> {
-    this.check(name)
-    return this.objects.get(name)?.slice() ?? null
+  // Copies out: callers wipe their buffers.
+  async snapshot(): Promise<StoreSnapshot> {
+    this.guard()
+    const objects = new Map(this.objects)
+    return {
+      names: [...objects.keys()],
+      get: async (name) => {
+        this.guard(name)
+        const found = objects.get(name)
+        return found ? { bytes: found.bytes.slice(), version: found.version } : null
+      }
+    }
   }
 
-  // Check and insert in one synchronous step, so racing creates have one winner.
-  async create(name: string, bytes: Uint8Array): Promise<void> {
-    this.check(name)
-    if (this.objects.has(name)) throw new StoreExistsError()
-    this.objects.set(name, bytes.slice())
-  }
-
-  async put(name: string, bytes: Uint8Array): Promise<void> {
-    this.check(name)
-    this.objects.set(name, bytes.slice())
+  async write(name: string, bytes: Uint8Array, expected: string | null): Promise<string> {
+    this.guard(name)
+    if ((this.objects.get(name)?.version ?? null) !== expected) throw new StoreConflictError()
+    const stored = { bytes: bytes.slice(), version: contentVersion(bytes) }
+    this.objects.set(name, stored)
+    return stored.version
   }
 
   async cleanUp(): Promise<void> {
-    this.check()
+    this.guard()
   }
 }
