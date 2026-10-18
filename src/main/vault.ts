@@ -97,7 +97,7 @@ export async function configuredVault(): Promise<Vault | null> {
 /** The vault chosen in Settings, or NOT_CONFIGURED. */
 export async function requireVault(): Promise<Vault> {
   const vault = await configuredVault()
-  if (!vault) throw new AppError('NOT_CONFIGURED', 'Choose a vault folder first.')
+  if (!vault) throw new AppError('NOT_CONFIGURED', 'Choose a vault first.')
   return vault
 }
 
@@ -119,24 +119,37 @@ function entryIds(names: string[]): string[] {
   return ids
 }
 
+/** What the vault is in, for messages. */
+const place = (store: VaultStore): string => (store.kind === 'git' ? 'repository' : 'folder')
+
 async function requireFolder(store: VaultStore): Promise<FolderState> {
   const state = await vaultState(store)
-  if (state === 'folder-missing') {
+  if (state !== 'folder-missing') return state
+  if (store.kind === 'git') {
+    // Asking again gives git's own reason (no network, no access).
+    await store.check()
     throw new AppError(
-      'VAULT_FOLDER_MISSING',
-      'The vault folder was not found. Is Google Drive running?'
+      'GIT_VAULT_UNREACHABLE',
+      "Couldn't reach the vault repository. Check your network and your git access to it."
     )
   }
-  return state
+  throw new AppError(
+    'VAULT_FOLDER_MISSING',
+    'The vault folder was not found. Is Google Drive running?'
+  )
 }
 
 async function createVault(store: VaultStore, password: string): Promise<OpenedVault> {
   const state = await requireFolder(store)
-  if (state === 'ready') throw new AppError('VAULT_EXISTS', 'This folder already contains a vault.')
+  if (state === 'ready') {
+    throw new AppError('VAULT_EXISTS', `This ${place(store)} already contains a vault.`)
+  }
   if (state === 'meta-missing') {
     throw new AppError(
       'VAULT_META_MISSING',
-      "Vault files exist but meta.json is missing. Wait for Drive to finish syncing, or restore meta.json from Drive's trash or version history."
+      store.kind === 'git'
+        ? "Vault files exist but meta.json is missing. Restore it from the repository's history."
+        : "Vault files exist but meta.json is missing. Wait for Drive to finish syncing, or restore meta.json from Drive's trash or version history."
     )
   }
   if ([...password].length < MIN_PASSWORD_CHARS) {
@@ -150,18 +163,16 @@ async function createVault(store: VaultStore, password: string): Promise<OpenedV
   try {
     const meta = serializeMeta({ vaultId, kdf, salt, keyCheck: await makeKeyCheck(key, vaultId) })
     // Re-check right before writing: another machine may have created one
-    // and Drive synced it in while we were deriving the key.
-    if ((await vaultState(store)) !== 'empty') {
-      throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
-    }
+    // (and Drive synced it in) while we were deriving the key.
+    const appeared = (): AppError =>
+      new AppError('VAULT_EXISTS', `A vault appeared in this ${place(store)}; unlock it instead.`)
+    if ((await vaultState(store)) !== 'empty') throw appeared()
     // Written only if there is none: if a meta.json lands in the meantime it
     // wins, and we fail instead of orphaning its entries.
     try {
       await store.write(META, Buffer.from(JSON.stringify(meta, null, 2) + '\n', 'utf8'), null)
     } catch (err) {
-      if (err instanceof StoreConflictError) {
-        throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
-      }
+      if (err instanceof StoreConflictError) throw appeared()
       throw err
     }
     return { key, vaultId }
@@ -175,7 +186,7 @@ async function openVault(store: VaultStore, password: string): Promise<OpenedVau
   await requireFolder(store)
   await store.check()
   const raw = (await (await store.snapshot()).get(META))?.bytes
-  if (!raw) throw new AppError('VAULT_NOT_FOUND', 'No vault (meta.json) in this folder.')
+  if (!raw) throw new AppError('VAULT_NOT_FOUND', `No vault (meta.json) in this ${place(store)}.`)
   let meta
   try {
     meta = parseMeta(JSON.parse(Buffer.from(raw).toString('utf8')))

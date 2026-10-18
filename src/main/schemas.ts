@@ -2,6 +2,7 @@
 // zod never reaches the renderer or the sandboxed preload.
 import { z } from 'zod'
 import { KEY_RE } from '../core/envdiff'
+import { isBranchName } from '../core/gitremote'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
 
@@ -26,8 +27,14 @@ export const MachineName = z
 export const AutoLockMinutes = z.int().min(1).max(120)
 
 /** Where the vault is kept (config.json only: the renderer never sends one). */
+// A git URL is only bounded here; GitStore parses it before git sees it.
 export const VaultLocation = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('folder'), path: z.string().min(1) })
+  z.strictObject({ kind: z.literal('folder'), path: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('git'),
+    url: z.string().min(1).max(2048),
+    branch: z.string().refine(isBranchName)
+  })
 ])
 
 export const requestSchemas = {

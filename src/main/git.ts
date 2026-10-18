@@ -1,8 +1,8 @@
-import { execFile } from 'node:child_process'
-import { lstat, readFile, stat, writeFile } from 'node:fs/promises'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { lstat, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { GitignoreResult } from '../shared/types'
 import { AppError } from './errors'
+import { findExecutable, firstLine, runProcess, type RunOptions, type RunResult } from './exec'
 import { isErrno } from './fsutil'
 
 // Added by "Add to .gitignore". .env.bak.* also covers the pull temp file.
@@ -10,61 +10,44 @@ const IGNORE_LINES = ['.env', '.env.bak.*']
 
 const GIT_MISSING = 'Git was not found. Install Git and make sure it is on PATH.'
 
-function searchPath(): string[] {
-  const dirs = (process.env['PATH'] ?? '').split(delimiter)
-  // Apps launched from Finder get a minimal PATH without Homebrew.
-  if (process.platform === 'darwin') dirs.push('/opt/homebrew/bin', '/usr/local/bin')
-  return dirs
-}
-
 let gitPath: string | null = null
 
-/**
- * Absolute path of git, found using absolute PATH entries only. Spawning
- * plain "git" with cwd = the repo lets a relative PATH entry (".", or an
- * unexpanded "%VAR%" on Windows) resolve inside the untrusted repo, so a
- * cloned repo could ship its own git.exe. (Verified on Electron 44.)
- */
+/** Absolute path of git (see findExecutable for why it must be absolute). */
 async function findGit(): Promise<string> {
-  if (gitPath) return gitPath
-  const name = process.platform === 'win32' ? 'git.exe' : 'git'
-  for (const dir of searchPath()) {
-    if (!dir || !isAbsolute(dir)) continue
-    const candidate = join(dir, name)
-    try {
-      if ((await stat(candidate)).isFile()) return (gitPath = candidate)
-    } catch {
-      // not here
+  gitPath ??= await findExecutable('git')
+  if (!gitPath) throw new AppError('GIT_MISSING', GIT_MISSING)
+  return gitPath
+}
+
+/** Run git with exactly these arguments and environment. Fails only if git can't start. */
+export async function runGit(args: string[], opts: RunOptions): Promise<RunResult> {
+  const exe = await findGit()
+  try {
+    return await runProcess(exe, args, opts)
+  } catch (err) {
+    if (isErrno(err, 'ENOENT')) {
+      gitPath = null
+      throw new AppError('GIT_MISSING', GIT_MISSING)
     }
+    throw err
   }
-  throw new AppError('GIT_MISSING', GIT_MISSING)
 }
 
 /**
- * Run git and return its exit code (0 or 1). Anything else is an error.
- * `core.fsmonitor=false` stops a repo's own .git/config from making git run
- * an arbitrary command (fsmonitor hooks run on index reads).
+ * Run git in a repo and return its exit code (0 or 1). Anything else is an
+ * error. `core.fsmonitor=false` stops a repo's own .git/config from making
+ * git run an arbitrary command (fsmonitor hooks run on index reads).
  */
 async function git(cwd: string, args: string[]): Promise<0 | 1> {
-  const exe = await findGit()
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
-  return new Promise((resolve, reject) => {
-    execFile(
-      exe,
-      ['-c', 'core.fsmonitor=false', ...args],
-      { cwd, env, windowsHide: true, timeout: 15_000 },
-      (err, _stdout, stderr) => {
-        if (!err) return resolve(0)
-        if (isErrno(err, 'ENOENT')) {
-          gitPath = null
-          return reject(new AppError('GIT_MISSING', GIT_MISSING))
-        }
-        if (err.code === 1) return resolve(1)
-        const first = String(stderr).split(/\r?\n/)[0]?.trim()
-        reject(new AppError('GIT_ERROR', `git ${args[0]} failed${first ? `: ${first}` : '.'}`))
-      }
-    )
+  const { code, stderr, failure } = await runGit(['-c', 'core.fsmonitor=false', ...args], {
+    cwd,
+    env,
+    timeoutMs: 15_000
   })
+  if (code === 0 || code === 1) return code
+  const first = failure === 'timeout' ? 'timed out' : firstLine(stderr)
+  throw new AppError('GIT_ERROR', `git ${args[0]} failed${first ? `: ${first}` : '.'}`)
 }
 
 /** True if `relPath` (relative to the repo root) is ignored by git. */

@@ -59,7 +59,7 @@ async function save(): Promise<void> {
         />
         <FolderField
           label="Vault folder"
-          :path="store.settings?.vault?.path ?? null"
+          :path="store.settings?.vault?.kind === 'folder' ? store.settings.vault.path : null"
           hint="Changing this locks EnvVault so you can unlock the other vault."
           :busy="busy"
           @pick="pick('vault')"

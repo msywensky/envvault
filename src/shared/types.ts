@@ -82,8 +82,9 @@ export interface RawDiff {
   lines: RawDiffLine[]
 }
 
-/** Where the vault is kept. */
-export type VaultLocation = { kind: 'folder'; path: string }
+/** Where the vault is kept: a synced folder, or a branch of a private git repository. */
+export type VaultLocation =
+  { kind: 'folder'; path: string } | { kind: 'git'; url: string; branch: string }
 
 export interface Settings {
   projectsPath: string | null

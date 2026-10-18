@@ -150,8 +150,11 @@ async function saveVault(location: VaultLocation): Promise<Settings> {
 const folderOf = (location: VaultLocation | null): string | null =>
   location?.kind === 'folder' ? location.path : null
 
-const sameLocation = (a: VaultLocation | null, b: VaultLocation): boolean =>
-  a?.kind === b.kind && a.path === b.path
+function sameLocation(a: VaultLocation | null, b: VaultLocation): boolean {
+  if (a?.kind === 'folder' && b.kind === 'folder') return a.path === b.path
+  if (a?.kind === 'git' && b.kind === 'git') return a.url === b.url && a.branch === b.branch
+  return false
+}
 
 function overlaps(a: string, b: string): boolean {
   return relative(resolve(a), resolve(b)) === '' || isInside(a, b) || isInside(b, a)

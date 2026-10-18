@@ -69,7 +69,7 @@ async function back(): Promise<void> {
         />
         <FolderField
           label="Vault folder"
-          :path="store.settings?.vault?.path ?? null"
+          :path="store.settings?.vault?.kind === 'folder' ? store.settings.vault.path : null"
           hint="A folder synced between your machines, e.g. My Drive/EnvVault. It only ever holds encrypted files."
           :busy="busy"
           @pick="pick('vault')"
