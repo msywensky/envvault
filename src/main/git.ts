@@ -1,5 +1,7 @@
 import { lstat, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseGitVersion } from '../core/gitremote'
 import type { GitignoreResult } from '../shared/types'
 import { AppError } from './errors'
 import { findExecutable, firstLine, runProcess, type RunOptions, type RunResult } from './exec'
@@ -30,6 +32,26 @@ export async function runGit(args: string[], opts: RunOptions): Promise<RunResul
       throw new AppError('GIT_MISSING', GIT_MISSING)
     }
     throw err
+  }
+}
+
+let version: Promise<[number, number] | null> | null = null
+
+/** GIT_TOO_OLD unless git is 2.32 or newer (GIT_CONFIG_GLOBAL), which git vaults need. */
+export async function requireGitVersion(): Promise<void> {
+  version ??= runGit(['--version'], { cwd: tmpdir(), env: process.env, timeoutMs: 15_000 }).then(
+    (r) => (r.code === 0 ? parseGitVersion(r.stdout.toString('utf8')) : null),
+    (err: unknown) => {
+      version = null
+      throw err
+    }
+  )
+  const v = await version
+  if (!v || v[0] < 2 || (v[0] === 2 && v[1] < 32)) {
+    throw new AppError(
+      'GIT_TOO_OLD',
+      'A git vault needs git 2.32 or newer. Update git, then try again.'
+    )
   }
 }
 

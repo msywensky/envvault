@@ -18,6 +18,7 @@ import { AppError } from '../errors'
 import { firstLine, type RunResult } from '../exec'
 import { runGit } from '../git'
 import { createSerial } from '../mutex'
+import { checkPrivate } from './gitprivacy'
 import {
   checkName,
   isStoreName,
@@ -35,6 +36,11 @@ export interface GitStoreOptions {
   allowLocal?: boolean
   /** How long an ls-remote result is reused, in ms. Default 10 s. */
   cacheMs?: number
+  /**
+   * Throw an AppError unless the repository is private. Default: the
+   * anonymous https check (gitprivacy.ts), or none with `allowLocal`.
+   */
+  checkPrivacy?: (url: string) => Promise<void>
 }
 
 const LS_REMOTE_MS = 10_000
@@ -80,6 +86,7 @@ export class GitStore implements VaultStore {
   private generation = 0
   private tracked: string | null = null
   private sshCommand: Promise<boolean> | null = null
+  private readonly checkPrivacy: ((url: string) => Promise<void>) | null
 
   constructor(opts: GitStoreOptions) {
     this.url = opts.url
@@ -87,21 +94,10 @@ export class GitStore implements VaultStore {
     this.dir = opts.dir
     this.allowLocal = opts.allowLocal ?? false
     this.cacheMs = opts.cacheMs ?? 10_000
-    this.invalid = this.validate()
-  }
-
-  private validate(): AppError | null {
-    if (!isBranchName(this.branch)) {
-      return new AppError('GIT_VAULT_INVALID_URL', 'The vault branch name is not valid.')
-    }
-    if (this.allowLocal) return null
-    try {
-      parseGitRemote(this.url)
-      return null
-    } catch (err) {
-      if (err instanceof GitRemoteError) return new AppError('GIT_VAULT_INVALID_URL', err.message)
-      throw err
-    }
+    this.checkPrivacy = opts.checkPrivacy ?? (this.allowLocal ? null : checkPrivate)
+    this.invalid = isBranchName(this.branch)
+      ? urlProblem(this.url, this.allowLocal)
+      : new AppError('GIT_VAULT_INVALID_URL', 'The vault branch name is not valid.')
   }
 
   private get tracking(): string {
@@ -117,7 +113,10 @@ export class GitStore implements VaultStore {
     }
   }
 
-  /** The branch exists, or the repository is empty (a new vault). */
+  /**
+   * The branch exists (or the repository is empty: a new vault), and the
+   * repository is still private, so one made public since is refused.
+   */
   async check(): Promise<void> {
     const heads = await this.listHeads(0)
     if (heads.size > 0 && !heads.has(this.branch)) {
@@ -126,6 +125,14 @@ export class GitStore implements VaultStore {
         `The vault repository has no "${this.branch}" branch. Choose the repository again in Setup.`
       )
     }
+    await this.checkPrivacy?.(this.url)
+  }
+
+  /** Everything at the top of the branch, for checking what a repository holds. */
+  async topLevel(): Promise<{ name: string; file: boolean }[]> {
+    const head = await this.serial(() => this.headLocked(0))
+    if (!head) return []
+    return [...(await this.readTree(head))].map(([name, r]) => ({ name, file: isFile(r) }))
   }
 
   async snapshot(): Promise<StoreSnapshot> {
@@ -353,59 +360,17 @@ export class GitStore implements VaultStore {
     return this.ready
   }
 
-  private hardening(): string[] {
-    const protocols = ['https', 'ssh', ...(this.allowLocal ? ['file'] : [])]
-    return [
-      '-c',
-      'core.fsmonitor=false',
-      // Your global hooks (a pre-push scanner, say) don't run on our pushes.
-      '-c',
-      `core.hooksPath=${join(this.dir, 'no-hooks')}`,
-      '-c',
-      'protocol.allow=never',
-      ...protocols.flatMap((p) => ['-c', `protocol.${p}.allow=always`]),
-      '-c',
-      'fetch.fsckObjects=true',
-      '-c',
-      'transfer.fsckObjects=true'
-    ]
-  }
-
-  private async env(opts: GitOptions): Promise<NodeJS.ProcessEnv> {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-      LC_ALL: 'C',
-      ...opts.env
-    }
-    // --git-dir is the only repository; nothing inherited redirects its parts.
-    for (const name of REDIRECTS) delete env[name]
-    // Setting GIT_SSH_COMMAND would override your core.sshCommand (1Password,
-    // Windows OpenSSH), so it's only set when you have none.
-    if (
-      opts.remote &&
-      !env['GIT_SSH_COMMAND'] &&
-      !env['GIT_SSH'] &&
-      !(await this.hasSshCommand())
-    ) {
-      env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'
-    }
-    return env
-  }
-
   /** Whether your git config sets core.sshCommand. Asked once, after init. */
   private hasSshCommand(): Promise<boolean> {
-    this.sshCommand ??= this.git(['config', '--get', 'core.sshCommand']).then(
-      (r) => r.code === 0 && r.stdout.toString('utf8').trim() !== '',
-      () => false
-    )
+    this.sshCommand ??= sshCommandSet(['--git-dir', this.dir], this.dir)
     return this.sshCommand
   }
 
   private async git(args: string[], opts: GitOptions = {}): Promise<RunResult> {
-    return runGit(['--git-dir', this.dir, ...this.hardening(), ...args], {
+    const hooks = join(this.dir, 'no-hooks')
+    return runGit(['--git-dir', this.dir, ...hardening(this.allowLocal, hooks), ...args], {
       cwd: this.dir,
-      env: await this.env(opts),
+      env: await vaultEnv(opts, () => this.hasSshCommand()),
       input: opts.input,
       timeoutMs: opts.timeoutMs ?? LOCAL_MS,
       maxBytes: opts.maxBytes
@@ -440,6 +405,99 @@ const REDIRECTS = [
   'GIT_COMMON_DIR'
 ]
 
+/** -c settings for every vault command. */
+function hardening(allowLocal: boolean, hooksDir: string | null): string[] {
+  const protocols = ['https', 'ssh', ...(allowLocal ? ['file'] : [])]
+  return [
+    '-c',
+    'core.fsmonitor=false',
+    // Your global hooks (a pre-push scanner, say) don't run on our pushes.
+    ...(hooksDir ? ['-c', `core.hooksPath=${hooksDir}`] : []),
+    '-c',
+    'protocol.allow=never',
+    ...protocols.flatMap((p) => ['-c', `protocol.${p}.allow=always`]),
+    '-c',
+    'fetch.fsckObjects=true',
+    '-c',
+    'transfer.fsckObjects=true'
+  ]
+}
+
+async function vaultEnv(
+  opts: GitOptions,
+  hasSshCommand: () => Promise<boolean>
+): Promise<NodeJS.ProcessEnv> {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    LC_ALL: 'C',
+    ...opts.env
+  }
+  // --git-dir is the only repository; nothing inherited redirects its parts.
+  for (const name of REDIRECTS) delete env[name]
+  // Setting GIT_SSH_COMMAND would override your core.sshCommand (1Password,
+  // Windows OpenSSH), so it's only set when you have none.
+  if (opts.remote && !env['GIT_SSH_COMMAND'] && !env['GIT_SSH'] && !(await hasSshCommand())) {
+    env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'
+  }
+  return env
+}
+
+/** Whether git config (system, global, and the repository's in `prefix`) sets core.sshCommand. */
+function sshCommandSet(prefix: string[], cwd: string): Promise<boolean> {
+  return runGit([...prefix, 'config', '--get', 'core.sshCommand'], {
+    cwd,
+    env: process.env,
+    timeoutMs: LOCAL_MS
+  }).then(
+    (r) => r.code === 0 && r.stdout.toString('utf8').trim() !== '',
+    () => false
+  )
+}
+
+function urlProblem(url: string, allowLocal: boolean): AppError | null {
+  if (allowLocal) return null
+  try {
+    parseGitRemote(url)
+    return null
+  } catch (err) {
+    if (err instanceof GitRemoteError) return new AppError('GIT_VAULT_INVALID_URL', err.message)
+    throw err
+  }
+}
+
+/**
+ * The repository's default branch, asked with your own credentials (so this
+ * also proves you can reach it), or "main" for an empty repository. `cwd`
+ * must not be inside a repository.
+ */
+export async function defaultBranch(
+  url: string,
+  cwd: string,
+  opts: { allowLocal?: boolean } = {}
+): Promise<string> {
+  const problem = urlProblem(url, opts.allowLocal ?? false)
+  if (problem) throw problem
+  const result = await runGit(
+    [...hardening(opts.allowLocal ?? false, null), 'ls-remote', '--symref', url, 'HEAD'],
+    {
+      cwd,
+      env: await vaultEnv({ remote: true }, () => sshCommandSet([], cwd)),
+      timeoutMs: LS_REMOTE_MS
+    }
+  )
+  if (result.code !== 0) throw unreachable(result)
+  const head = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(result.stdout.toString('utf8'))?.[1]
+  if (!head) return 'main'
+  if (!isBranchName(head)) {
+    throw new AppError(
+      'GIT_ERROR',
+      "The repository's default branch has a name EnvVault doesn't use."
+    )
+  }
+  return head
+}
+
 const isFile = (r: TreeRecord): boolean => r.type === 'blob' && FILE_MODES.has(r.mode)
 
 function describeFailure(result: RunResult): string {
@@ -449,7 +507,7 @@ function describeFailure(result: RunResult): string {
 }
 
 function unreachable(result: RunResult): AppError {
-  const why = describeFailure(result)
+  const why = describeFailure(result).replace(/\.$/, '')
   return new AppError('GIT_VAULT_UNREACHABLE', `${UNREACHABLE}${why ? ` (${why})` : ''}.`)
 }
 

@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { AppError } from '../src/main/errors'
 import { storeFor } from '../src/main/store'
 import { FolderStore } from '../src/main/store/folder'
 import { GitStore } from '../src/main/store/git'
@@ -420,6 +421,25 @@ describe('git store only', () => {
       await expect(store.write(WEB, bytes('x'), null)).rejects.toMatchObject({
         code: 'GIT_VAULT_INVALID_URL'
       })
+    }
+  })
+
+  it('refuses a repository the privacy check does not confirm as private', async () => {
+    const remote = bareRemote()
+    for (const code of ['GIT_VAULT_PUBLIC', 'GIT_VAULT_UNVERIFIED'] as const) {
+      const asked: string[] = []
+      const store = new GitStore({
+        url: remote,
+        branch: 'main',
+        dir: join(root, `mirror${n++}.git`),
+        allowLocal: true,
+        checkPrivacy: async (url) => {
+          asked.push(url)
+          throw new AppError(code, 'no')
+        }
+      })
+      await expect(store.check()).rejects.toMatchObject({ code })
+      expect(asked).toEqual([remote])
     }
   })
 

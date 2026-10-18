@@ -27,6 +27,9 @@ const META = 'meta.json'
 const ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.env\.enc$/
 export const MIN_PASSWORD_CHARS = 12
 
+/** A file that belongs in a vault: meta.json or an entry. */
+export const isVaultFile = (name: string): boolean => name === META || ENTRY_RE.test(name)
+
 /** The vault entry id for a repo: case-insensitive, like the filesystems. */
 export const entryId = (repoName: string): string => repoName.toLowerCase()
 

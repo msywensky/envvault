@@ -7,6 +7,7 @@ export const CH = {
   getSettings: 'settings:get',
   saveSettings: 'settings:save',
   pickFolder: 'settings:pickFolder',
+  setGitVault: 'settings:setGitVault',
   createVault: 'session:createVault',
   unlock: 'session:unlock',
   lock: 'session:lock',

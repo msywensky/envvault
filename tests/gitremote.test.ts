@@ -1,6 +1,13 @@
 // Git remote URLs and branch names for a git vault (src/core/gitremote.ts).
 import { describe, expect, it } from 'vitest'
-import { GitRemoteError, isBranchName, parseGitRemote } from '../src/core/gitremote'
+import {
+  classifyAnonymous,
+  GitRemoteError,
+  httpsFormOf,
+  isBranchName,
+  parseGitRemote,
+  parseGitVersion
+} from '../src/core/gitremote'
 
 const refusal = (url: string): string => {
   try {
@@ -106,5 +113,90 @@ describe('isBranchName', () => {
     'x'.repeat(101)
   ])('refuses %j', (b) => {
     expect(isBranchName(b)).toBe(false)
+  })
+})
+
+describe('httpsFormOf', () => {
+  it.each([
+    ['git@github.com:you/vault.git', 'https://github.com/you/vault.git'],
+    ['git@github.com:you/vault', 'https://github.com/you/vault.git'],
+    ['ssh://git@gitlab.com:2222/group/vault', 'https://gitlab.com/group/vault.git'],
+    ['ssh://host.example/srv/vault.git', 'https://host.example/srv/vault.git'],
+    ['git@host:/srv/vault.git', 'https://host/srv/vault.git'],
+    ['https://github.com/you/vault', 'https://github.com/you/vault']
+  ])('maps %s to %s', (url, https) => {
+    expect(httpsFormOf(parseGitRemote(url))).toBe(https)
+  })
+})
+
+describe('classifyAnonymous', () => {
+  // Real stderr from `git ls-remote` with no credentials (git 2.50).
+  it.each([
+    [0, '', 'public'],
+    [
+      128,
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      'private'
+    ],
+    [
+      128,
+      "fatal: could not read Username for 'https://gitlab.com': terminal prompts disabled",
+      'private'
+    ],
+    [
+      128,
+      "remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://h/r.git/'",
+      'private'
+    ],
+    [
+      128,
+      "fatal: unable to access 'https://h/r.git/': The requested URL returned error: 401",
+      'private'
+    ],
+    [
+      128,
+      "fatal: unable to access 'https://h/r.git/': The requested URL returned error: 403",
+      'private'
+    ],
+    // Not found says nothing: the https path may not be where the host serves it.
+    [
+      128,
+      "fatal: unable to access 'https://h/r.git/': The requested URL returned error: 404",
+      'unknown'
+    ],
+    [
+      128,
+      "remote: Repository not found.\nfatal: repository 'https://h/r.git/' not found",
+      'unknown'
+    ],
+    [
+      128,
+      "fatal: unable to access 'https://no-such-host.invalid/o/r.git/': Could not resolve host: no-such-host.invalid",
+      'unknown'
+    ],
+    [
+      128,
+      "fatal: unable to access 'https://h/r.git/': Failed to connect to h port 443 after 2 ms: Couldn't connect to server",
+      'unknown'
+    ],
+    [
+      128,
+      "fatal: unable to access 'https://h/r.git/': SSL certificate problem: self-signed certificate",
+      'unknown'
+    ],
+    [null, '', 'unknown']
+  ] as const)('exit %s, %j: %s', (code, stderr, visibility) => {
+    expect(classifyAnonymous(code, stderr)).toBe(visibility)
+  })
+})
+
+describe('parseGitVersion', () => {
+  it.each([
+    ['git version 2.50.1 (Apple Git-155)\n', [2, 50]],
+    ['git version 2.45.1.windows.1', [2, 45]],
+    ['git version 2.32.0', [2, 32]],
+    ['something else', null]
+  ] as const)('%j', (output, version) => {
+    expect(parseGitVersion(output)).toEqual(version)
   })
 })

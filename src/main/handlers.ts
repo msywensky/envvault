@@ -11,6 +11,7 @@ import { handle } from './ipc'
 import { exclusive } from './mutex'
 import * as session from './session'
 import * as skill from './skill'
+import { prepareGitVault } from './gitvault'
 import * as sync from './sync'
 import { configuredVault, requireVault } from './vault'
 import { getMainWindow } from './window'
@@ -43,6 +44,12 @@ export function registerIpc(): void {
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))
+  // Like the folder picker: the checks (network) run outside the queue, the
+  // save inside it.
+  handle(CH.setGitVault, async ({ url }) => {
+    const location = await prepareGitVault(url)
+    return exclusive(() => saveVault(location))
+  })
 
   // Automatic pull starts once exclusive() has finished: it takes exclusive()
   // itself, which isn't re-entrant.

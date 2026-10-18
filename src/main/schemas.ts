@@ -49,6 +49,8 @@ export const requestSchemas = {
     cliAccess: z.boolean()
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
+  // Only bounded here: prepareGitVault parses it before git sees it.
+  [CH.setGitVault]: z.strictObject({ url: z.string().trim().min(1).max(2048) }),
   [CH.createVault]: z.strictObject({ password: Password }),
   [CH.unlock]: z.strictObject({ password: Password }),
   [CH.lock]: NoArgs,

@@ -85,3 +85,43 @@ export function isBranchName(name: string): boolean {
     /^[A-Za-z0-9._/-]{1,100}$/.test(name) && !/^[-/.]|[/.]$|\.\.|\/\/|\/\.|\.lock(\/|$)/.test(name)
   )
 }
+
+/**
+ * The https:// address of the same repository, for asking anonymously
+ * whether it's public: git@host:o/r.git and ssh://host:22/o/r both become
+ * https://host/o/r.git (the user and the SSH port are dropped).
+ */
+export function httpsFormOf(remote: GitRemote): string {
+  if (remote.form === 'https') return remote.url
+  const path = remote.path.startsWith('/') ? remote.path : `/${remote.path}`
+  return `https://${remote.host}${path.endsWith('.git') ? path : `${path}.git`}`
+}
+
+export type Visibility = 'public' | 'private' | 'unknown'
+
+// What git prints when the server asked for credentials it didn't get.
+const AUTH_REQUIRED = [
+  /could not read Username/i,
+  /terminal prompts disabled/i,
+  /Authentication failed/i,
+  /HTTP Basic: Access denied/i,
+  /requested URL returned error: 40[13]\b/i
+]
+
+/**
+ * What an anonymous `git ls-remote` over https says about a repository.
+ * Only a server asking for credentials means private. A 404 or "not found"
+ * is unknown: if the https path we derived isn't where this host serves the
+ * repository, it says nothing about the repository itself.
+ */
+export function classifyAnonymous(exitCode: number | null, stderr: string): Visibility {
+  if (exitCode === 0) return 'public'
+  if (exitCode !== null && AUTH_REQUIRED.some((re) => re.test(stderr))) return 'private'
+  return 'unknown'
+}
+
+/** [major, minor] from `git --version`, or null. */
+export function parseGitVersion(output: string): [number, number] | null {
+  const m = /^git version (\d+)\.(\d+)/.exec(output.trim())
+  return m ? [Number(m[1]), Number(m[2])] : null
+}

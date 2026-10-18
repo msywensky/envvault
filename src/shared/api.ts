@@ -25,6 +25,7 @@ export interface Responses {
   'settings:get': Settings
   'settings:save': Settings
   'settings:pickFolder': Settings | null
+  'settings:setGitVault': Settings
   'session:createVault': null
   'session:unlock': null
   'session:lock': null
@@ -59,6 +60,11 @@ export interface EnvVaultApi {
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
+  /**
+   * Use a private git repository as the vault: checked (access, private,
+   * empty or a vault already), then saved. Locks EnvVault, like a new folder.
+   */
+  setGitVault(url: string): R<'settings:setGitVault'>
   createVault(password: string): R<'session:createVault'>
   unlock(password: string): R<'session:unlock'>
   lock(): R<'session:lock'>
