@@ -13,7 +13,8 @@ import type {
   RepoRow,
   SaveEditRequest,
   SaveEditResult,
-  Settings
+  Settings,
+  SkillInfo
 } from './types'
 
 // Response payload for each channel. main's `handle()` and the preload's
@@ -36,6 +37,9 @@ export interface Responses {
   'repo:openEditor': EditorData
   'repo:saveEdit': SaveEditResult
   'repo:addGitignore': GitignoreResult
+  'skill:status': SkillInfo
+  'skill:install': SkillInfo
+  'skill:remove': SkillInfo
 }
 
 type R<C extends keyof Responses> = Promise<Result<Responses[C]>>
@@ -51,6 +55,7 @@ export interface EnvVaultApi {
     machineName: string
     checkExample: boolean
     autoPull: boolean
+    cliAccess: boolean
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
@@ -69,6 +74,10 @@ export interface EnvVaultApi {
   /** Apply edits to the vault copy, if it is still the one openEditor returned. */
   saveEdit(request: SaveEditRequest): R<'repo:saveEdit'>
   addGitignore(repoName: string): R<'repo:addGitignore'>
+  skillStatus(): R<'skill:status'>
+  /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
+  installSkill(replace: boolean): R<'skill:install'>
+  removeSkill(): R<'skill:remove'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
   /**
@@ -76,4 +85,6 @@ export interface EnvVaultApi {
    * every request counts as activity and would keep the vault unlocked.
    */
   onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
+  /** Called with the row the envvault command just pushed. Must not trigger IPC either. */
+  onCliPushed(callback: (row: RepoRow) => void): () => void
 }

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Sync per-project .env files between machines through an encrypted vault folder",
   "main": "./out/main/index.js",
+  "bin": {
+    "envvault": "out/cli/envvault.mjs"
+  },
   "author": "Mike Sywensky",
   "license": "MIT",
   "engines": {
@@ -18,7 +21,8 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "dev:profile": "node scripts/dev-profile.mjs",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && electron-vite build && npm run build:cli",
+    "build:cli": "vite build -c vite.cli.config.mts",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",

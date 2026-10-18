@@ -18,7 +18,10 @@ export const CH = {
   pullRawDiff: 'repo:pullRawDiff',
   openEditor: 'repo:openEditor',
   saveEdit: 'repo:saveEdit',
-  addGitignore: 'repo:addGitignore'
+  addGitignore: 'repo:addGitignore',
+  skillStatus: 'skill:status',
+  installSkill: 'skill:install',
+  removeSkill: 'skill:remove'
 } as const
 
 export type Channel = (typeof CH)[keyof typeof CH]
@@ -27,5 +30,7 @@ export type Channel = (typeof CH)[keyof typeof CH]
 export const EV = {
   locked: 'session:locked',
   /** Rows (metadata only) that automatic pull just pulled. */
-  autoPulled: 'repos:autoPulled'
+  autoPulled: 'repos:autoPulled',
+  /** The row (metadata only) the envvault command just pushed. */
+  cliPushed: 'repos:cliPushed'
 } as const

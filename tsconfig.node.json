@@ -3,10 +3,12 @@
   "include": [
     "electron.vite.config.*",
     "vitest.config.*",
+    "vite.cli.config.*",
     "src/main/**/*",
     "src/preload/**/*",
     "src/core/**/*",
     "src/shared/**/*",
+    "src/cli/**/*",
     "tests/**/*"
   ],
   "compilerOptions": {

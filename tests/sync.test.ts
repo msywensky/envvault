@@ -20,6 +20,8 @@ import {
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { CliTable } from '../src/main/cliserver'
+import type { RepoRow } from '../src/shared/types'
 
 const h = vi.hoisted(() => ({ userData: '' }))
 
@@ -56,6 +58,7 @@ interface Machine {
   sync: typeof import('../src/main/sync')
   session: typeof import('../src/main/session')
   autopull: typeof import('../src/main/autopull')
+  clicommands: typeof import('../src/main/clicommands')
   open: () => Promise<{ key: Uint8Array; vaultId: string }>
 }
 
@@ -68,10 +71,11 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   const sync = await import('../src/main/sync')
   const session = await import('../src/main/session')
   const autopull = await import('../src/main/autopull')
+  const clicommands = await import('../src/main/clicommands')
   await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
   const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
     vault.openVault(vaultDir, PASSWORD)
-  return { config, vault, sync, session, autopull, open }
+  return { config, vault, sync, session, autopull, clicommands, open }
 }
 
 async function rows(m: Machine): Promise<Record<string, string>> {
@@ -898,6 +902,102 @@ describe('automatic pull', () => {
       b.session.lock()
     }
     expect(await b.autopull.runAutoPull()).toEqual([])
+  })
+})
+
+describe('command line', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const pushed: RepoRow[] = []
+
+  /** Machine `name`, unlocked, with the envvault command's table. */
+  async function unlocked(name: 'a' | 'b'): Promise<{ m: Machine; cli: CliTable }> {
+    const m = await machine(name)
+    const { key, vaultId } = await m.open()
+    m.session.unlock(key, vaultId, 5)
+    return { m, cli: m.clicommands.cliCommands((row) => pushed.push(row)) }
+  }
+
+  it('is off by default, and needs the vault unlocked', async () => {
+    const m = await machine('a')
+    expect((await m.config.getConfig()).cliAccess).toBe(false)
+    const cli = m.clicommands.cliCommands(() => undefined)
+    expect(await errorCode(cli.status.run({ all: true }))).toBe('LOCKED')
+  })
+
+  it('finds the repo from any folder inside it', async () => {
+    makeRepo(projA, 'cl1', { '.gitignore': IGNORE, '.env': 'K=1\n' })
+    mkdirSync(join(projA, 'cl1', 'src', 'deep'), { recursive: true })
+    const { m, cli } = await unlocked('a')
+    try {
+      for (const dir of [join(projA, 'cl1'), join(projA, 'cl1', 'src', 'deep')]) {
+        expect(await cli.status.run({ dir })).toMatchObject([{ name: 'cl1', status: 'local-only' }])
+      }
+      expect(await cli.status.run({ repo: 'CL1' })).toMatchObject([{ name: 'cl1' }])
+      expect((await cli.status.run({ all: true })).map((r) => r.name)).toContain('cl1')
+      for (const dir of [root, projA, join(projA, 'not-a-repo'), join(projA, 'cl1', 'missing')]) {
+        expect(await errorCode(cli.status.run({ dir }))).toBe('REPO_NOT_FOUND')
+      }
+      expect(await errorCode(cli.status.run({ repo: 'nope' }))).toBe('REPO_NOT_FOUND')
+    } finally {
+      m.session.lock()
+    }
+  })
+
+  it('pushes a one-sided change, and reports only pushes that changed the vault', async () => {
+    const { m, cli } = await unlocked('a')
+    try {
+      const dir = join(projA, 'cl1', 'src')
+      const { repo, preview } = await cli.previewPush.run({ dir })
+      expect(repo).toBe('cl1')
+      expect(preview.diff.added).toEqual(['K'])
+      const row = await cli.push.run({ dir, expected: preview.expected })
+      expect(row).toMatchObject({ name: 'cl1', status: 'in-sync', vault: { version: 1 } })
+      expect(pushed.map((r) => r.name)).toEqual(['cl1'])
+
+      const again = await cli.previewPush.run({ repo: 'cl1' })
+      expect(again.preview.sameContent).toBe(true)
+      await cli.push.run({ repo: 'cl1', expected: again.preview.expected })
+      expect(pushed).toHaveLength(1)
+
+      // The token from a preview goes stale when the file changes.
+      writeFileSync(join(projA, 'cl1', '.env'), 'K=2\n')
+      expect(await errorCode(cli.push.run({ repo: 'cl1', expected: again.preview.expected }))).toBe(
+        'LOCAL_CHANGED'
+      )
+      const next = await cli.previewPush.run({ repo: 'cl1' })
+      expect(await cli.push.run({ repo: 'cl1', expected: next.preview.expected })).toMatchObject({
+        vault: { version: 2 }
+      })
+      expect(pushed).toHaveLength(2)
+    } finally {
+      m.session.lock()
+    }
+  })
+
+  it('refuses to overwrite a vault copy that changed elsewhere', async () => {
+    makeRepo(projB, 'cl1', { '.gitignore': IGNORE, '.env': 'K=2\n' })
+    expect((await rows(await machine('b')))['cl1']).toBe('in-sync')
+    const a = await machine('a')
+    writeFileSync(join(projA, 'cl1', '.env'), 'K=3\n')
+    await pushRepo(a, 'cl1')
+
+    writeFileSync(join(projB, 'cl1', '.env'), 'K=4\n')
+    const { m, cli } = await unlocked('b')
+    try {
+      const { preview } = await cli.previewPush.run({ repo: 'cl1' })
+      expect(preview.needsOverwrite).toBe(true)
+      const entry = join(vaultDir, 'cl1.env.enc')
+      const before = readFileSync(entry)
+      const err = await cli.push.run({ repo: 'cl1', expected: preview.expected }).catch((e) => e)
+      expect(err).toMatchObject({
+        code: 'OVERWRITE_NOT_CONFIRMED',
+        message: 'The vault copy changed on another machine. Resolve it in EnvVault.'
+      })
+      expect(readFileSync(entry).equals(before)).toBe(true)
+      expect(pushed).toHaveLength(2)
+    } finally {
+      m.session.lock()
+    }
   })
 })
 

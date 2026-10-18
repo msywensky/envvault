@@ -4,11 +4,13 @@ import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
 import type { Settings } from '../shared/types'
 import { kickAutoPull } from './autopull'
+import { setCliAccess } from './cliserver'
 import { getConfig, updateConfig } from './config'
 import { AppError } from './errors'
 import { handle } from './ipc'
 import { exclusive } from './mutex'
 import * as session from './session'
+import * as skill from './skill'
 import * as sync from './sync'
 import { createVault, folderState, openVault } from './vault'
 import { getMainWindow } from './window'
@@ -31,6 +33,12 @@ export function registerIpc(): void {
     const next = await updateConfig(patch)
     session.setAutoLockMinutes(next.autoLockMinutes)
     if (next.autoPull) kickAutoPull()
+    if (!(await setCliAccess(next.cliAccess))) {
+      throw new AppError(
+        'CLI_UNAVAILABLE',
+        "Settings saved, but command-line access couldn't start."
+      )
+    }
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))
@@ -89,6 +97,11 @@ export function registerIpc(): void {
   handle(CH.addGitignore, ({ repoName }) =>
     exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
   )
+
+  // The Claude Code skill holds no secrets, so these work while locked.
+  handle(CH.skillStatus, () => skill.skillStatus())
+  handle(CH.installSkill, ({ replace }) => skill.installSkill(replace))
+  handle(CH.removeSkill, () => skill.removeSkill())
 }
 
 async function pickFolder(which: 'projects' | 'vault'): Promise<Settings | null> {

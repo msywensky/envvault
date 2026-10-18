@@ -18,7 +18,8 @@ const ConfigSchema = z.strictObject({
   autoLockMinutes: AutoLockMinutes,
   machineName: MachineName,
   checkExample: z.boolean(),
-  autoPull: z.boolean()
+  autoPull: z.boolean(),
+  cliAccess: z.boolean()
 })
 
 // Loading is forgiving: a bad or missing field falls back to its default.
@@ -28,7 +29,8 @@ const LoadSchema = z.object({
   autoLockMinutes: AutoLockMinutes.catch(5),
   machineName: MachineName.catch(() => defaultMachineName()),
   checkExample: z.boolean().catch(true),
-  autoPull: z.boolean().catch(true)
+  autoPull: z.boolean().catch(true),
+  cliAccess: z.boolean().catch(false)
 })
 
 function defaultMachineName(): string {

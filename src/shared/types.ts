@@ -91,6 +91,20 @@ export interface Settings {
   checkExample: boolean
   /** Pull one-sided vault changes in the background while unlocked. */
   autoPull: boolean
+  /** Let the envvault command check status and push (see src/main/cliserver.ts). */
+  cliAccess: boolean
+}
+
+/** The Claude Code skill EnvVault installs (see src/main/skill.ts). */
+export interface SkillInfo {
+  /**
+   * - missing: no SKILL.md there
+   * - current: exactly what this app would write
+   * - different: written by another version or location of the app, or edited
+   */
+  state: 'missing' | 'current' | 'different'
+  /** Where the skill lives, for display. */
+  path: string
 }
 
 /**

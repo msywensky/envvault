@@ -3,6 +3,7 @@
 // projects folder after resolving symlinks.
 import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
+import { relative, sep } from 'node:path'
 import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
 import { AppError } from './errors'
@@ -56,6 +57,29 @@ export async function resolveRepo(projectsPath: string, name: string): Promise<s
     )
   }
   return dir
+}
+
+/**
+ * The name of the repo that contains `dir`, the envvault command's working
+ * directory. The path is used only to work out the name.
+ */
+export async function repoNameAt(projectsPath: string, dir: string): Promise<string> {
+  const root = await projectsRoot(projectsPath)
+  const notFound = (): AppError =>
+    new AppError(
+      'REPO_NOT_FOUND',
+      'Run this inside a repo in your projects folder, or pass --repo.'
+    )
+  let real: string
+  try {
+    real = await realpath(dir)
+  } catch {
+    throw notFound()
+  }
+  if (!isInside(root, real)) throw notFound()
+  const [name] = relative(root, real).split(sep)
+  if (!name || !(await findRepo(root, name))) throw notFound()
+  return name
 }
 
 /**

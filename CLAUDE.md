@@ -16,7 +16,8 @@ npx vitest run tests/paths.test.ts           # one file
 npx vitest run tests/sync.test.ts -t "pull"  # tests matching a name
 npm run lint                                 # eslint, --max-warnings 0 (warnings fail)
 npm run typecheck                            # tsc for the node side + vue-tsc for the renderer
-npm run build                                # typecheck, then electron-vite build to out/
+npm run build                                # typecheck, electron-vite build to out/, then build:cli
+npm run build:cli                            # the envvault command only: out/cli/envvault.mjs
 npm start                                    # run the production build (strict CSP, file://)
 npm run format                               # prettier
 ```
@@ -24,19 +25,20 @@ npm run format                               # prettier
 - Prettier (single quotes, no semicolons, width 100, no trailing commas) runs inside ESLint, so formatting problems fail `npm run lint`. `.gitattributes` forces LF line endings.
 - CI (`.github/workflows/ci.yml`) runs `npm ci --ignore-scripts`, lint, test and build on macOS and Windows. `--ignore-scripts` skips our `postinstall` (Electron binary download, electron-builder native deps), which lint, tests and build don't need; Electron 44 no longer honours `ELECTRON_SKIP_BINARY_DOWNLOAD`.
 - A Husky pre-commit hook (`.husky/pre-commit`) runs `lint-staged`: ESLint with `--max-warnings 0` on staged `.ts/.vue/.js` files. Husky installs via `prepare`, so `npm ci --ignore-scripts` in CI skips it. CI runs lint, tests and the build on every push to main and every pull request.
-- `ENVVAULT_PROFILE=<name>` (unpackaged runs only, i.e. `npm run dev` / `npm start`) gives the run its own `userData` folder (`<appData>/envvault-<name>`), so two "machines" can share one vault folder. `src/main/index.ts` silently ignores names that don't match `^[A-Za-z0-9-]{1,20}$` and falls back to the real settings, so use `npm run dev:profile` (`scripts/dev-profile.mjs`), which validates the name and refuses instead. Its regex must stay in sync with `index.ts`.
+- `ENVVAULT_PROFILE=<name>` (unpackaged runs only, i.e. `npm run dev` / `npm start`) gives the run its own `userData` folder (`<appData>/envvault-<name>`), so two "machines" can share one vault folder. `src/main/profile.ts` silently ignores names that don't match `PROFILE_RE` (`src/shared/cli.ts`, also used by the CLI's `--profile`) and falls back to the real settings, so use `npm run dev:profile` (`scripts/dev-profile.mjs`), which validates the name and refuses instead. Its regex must stay in sync with `PROFILE_RE`.
 - To inspect the running app, start it with `npx electron-vite dev --remoteDebuggingPort 9222` (or `npx electron . --remote-debugging-port=9223` after a build) and drive `window.envvault` over CDP. When testing that CSP blocks `eval`, pass `allowUnsafeEvalBlockedByCSP: false` to `Runtime.evaluate`; it defaults to true.
 - Commit messages use conventional-commit style with a scope: `feat(core): ...`, `feat(main): ...`, `feat(ui): ...`, `chore: ...`.
 
 ## Architecture
 
-Five source areas with import boundaries **enforced by ESLint** (`eslint.config.mjs`), so a wrong import fails lint:
+Six source areas with import boundaries **enforced by ESLint** (`eslint.config.mjs`), so a wrong import fails lint:
 
 - `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, machine-specific keys, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
 - `src/main/` — Electron main process. Owns the key, all file system and git access.
 - `src/preload/` — sandboxed; may import only `electron` and relative files (they get bundled). Exposes named functions as `window.envvault`, never `ipcRenderer` or IPC event objects.
 - `src/shared/` — channel names and types used by all processes. Relative imports only (no packages, not even zod), because it reaches the sandboxed preload and the renderer. Request schemas therefore live in `src/main/schemas.ts`, not here.
 - `src/renderer/` — Vue 3 UI. No Node/Electron imports, nothing from core/main/preload; talks to the system only via `window.envvault`. `v-html` is banned.
+- `src/cli/` — the `envvault` command, bundled by `vite.cli.config.mts` into one file for plain Node. May import only `node:` built-ins and relative files (core, shared), nothing from main/preload/renderer; it talks to the app only over the socket (see Command line below).
 
 ### IPC
 
@@ -86,6 +88,20 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - It runs on a 60 s interval and on `kickAutoPull()` after unlock, a Settings save with it on, and a changed editor save. `kickAutoPull` is always called after `exclusive()` has resolved, never inside it.
   - Pulled rows go to the renderer as `EV.autoPulled`. When the window isn't focused, `src/main/notify.ts` also shows a system notification. If that fails or isn't supported, it falls back to a Dock badge and one bounce (macOS) or a flashing taskbar button (Windows), cleared on focus.
   - macOS delivers notifications only for code-signed apps. Dev runs (ad-hoc signed Electron) and the unsigned build get Electron's `failed` event (`UNErrorDomain error 1`), so on macOS the Dock fallback is what you'll actually see. `show()` returning means nothing: listen for `failed`.
+- **Command line** (`src/cli/`, `src/main/cliserver.ts`, `src/main/clicommands.ts`, protocol in `src/shared/cli.ts`, setting `cliAccess`, default off).
+  - **Transport:** `cliserver.ts` listens only while the setting is on (`setCliAccess`, called at startup and after every Settings save).
+    - The address comes from `cliEndpoint(userData)` (`src/core/cliendpoint.ts`, shared with the CLI): a `0600` Unix socket on macOS, a named pipe hashed from `userData` on Windows.
+    - Every request carries the token from `<userData>/cli-token`: 32 random bytes, replaced on each start, compared with `timingSafeEqual`. A Windows pipe grants Everyone read by default, so the token is what protects it.
+    - One JSON line per connection, at most 64 KiB, answered with one `Result` line. Same rules as IPC: strict zod schemas, `failureOf` (`errors.ts`) for errors, no echoed input.
+  - **Commands** (`clicommands.ts`): `status`, `previewPush` and `push`.
+    - A repo is named, or found from the CLI's working directory by `repoNameAt` (`repos.ts`), which uses the path only to work out the name.
+    - `push` is `sync.push` inside `exclusive(() => session.withKey(...))` with `overwriteConfirmed: false`, so it's one-sided only.
+    - Pushes that changed the vault copy go to the renderer as `EV.cliPushed` rows, patched in like automatic pulls.
+  - **The CLI** (`src/cli/main.ts`): two steps, like the app. `push --dry-run` prints the preview's `expected` as a token, and `push --expect <token>` sends it back. Exit codes: 0 done, 1 refused or failed, 2 usage, 3 `LOCKED`, 4 `CLI_UNAVAILABLE`.
+  - **The Claude Code skill:** `src/core/skill.ts` (text), `src/main/skill.ts` (install, status, remove in `~/.claude/skills/envvault`).
+    - It pre-approves only `status` and `push --dry-run`, so the real push still goes through Claude Code's permission prompt.
+    - Its command is `node "<path to out/cli/envvault.mjs>"`, with `app.asar.unpacked` when packaged and `--profile` under a dev profile. Settings shows it as different when that changes.
+    - It is replaced only on request, and removed only if it carries `SKILL_MARKER`.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve
@@ -94,9 +110,10 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - `repo:pullRawDiff` with `values: true` (the user's **Show values** click). The renderer keeps them only in `SyncDialog`'s local `rawValues` ref (never the store) and shows them only in `RawDiffView.vue`, which hides them again;
   - `repo:openEditor` (main → renderer) and `repo:saveEdit` (renderer → main, changed values only). The renderer keeps them only in `EnvEditorDialog.vue`'s local `rows`, masked until shown and re-masked when the window is hidden or the editor is idle.
 
-  Every other channel carries only key names, statuses, hashes and metadata. Error messages from the editor flows never contain keys or values (`EditError` messages are fixed strings). `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
+  Every other channel, and the envvault socket, carries only key names, statuses, hashes and metadata. Error messages from the editor flows never contain keys or values (`EditError` messages are fixed strings). `console.error` is the only allowed console call (lint enforces it). When logging a caught error, log only `err.name`, never the error object or its message (V8's `JSON.parse` errors quote their input).
 
-- Background work must never make the renderer call IPC: every request resets the idle auto-lock (`ipcHooks.onAuthorizedCall`), so it would keep the vault unlocked. That's why `EV.autoPulled` carries the updated rows and the renderer patches `store.repos` instead of refetching. Main-side background work uses `session.withKey`, which doesn't touch the timer.
+- Background work must never make the renderer call IPC: every request resets the idle auto-lock (`ipcHooks.onAuthorizedCall`), so it would keep the vault unlocked. That's why `EV.autoPulled` and `EV.cliPushed` carry the updated rows and the renderer patches `store.repos` instead of refetching. Main-side background work uses `session.withKey`, which doesn't touch the timer.
+- Requests from the envvault socket never reset the idle timer either: they don't go through `ipcHooks`, so a script or Claude polling `status` can't keep the vault unlocked. Don't add a `touch()` there.
 - The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
 - Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
@@ -104,12 +121,13 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
 ## Scope
 
-v1 is manual-password unlock only. Bitwarden CLI unlock and a run mode (a CLI that starts a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a README threat-model update first.
+v1 is manual-password unlock only. The `envvault` command does `status` and `push` only: no pull, no unlock. Bitwarden CLI unlock and a run mode (`envvault run`, starting a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a README threat-model update first.
 
 Packaging (`electron-builder.yml`) is deliberately minimal:
 
 - macOS (dmg) and Windows (nsis) only. `build:linux` has no config and isn't supported.
 - Only `out/` is shipped. electron-builder adds `package.json` and the production dependencies itself.
+- `out/cli/**` is `asarUnpack`ed, because the envvault command runs under plain Node, which can't read `app.asar`.
 - No auto-update (`publish: null`), unsigned, not notarized. Unsigned also means macOS system notifications fail (see automatic pull above).
 - The macOS entitlements allow only V8's JIT (needed for libsodium's WebAssembly).
 - `npm run build:unpack` produces `dist/win-unpacked/`. The packaged app ignores `ENVVAULT_PROFILE` and keeps its data in `%APPDATA%\envvault`.
@@ -118,8 +136,9 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{crypto,envdiff,envedit,example,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{cliendpoint,crypto,envdiff,envedit,example,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.
   - The symlink test is skipped on Windows.
+- `tests/cli.test.ts` runs the envvault command (`src/cli/main.ts`) against the real socket server with a fake command table, in a short `/tmp` folder because Unix socket paths are limited to about 104 bytes. `tests/skill.test.ts` covers the skill text and installing it into a temp folder.
