@@ -9,6 +9,7 @@ const machineName = ref(store.settings?.machineName ?? '')
 const nameProblem = computed(() => machineNameProblem(machineName.value))
 const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
 const checkExample = ref(store.settings?.checkExample ?? true)
+const autoPull = ref(store.settings?.autoPull ?? true)
 
 async function pick(which: 'projects' | 'vault'): Promise<void> {
   busy.value = true
@@ -28,7 +29,8 @@ async function save(): Promise<void> {
     window.envvault.saveSettings({
       autoLockMinutes: Number(autoLockMinutes.value),
       machineName: machineName.value,
-      checkExample: checkExample.value
+      checkExample: checkExample.value,
+      autoPull: autoPull.value
     })
   )
   busy.value = false
@@ -92,6 +94,16 @@ async function save(): Promise<void> {
           <p class="muted small">
             Warns about missing keys and secret-looking values copied into .env.example. Never
             blocks.
+          </p>
+        </div>
+        <div class="field">
+          <label class="checkbox">
+            <input v-model="autoPull" type="checkbox" />
+            <span>Pull automatically when another machine updates a .env</span>
+          </label>
+          <p class="muted small">
+            While EnvVault is unlocked. Only when your local .env hasn't changed since the last
+            sync; conflicts are left for you. Creates a missing .env, and saves a backup first.
           </p>
         </div>
         <div class="row">

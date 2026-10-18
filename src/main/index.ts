@@ -2,8 +2,10 @@ import { app, BrowserWindow, powerMonitor, session } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { EV } from '../shared/channels'
+import { startAutoPull } from './autopull'
 import { registerIpc } from './handlers'
 import { ipcHooks } from './ipc'
+import { notifyPulled } from './notify'
 import * as vaultSession from './session'
 import { createMainWindow, getMainWindow } from './window'
 
@@ -49,6 +51,10 @@ if (!app.requestSingleInstanceLock()) {
       vaultSession.onLocked(() => getMainWindow()?.webContents.send(EV.locked))
       powerMonitor.on('suspend', () => vaultSession.lock())
       powerMonitor.on('lock-screen', () => vaultSession.lock())
+      startAutoPull((rows) => {
+        getMainWindow()?.webContents.send(EV.autoPulled, rows)
+        notifyPulled(rows)
+      })
 
       registerIpc()
       createMainWindow()

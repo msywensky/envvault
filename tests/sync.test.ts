@@ -55,6 +55,7 @@ interface Machine {
   vault: typeof import('../src/main/vault')
   sync: typeof import('../src/main/sync')
   session: typeof import('../src/main/session')
+  autopull: typeof import('../src/main/autopull')
   open: () => Promise<{ key: Uint8Array; vaultId: string }>
 }
 
@@ -66,10 +67,11 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   const vault = await import('../src/main/vault')
   const sync = await import('../src/main/sync')
   const session = await import('../src/main/session')
+  const autopull = await import('../src/main/autopull')
   await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
   const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
     vault.openVault(vaultDir, PASSWORD)
-  return { config, vault, sync, session, open }
+  return { config, vault, sync, session, autopull, open }
 }
 
 async function rows(m: Machine): Promise<Record<string, string>> {
@@ -778,6 +780,124 @@ describe('editing the vault copy', () => {
     expect(err).toMatchObject({ code: 'EDIT_INVALID' })
     expect(JSON.stringify(err)).not.toMatch(/MISSING_SECRET_KEY|hunter2/)
     expect(String((err as { message?: string }).message)).not.toMatch(/MISSING_SECRET_KEY|hunter2/)
+  })
+})
+
+describe('automatic pull', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const envA = (repo: string): string => join(projA, repo, '.env')
+  const envB = (repo: string): string => join(projB, repo, '.env')
+  const backups = (repo: string): string[] =>
+    readdirSync(join(projB, repo)).filter((f) => f.startsWith('.env.bak.'))
+
+  it('pulls a one-sided vault change, keeping machine-specific values', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ap1', { '.gitignore': IGNORE, '.env': 'A=1\n# envvault:local\nDB=/a\n' })
+    await pushRepo(a, 'ap1')
+    const b = await machine('b')
+    makeRepo(projB, 'ap1', { '.gitignore': IGNORE, '.env': 'A=1\n# envvault:local\nDB=/b\n' })
+    expect((await rows(b))['ap1']).toBe('in-sync')
+
+    const a2 = await machine('a')
+    writeFileSync(envA('ap1'), 'A=2\n# envvault:local\nDB=/a\n')
+    await pushRepo(a2, 'ap1')
+
+    const b2 = await machine('b')
+    const { key, vaultId } = await b2.open()
+    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toMatchObject({
+      name: 'ap1',
+      status: 'in-sync',
+      hasEnv: true,
+      vault: { version: 2 }
+    })
+    expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=2\n# envvault:local\nDB=/b\n')
+    expect(backups('ap1')).toHaveLength(1)
+    expect((await rows(b2))['ap1']).toBe('in-sync')
+    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toBeNull()
+  })
+
+  it('leaves a conflict and a rollback alone', async () => {
+    writeFileSync(envB('ap1'), 'A=2\nB_ONLY=1\n# envvault:local\nDB=/b\n')
+    const a = await machine('a')
+    writeFileSync(envA('ap1'), 'A=3\n# envvault:local\nDB=/a\n')
+    await pushRepo(a, 'ap1')
+
+    const b2 = await machine('b')
+    const { key, vaultId } = await b2.open()
+    expect((await rows(b2))['ap1']).toBe('conflict')
+    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toBeNull()
+    expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=2\nB_ONLY=1\n# envvault:local\nDB=/b\n')
+
+    // Resolve by hand (keep vault), then let v4 arrive automatically.
+    await pullRepo(b2, 'ap1')
+    const entry = join(vaultDir, 'ap1.env.enc')
+    const v3 = readFileSync(entry)
+    const a2 = await machine('a')
+    writeFileSync(envA('ap1'), 'A=4\n# envvault:local\nDB=/a\n')
+    await pushRepo(a2, 'ap1')
+    const b3 = await machine('b')
+    const k3 = await b3.open()
+    expect(await b3.sync.autoPull(k3.key, k3.vaultId, 'ap1')).toMatchObject({
+      vault: { version: 4 }
+    })
+
+    // Someone puts v3 back: that's a rollback, never pulled automatically.
+    writeFileSync(entry, v3)
+    expect((await rows(b3))['ap1']).toBe('conflict')
+    expect(await b3.sync.autoPull(k3.key, k3.vaultId, 'ap1')).toBeNull()
+    expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=4\n# envvault:local\nDB=/b\n')
+  })
+
+  it('skips a repo whose .env is not git-ignored', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'ap2', { '.gitignore': IGNORE, '.env': 'X=1\n' })
+    await pushRepo(a, 'ap2')
+    const b = await machine('b')
+    makeRepo(projB, 'ap2', {})
+    const { key, vaultId } = await b.open()
+    expect((await rows(b))['ap2']).toBe('vault-newer')
+    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toBeNull()
+    expect(existsSync(envB('ap2'))).toBe(false)
+  })
+
+  it('creates a missing .env, both for a new clone and after it was deleted', async () => {
+    const b = await machine('b')
+    writeFileSync(join(projB, 'ap2', '.gitignore'), IGNORE)
+    const { key, vaultId } = await b.open()
+    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toMatchObject({ status: 'in-sync' })
+    expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
+
+    rmSync(envB('ap2'))
+    expect((await rows(b))['ap2']).toBe('vault-newer')
+    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toMatchObject({ status: 'in-sync' })
+    expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
+  })
+
+  it('runs a pass only while unlocked and with the setting on (the default)', async () => {
+    const a = await machine('a')
+    writeFileSync(envA('ap2'), 'X=2\n')
+    await pushRepo(a, 'ap2')
+
+    const b = await machine('b')
+    expect((await b.config.getConfig()).autoPull).toBe(true)
+    expect(await b.autopull.runAutoPull()).toEqual([])
+
+    const { key, vaultId } = await b.open()
+    b.session.unlock(key, vaultId, 5)
+    try {
+      await b.config.updateConfig({ autoPull: false })
+      expect(await b.autopull.runAutoPull()).toEqual([])
+      expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
+
+      await b.config.updateConfig({ autoPull: true })
+      const pulled = await b.autopull.runAutoPull()
+      expect(pulled.map((r) => r.name)).toContain('ap2')
+      expect(pulled.every((r) => r.status === 'in-sync')).toBe(true)
+      expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=2\n')
+    } finally {
+      b.session.lock()
+    }
+    expect(await b.autopull.runAutoPull()).toEqual([])
   })
 })
 

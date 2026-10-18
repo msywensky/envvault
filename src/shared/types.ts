@@ -89,6 +89,8 @@ export interface Settings {
   machineName: string
   /** Compare .env with .env.example in the push and pull dialogs. */
   checkExample: boolean
+  /** Pull one-sided vault changes in the background while unlocked. */
+  autoPull: boolean
 }
 
 /**

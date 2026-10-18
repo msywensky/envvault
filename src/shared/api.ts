@@ -50,6 +50,7 @@ export interface EnvVaultApi {
     autoLockMinutes: number
     machineName: string
     checkExample: boolean
+    autoPull: boolean
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
@@ -70,4 +71,9 @@ export interface EnvVaultApi {
   addGitignore(repoName: string): R<'repo:addGitignore'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
+  /**
+   * Called with the rows automatic pull just pulled. Must not trigger IPC:
+   * every request counts as activity and would keep the vault unlocked.
+   */
+  onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
 }

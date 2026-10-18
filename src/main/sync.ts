@@ -364,6 +364,35 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
 }
 
 /**
+ * Pull without review when the change is one-sided: the vault copy is newer
+ * and the local .env is unchanged since this machine's last sync (or
+ * missing), and git would ignore what a pull writes. Anything else
+ * (conflict, rollback, git not set up) is left for the user. Returns the
+ * updated row, or null if it didn't pull.
+ */
+export function autoPull(
+  key: Uint8Array,
+  vaultId: string,
+  repoName: string
+): Promise<RepoRow | null> {
+  return withSnapshot(key, repoName, async (s) => {
+    if (!s.payload || !s.vault) return null
+    const last = await getLast(vaultId, s.id)
+    const status = computeStatus({
+      repoExists: true,
+      localHash: s.syncedHash,
+      vault: s.vault,
+      last
+    })
+    if (status !== 'vault-newer') return null
+    const git = await ignoreStatus(s.repoDir)
+    if (!git.ignored || !git.backupIgnored || git.tracked) return null
+    await applyPull(s, s.payload, s.vault, vaultId)
+    return { name: repoName, status: 'in-sync', hasEnv: true, vault: s.vault, error: null }
+  })
+}
+
+/**
  * Write the vault copy, merged with this machine's machine-specific lines,
  * over the local .env (backing it up first) and record the sync. The caller
  * has checked that .env is git-ignored and untracked. Returns the backup's
