@@ -18,7 +18,10 @@ export const CH = {
   pullRawDiff: 'repo:pullRawDiff',
   openEditor: 'repo:openEditor',
   saveEdit: 'repo:saveEdit',
-  addGitignore: 'repo:addGitignore'
+  addGitignore: 'repo:addGitignore',
+  skillStatus: 'skill:status',
+  installSkill: 'skill:install',
+  removeSkill: 'skill:remove'
 } as const
 
 export type Channel = (typeof CH)[keyof typeof CH]

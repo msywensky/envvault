@@ -13,7 +13,8 @@ import type {
   RepoRow,
   SaveEditRequest,
   SaveEditResult,
-  Settings
+  Settings,
+  SkillInfo
 } from './types'
 
 // Response payload for each channel. main's `handle()` and the preload's
@@ -36,6 +37,9 @@ export interface Responses {
   'repo:openEditor': EditorData
   'repo:saveEdit': SaveEditResult
   'repo:addGitignore': GitignoreResult
+  'skill:status': SkillInfo
+  'skill:install': SkillInfo
+  'skill:remove': SkillInfo
 }
 
 type R<C extends keyof Responses> = Promise<Result<Responses[C]>>
@@ -70,6 +74,10 @@ export interface EnvVaultApi {
   /** Apply edits to the vault copy, if it is still the one openEditor returned. */
   saveEdit(request: SaveEditRequest): R<'repo:saveEdit'>
   addGitignore(repoName: string): R<'repo:addGitignore'>
+  skillStatus(): R<'skill:status'>
+  /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
+  installSkill(replace: boolean): R<'skill:install'>
+  removeSkill(): R<'skill:remove'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
   /**

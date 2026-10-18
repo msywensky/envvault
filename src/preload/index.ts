@@ -32,6 +32,9 @@ const api: EnvVaultApi = {
   openEditor: (repoName) => invoke(CH.openEditor, { repoName }),
   saveEdit: (request) => invoke(CH.saveEdit, request),
   addGitignore: (repoName) => invoke(CH.addGitignore, { repoName }),
+  skillStatus: () => invoke(CH.skillStatus),
+  installSkill: (replace) => invoke(CH.installSkill, { replace }),
+  removeSkill: () => invoke(CH.removeSkill),
   onLocked: (callback) => {
     // Never hand the IPC event to the page: event.sender is ipcRenderer.
     const listener = (): void => callback()

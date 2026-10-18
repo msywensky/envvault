@@ -10,6 +10,7 @@ import { AppError } from './errors'
 import { handle } from './ipc'
 import { exclusive } from './mutex'
 import * as session from './session'
+import * as skill from './skill'
 import * as sync from './sync'
 import { createVault, folderState, openVault } from './vault'
 import { getMainWindow } from './window'
@@ -96,6 +97,11 @@ export function registerIpc(): void {
   handle(CH.addGitignore, ({ repoName }) =>
     exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
   )
+
+  // The Claude Code skill holds no secrets, so these work while locked.
+  handle(CH.skillStatus, () => skill.skillStatus())
+  handle(CH.installSkill, ({ replace }) => skill.installSkill(replace))
+  handle(CH.removeSkill, () => skill.removeSkill())
 }
 
 async function pickFolder(which: 'projects' | 'vault'): Promise<Settings | null> {

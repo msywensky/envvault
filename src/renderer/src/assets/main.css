@@ -734,6 +734,11 @@ code,
   font-style: italic;
 }
 
+/* The skill field reuses .folder for its row; its state is a word, not a path. */
+.skill-state {
+  flex: 1;
+}
+
 /* ---------- toasts ---------- */
 
 .toasts {

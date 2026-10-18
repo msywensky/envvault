@@ -58,5 +58,8 @@ export const requestSchemas = {
     add: z.array(EnvChange).max(1000),
     remove: z.array(EnvKey).max(1000)
   }),
-  [CH.addGitignore]: z.strictObject({ repoName: RepoName })
+  [CH.addGitignore]: z.strictObject({ repoName: RepoName }),
+  [CH.skillStatus]: NoArgs,
+  [CH.installSkill]: z.strictObject({ replace: z.boolean() }),
+  [CH.removeSkill]: NoArgs
 } as const

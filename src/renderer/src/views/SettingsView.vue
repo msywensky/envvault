@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import FolderField from '../components/FolderField.vue'
+import SkillField from '../components/SkillField.vue'
 import { run, store, toast } from '../store'
 import { machineNameProblem } from '../status'
 
@@ -118,6 +119,7 @@ async function save(): Promise<void> {
             is unlocked. Any program running as you can use it. It never receives values.
           </p>
         </div>
+        <SkillField />
         <div class="row">
           <span class="grow" />
           <button type="submit" class="btn btn-primary" :disabled="busy || !!nameProblem">
