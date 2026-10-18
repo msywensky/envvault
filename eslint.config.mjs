@@ -88,6 +88,34 @@ export default defineConfig(
     }
   },
 
+  // A store moves ciphertext and meta.json by name (src/main/store/types.ts):
+  // nothing that holds a key or plaintext.
+  {
+    files: ['src/main/store/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '**/session',
+                '**/kdf',
+                '**/sync',
+                '**/vault',
+                '**/localkeys',
+                '**/core/crypto',
+                '**/core/envdiff',
+                '**/core/envedit'
+              ],
+              message: 'A store moves ciphertext only; it never sees keys or plaintext.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+
   // The renderer talks to the system only through window.envvault.
   {
     files: ['src/renderer/**/*.{ts,vue}'],

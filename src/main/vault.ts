@@ -1,10 +1,8 @@
-// The vault folder (e.g. inside Google Drive):
-//   meta.json            plaintext: format version, vaultId, KDF params, salt, keyCheck
-//   <id>.env.enc         one encrypted entry per repo; <id> is the lowercased repo name
-//   .<file>.<hex>.tmp    in-flight atomic writes (ours; cleaned up when stale)
-// Anything else (Drive conflict copies, user files) is ignored.
+// The vault: its policy, over a store that only moves bytes (store/types.ts).
+//   meta.json      plaintext: format version, vaultId, KDF params, salt, keyCheck
+//   <id>.env.enc   one encrypted entry per repo; <id> is the lowercased repo name
+// Anything else in the store is ignored.
 import { randomUUID } from 'node:crypto'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import {
   KDF_DEFAULTS,
   MetaInvalidError,
@@ -17,17 +15,16 @@ import {
   verifyKeyCheck,
   type Payload
 } from '../core/crypto'
-import { isValidRepoName, resolveInside } from '../core/paths'
+import { isValidRepoName } from '../core/paths'
 import type { VaultFolderState } from '../shared/types'
 import { getConfig } from './config'
 import { AppError } from './errors'
-import { atomicWrite, isErrno, writeNew } from './fsutil'
 import { deriveKeyInWorker } from './kdf'
+import { FolderStore } from './store/folder'
+import { StoreExistsError, type VaultStore } from './store/types'
 
 const META = 'meta.json'
 const ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.env\.enc$/
-const TEMP_RE = /^\.(?:meta\.json|[a-z0-9][a-z0-9._-]*\.env\.enc)\.[0-9a-f]{16}\.tmp$/
-const STALE_TEMP_MS = 10 * 60_000
 export const MIN_PASSWORD_CHARS = 12
 
 /** The vault entry id for a repo: case-insensitive, like the filesystems. */
@@ -41,8 +38,8 @@ export interface OpenedVault {
 }
 
 /**
- * The vault folder, with everything that touches it. Nothing outside this
- * module reads or writes the vault except through one of these.
+ * The vault, with everything that touches it. Nothing outside this module
+ * reads or writes the vault except through one of these.
  */
 export interface Vault {
   state(): Promise<FolderState>
@@ -56,15 +53,21 @@ export interface Vault {
   write(id: string, bytes: Uint8Array): Promise<void>
 }
 
-export function vaultAt(vaultPath: string): Vault {
+/** The vault kept in `store`. */
+export function vaultOn(store: VaultStore): Vault {
   return {
-    state: () => folderState(vaultPath),
-    create: (password) => createVault(vaultPath, password),
-    open: (password) => openVault(vaultPath, password),
-    list: () => listEntryIds(vaultPath),
-    read: (key, id) => readEntry(vaultPath, key, id),
-    write: (id, bytes) => writeEntry(vaultPath, id, bytes)
+    state: () => vaultState(store),
+    create: (password) => createVault(store, password),
+    open: (password) => openVault(store, password),
+    list: () => listEntryIds(store),
+    read: (key, id) => readEntry(store, key, id),
+    write: (id, bytes) => store.put(entryFile(id), bytes)
   }
+}
+
+/** The vault in a folder. */
+export function vaultAt(vaultPath: string): Vault {
+  return vaultOn(new FolderStore(vaultPath))
 }
 
 /** The vault chosen in Settings, or null if none is chosen yet. */
@@ -82,32 +85,28 @@ export async function requireVault(): Promise<Vault> {
 
 type FolderState = Exclude<VaultFolderState, 'not-configured'>
 
-async function folderState(vaultPath: string): Promise<FolderState> {
-  try {
-    if (!(await stat(vaultPath)).isDirectory()) return 'folder-missing'
-  } catch {
-    return 'folder-missing'
-  }
-  try {
-    await stat(resolveInside(vaultPath, META))
-    return 'ready'
-  } catch (err) {
-    if (!isErrno(err, 'ENOENT')) throw err
-  }
-  return (await listEntryIds(vaultPath)).length > 0 ? 'meta-missing' : 'empty'
+async function vaultState(store: VaultStore): Promise<FolderState> {
+  if (!(await store.reachable())) return 'folder-missing'
+  const names = await store.list()
+  if (names.includes(META)) return 'ready'
+  return entryIds(names).length > 0 ? 'meta-missing' : 'empty'
 }
 
-async function listEntryIds(vaultPath: string): Promise<string[]> {
+function entryIds(names: string[]): string[] {
   const ids: string[] = []
-  for (const name of await readdir(vaultPath)) {
+  for (const name of names) {
     const id = ENTRY_RE.exec(name)?.[1]
     if (id && isValidRepoName(id)) ids.push(id)
   }
   return ids
 }
 
-async function requireFolder(vaultPath: string): Promise<FolderState> {
-  const state = await folderState(vaultPath)
+async function listEntryIds(store: VaultStore): Promise<string[]> {
+  return entryIds(await store.list())
+}
+
+async function requireFolder(store: VaultStore): Promise<FolderState> {
+  const state = await vaultState(store)
   if (state === 'folder-missing') {
     throw new AppError(
       'VAULT_FOLDER_MISSING',
@@ -117,8 +116,8 @@ async function requireFolder(vaultPath: string): Promise<FolderState> {
   return state
 }
 
-async function createVault(vaultPath: string, password: string): Promise<OpenedVault> {
-  const state = await requireFolder(vaultPath)
+async function createVault(store: VaultStore, password: string): Promise<OpenedVault> {
+  const state = await requireFolder(store)
   if (state === 'ready') throw new AppError('VAULT_EXISTS', 'This folder already contains a vault.')
   if (state === 'meta-missing') {
     throw new AppError(
@@ -137,15 +136,15 @@ async function createVault(vaultPath: string, password: string): Promise<OpenedV
     const meta = serializeMeta({ vaultId, kdf, salt, keyCheck: await makeKeyCheck(key, vaultId) })
     // Re-check right before writing: another machine may have created one
     // and Drive synced it in while we were deriving the key.
-    if ((await folderState(vaultPath)) !== 'empty') {
+    if ((await vaultState(store)) !== 'empty') {
       throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
     }
-    // Exclusive create, never rename-over: if a meta.json lands in the
-    // meantime it wins, and we fail instead of orphaning its entries.
+    // Exclusive create: if a meta.json lands in the meantime it wins, and we
+    // fail instead of orphaning its entries.
     try {
-      await writeNew(vaultPath, META, JSON.stringify(meta, null, 2) + '\n', 0o644)
+      await store.create(META, Buffer.from(JSON.stringify(meta, null, 2) + '\n', 'utf8'))
     } catch (err) {
-      if (isErrno(err, 'EEXIST')) {
+      if (err instanceof StoreExistsError) {
         throw new AppError('VAULT_EXISTS', 'A vault appeared in this folder; unlock it instead.')
       }
       throw err
@@ -157,19 +156,13 @@ async function createVault(vaultPath: string, password: string): Promise<OpenedV
   }
 }
 
-async function openVault(vaultPath: string, password: string): Promise<OpenedVault> {
-  await requireFolder(vaultPath)
-  let raw: string
-  try {
-    raw = await readFile(resolveInside(vaultPath, META), 'utf8')
-  } catch (err) {
-    if (isErrno(err, 'ENOENT'))
-      throw new AppError('VAULT_NOT_FOUND', 'No vault (meta.json) in this folder.')
-    throw err
-  }
+async function openVault(store: VaultStore, password: string): Promise<OpenedVault> {
+  await requireFolder(store)
+  const raw = await store.get(META)
+  if (!raw) throw new AppError('VAULT_NOT_FOUND', 'No vault (meta.json) in this folder.')
   let meta
   try {
-    meta = parseMeta(JSON.parse(raw))
+    meta = parseMeta(JSON.parse(Buffer.from(raw).toString('utf8')))
   } catch (err) {
     if (err instanceof MetaInvalidError) throw new AppError('META_INVALID', err.message)
     throw new AppError('META_INVALID', 'meta.json is not valid JSON.')
@@ -179,7 +172,7 @@ async function openVault(vaultPath: string, password: string): Promise<OpenedVau
     key.fill(0)
     throw new AppError('WRONG_PASSWORD', 'Wrong master password (or meta.json was modified).')
   }
-  await cleanupStaleTemp(vaultPath).catch(() => undefined)
+  await store.cleanUp().catch(() => undefined)
   return { key, vaultId: meta.vaultId }
 }
 
@@ -195,14 +188,9 @@ async function derive(
   }
 }
 
-async function readEntry(vaultPath: string, key: Uint8Array, id: string): Promise<Payload | null> {
-  let bytes: Buffer
-  try {
-    bytes = await readFile(resolveInside(vaultPath, entryFile(id)))
-  } catch (err) {
-    if (isErrno(err, 'ENOENT')) return null
-    throw err
-  }
+async function readEntry(store: VaultStore, key: Uint8Array, id: string): Promise<Payload | null> {
+  const bytes = await store.get(entryFile(id))
+  if (!bytes) return null
   try {
     return await decryptPayload(key, id, bytes)
   } catch (err) {
@@ -213,23 +201,5 @@ async function readEntry(vaultPath: string, key: Uint8Array, id: string): Promis
       )
     }
     throw err
-  }
-}
-
-async function writeEntry(vaultPath: string, id: string, bytes: Uint8Array): Promise<void> {
-  // atomicWrite's default temp name (".<file>.<16 hex>.tmp", matched by
-  // TEMP_RE) has a random suffix, so two machines' in-flight temp files
-  // (which Drive may sync) never collide.
-  await atomicWrite(vaultPath, entryFile(id), bytes, { mode: 0o644 })
-}
-
-/** Remove our own temp files left by a crash. Recent ones may be in flight. */
-async function cleanupStaleTemp(vaultPath: string): Promise<void> {
-  const now = Date.now()
-  for (const name of await readdir(vaultPath)) {
-    if (!TEMP_RE.test(name)) continue
-    const file = resolveInside(vaultPath, name)
-    const info = await stat(file)
-    if (now - info.mtimeMs > STALE_TEMP_MS) await rm(file, { force: true })
   }
 }
