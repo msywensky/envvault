@@ -10,7 +10,7 @@ const busy = ref(false)
 const machineName = ref(store.settings?.machineName ?? '')
 const nameProblem = computed(() => machineNameProblem(machineName.value))
 
-const ready = computed(() => Boolean(store.settings?.projectsPath && store.settings.vaultPath))
+const ready = computed(() => Boolean(store.settings?.projectsPath && store.settings.vault))
 const wasConfigured = computed(() => store.app?.configured ?? false)
 
 async function pick(which: 'projects' | 'vault'): Promise<void> {
@@ -69,7 +69,7 @@ async function back(): Promise<void> {
         />
         <FolderField
           label="Vault folder"
-          :path="store.settings?.vaultPath ?? null"
+          :path="store.settings?.vault?.path ?? null"
           hint="A folder synced between your machines, e.g. My Drive/EnvVault. It only ever holds encrypted files."
           :busy="busy"
           @pick="pick('vault')"

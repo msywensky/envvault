@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { Result } from '../../../shared/result'
 import { call, refreshState, store } from '../store'
+import { vaultLabel } from '../vault'
 
 const MIN_CHARS = 12
 
@@ -157,8 +158,8 @@ watch(vault, focus)
         <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
 
         <div class="row small">
-          <span class="muted truncate grow" :title="store.settings?.vaultPath ?? ''">
-            {{ store.settings?.vaultPath }}
+          <span class="muted truncate grow" :title="vaultLabel(store.settings?.vault)">
+            {{ vaultLabel(store.settings?.vault) }}
           </span>
           <button type="button" class="btn-link btn" @click="store.view = 'setup'">
             Change folders

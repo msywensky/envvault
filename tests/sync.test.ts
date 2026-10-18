@@ -72,7 +72,10 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   const session = await import('../src/main/session')
   const autopull = await import('../src/main/autopull')
   const clicommands = await import('../src/main/clicommands')
-  await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
+  await config.updateConfig({
+    projectsPath: name === 'a' ? projA : projB,
+    vault: { kind: 'folder', path: vaultDir }
+  })
   const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
     vault.vaultAt(vaultDir).open(PASSWORD)
   return { config, vault, sync, session, autopull, clicommands, open }
@@ -1007,13 +1010,13 @@ describe('the configured vault', () => {
   it('comes from Settings, and is required wherever a vault is needed', async () => {
     const m = await machine('a')
     expect(await (await m.vault.requireVault()).state()).toBe('ready')
-    await m.config.updateConfig({ vaultPath: null })
+    await m.config.updateConfig({ vault: null })
     try {
       expect(await m.vault.configuredVault()).toBeNull()
       expect(await errorCode(m.vault.requireVault())).toBe('NOT_CONFIGURED')
       expect(await errorCode(m.sync.listRepos(new Uint8Array(32), 'any'))).toBe('NOT_CONFIGURED')
     } finally {
-      await m.config.updateConfig({ vaultPath: vaultDir })
+      await m.config.updateConfig({ vault: { kind: 'folder', path: vaultDir } })
     }
     expect(await (await m.vault.configuredVault())?.state()).toBe('ready')
   })

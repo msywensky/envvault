@@ -25,6 +25,11 @@ export const MachineName = z
 
 export const AutoLockMinutes = z.int().min(1).max(120)
 
+/** Where the vault is kept (config.json only: the renderer never sends one). */
+export const VaultLocation = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('folder'), path: z.string().min(1) })
+])
+
 export const requestSchemas = {
   [CH.getState]: NoArgs,
   [CH.activity]: NoArgs,

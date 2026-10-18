@@ -16,7 +16,7 @@ import {
   type Payload
 } from '../core/crypto'
 import { isValidRepoName } from '../core/paths'
-import type { VaultFolderState } from '../shared/types'
+import type { VaultFolderState, VaultLocation } from '../shared/types'
 import { getConfig } from './config'
 import { AppError } from './errors'
 import { deriveKeyInWorker } from './kdf'
@@ -78,15 +78,20 @@ export function vaultOn(store: VaultStore): Vault {
   }
 }
 
+/** The vault at `location`. */
+export function vaultFor(location: VaultLocation): Vault {
+  return vaultOn(storeFor(location))
+}
+
 /** The vault in a folder. */
 export function vaultAt(vaultPath: string): Vault {
-  return vaultOn(storeFor({ kind: 'folder', path: vaultPath }))
+  return vaultFor({ kind: 'folder', path: vaultPath })
 }
 
 /** The vault chosen in Settings, or null if none is chosen yet. */
 export async function configuredVault(): Promise<Vault | null> {
-  const { vaultPath } = await getConfig()
-  return vaultPath ? vaultAt(vaultPath) : null
+  const { vault } = await getConfig()
+  return vault ? vaultFor(vault) : null
 }
 
 /** The vault chosen in Settings, or NOT_CONFIGURED. */

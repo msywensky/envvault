@@ -82,9 +82,12 @@ export interface RawDiff {
   lines: RawDiffLine[]
 }
 
+/** Where the vault is kept. */
+export type VaultLocation = { kind: 'folder'; path: string }
+
 export interface Settings {
   projectsPath: string | null
-  vaultPath: string | null
+  vault: VaultLocation | null
   autoLockMinutes: number
   machineName: string
   /** Compare .env with .env.example in the push and pull dialogs. */

@@ -2,7 +2,7 @@ import { dialog } from 'electron'
 import { relative, resolve } from 'node:path'
 import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
-import type { Settings } from '../shared/types'
+import type { Settings, VaultLocation } from '../shared/types'
 import { kickAutoPull } from './autopull'
 import { setCliAccess } from './cliserver'
 import { getConfig, updateConfig } from './config'
@@ -121,27 +121,37 @@ async function pickFolder(which: 'projects' | 'vault'): Promise<Settings | null>
 
 async function saveFolder(which: 'projects' | 'vault', picked: string): Promise<Settings> {
   const cfg = await getConfig()
-  const other = which === 'projects' ? cfg.vaultPath : cfg.projectsPath
+  const other = which === 'projects' ? folderOf(cfg.vault) : cfg.projectsPath
   if (other && overlaps(picked, other)) {
     throw new AppError(
       'FOLDERS_OVERLAP',
       'The projects folder and the vault folder must be separate (neither inside the other).'
     )
   }
-  if (which === 'vault') {
-    if (cfg.vaultPath === picked) return cfg
-    // The key belongs to the old vault: wipe it now, but tell the renderer
-    // only after the new path is saved, so its refresh sees the new folder.
-    const wasUnlocked = session.isUnlocked()
-    session.lock({ notify: false })
-    try {
-      return await updateConfig({ vaultPath: picked })
-    } finally {
-      if (wasUnlocked) session.notifyLocked()
-    }
-  }
+  if (which === 'vault') return saveVault({ kind: 'folder', path: picked })
   return updateConfig({ projectsPath: picked })
 }
+
+/** Switch to another vault. Run inside exclusive(). */
+async function saveVault(location: VaultLocation): Promise<Settings> {
+  const cfg = await getConfig()
+  if (sameLocation(cfg.vault, location)) return cfg
+  // The key belongs to the old vault: wipe it now, but tell the renderer
+  // only after the new location is saved, so its refresh sees the new vault.
+  const wasUnlocked = session.isUnlocked()
+  session.lock({ notify: false })
+  try {
+    return await updateConfig({ vault: location })
+  } finally {
+    if (wasUnlocked) session.notifyLocked()
+  }
+}
+
+const folderOf = (location: VaultLocation | null): string | null =>
+  location?.kind === 'folder' ? location.path : null
+
+const sameLocation = (a: VaultLocation | null, b: VaultLocation): boolean =>
+  a?.kind === b.kind && a.path === b.path
 
 function overlaps(a: string, b: string): boolean {
   return relative(resolve(a), resolve(b)) === '' || isInside(a, b) || isInside(b, a)
