@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-EnvVault is an Electron + Vue 3 + TypeScript desktop app (macOS and Windows) that syncs each repo's `.env` between machines through an encrypted vault folder (e.g. a Google Drive folder). README.md holds the full security design, threat model and vault file format; read it before changing anything in crypto, IPC or file handling.
+EnvVault is an Electron + Vue 3 + TypeScript desktop app (macOS and Windows) that syncs each repo's `.env` between machines through an encrypted vault: a synced folder (e.g. a Google Drive folder) or a private git repository. README.md holds the full security design, threat model and vault file format; read it before changing anything in crypto, IPC or file handling.
 
 Requirements: Node 22+ (`engines`), and `git` on PATH (the integration tests and the app both shell out to it).
 
@@ -33,7 +33,7 @@ npm run format                               # prettier
 
 Six source areas with import boundaries **enforced by ESLint** (`eslint.config.mjs`), so a wrong import fails lint:
 
-- `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, machine-specific keys, path safety). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
+- `src/core/` — pure logic (crypto, `.env` parsing/key diff, line diff, three-way sync status, machine-specific keys, path safety, git remote URLs). No Electron, `fs` or `child_process` (`node:crypto` and `node:path` are allowed); must not import main or renderer. Unit-tested.
 - `src/main/` — Electron main process. Owns the key, all file system and git access.
 - `src/preload/` — sandboxed; may import only `electron` and relative files (they get bundled). Exposes named functions as `window.envvault`, never `ipcRenderer` or IPC event objects.
 - `src/shared/` — channel names and types used by all processes. Relative imports only (no packages, not even zod), because it reaches the sandboxed preload and the renderer. Request schemas therefore live in `src/main/schemas.ts`, not here.
@@ -62,7 +62,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 
 ### Session, key and concurrency
 
-- `src/main/session.ts` holds the derived key. Use `session.withKey(fn)`, which hands `fn` a private copy that is wiped afterwards; never hold the session key directly. The key is wiped on lock, idle timeout, window close, sleep/screen lock, and vault-folder change.
+- `src/main/session.ts` holds the derived key. Use `session.withKey(fn)`, which hands `fn` a private copy that is wiped afterwards; never hold the session key directly. The key is wiped on lock, idle timeout, window close, sleep/screen lock, and a change of vault.
 - `exclusive()` (`src/main/mutex.ts`) serializes every write or session change. It is **not re-entrant**: never call it from inside another `exclusive()` callback, and don't add it inside `src/main/sync.ts` (the handlers already wrap those calls). Write handlers take the key _inside_ `exclusive()`, so a queued operation fails with `LOCKED` rather than using a stale key. `state.ts` and `config.ts` serialize their own read-modify-write with separate `createSerial()` queues.
 - Argon2id key derivation runs in a worker (`kdf.ts` + `kdf.worker.ts`, imported via electron-vite's `?modulePath`) so the main thread doesn't freeze.
 
@@ -72,12 +72,13 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - **Plaintext handling.** `withSnapshot` reads the local file and the decrypted vault payload, and zero-fills the plaintext buffers afterwards.
 - **Status** comes from `core/status.ts`: local vs vault vs this machine's last sync. The last sync is stored per vault in `state.json` via `src/main/state.ts`.
 - **The vault.** Everything outside `src/main/vault.ts` reaches the vault through a `Vault` object (`state`, `create`, `open`, `snapshot`, `write`):
+  - `vaultFor(location)` gives the vault at a `VaultLocation` (`{ kind: 'folder', path }` or `{ kind: 'git', url, branch }`, `Settings.vault`);
   - `vaultAt(path)` gives the vault in a folder;
   - `vaultOn(store)` gives the vault in any store;
   - `configuredVault()` returns the one chosen in Settings, or null;
   - `requireVault()` is the same but throws `NOT_CONFIGURED`.
 
-  `sync.ts`'s `Configured` omits `vaultPath`, so sync can't reach the vault by path.
+  `sync.ts`'s `Configured` replaces the location with the `Vault`, so sync can't reach the vault by path or URL. `config.ts` loads an old `vaultPath` as a folder location and saves only the new shape. Switching vaults goes through `saveVault()` in `handlers.ts` (inside `exclusive()`), which locks first.
 
 - **Snapshots and compare-and-swap.** Reads go through `vault.snapshot()`, whose `read(key, id)` returns the payload with its storage `version`. Take one snapshot per operation: `listRepos` uses one for every row, and `withSnapshot` (`Snapshot.vaultVersion`) one per push or pull. `vault.write(id, bytes, expected)` writes only if the entry is still at that version (`null`: there is none), and otherwise throws `VAULT_CHANGED`; `saveEdit` rewords it with the editor's message. This is on top of the content-level `expected` the user reviewed, which stays.
 
@@ -91,9 +92,22 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
     - `cleanUp` runs after unlock.
   - **The implementations:**
     - `FolderStore` (`store/folder.ts`): best-effort, as a folder allows. A snapshot lists the folder now and reads each file when asked; the version is the sha256 of the bytes. Writes are queued (`createSerial`), re-read the file and compare its hash, then `atomicWrite`: exact within this process, as good as Drive allows between machines. It removes its stale `.<name>.<hex>.tmp` files, and `names` drops anything that isn't a valid name, such as Drive conflict copies;
+    - `GitStore` (`store/git.ts`): see Git vaults below;
     - `MemoryStore` (`store/memory.ts`): the reference implementation, for tests, with exact snapshots. Settings never selects it.
-  - **`storeFor(location)`** (`store/index.ts`) returns one store instance per location, so a store can queue its own writes. `vaultAt` uses it.
-  - **New stores** (git, S3-compatible) must pass `tests/store.test.ts`.
+  - **`storeFor(location)`** (`store/index.ts`) returns one store instance per location, so a store can queue its own writes and a git store can reuse what it fetched. `vaultFor` uses it; `discardStore` forgets a refused repository's store and deletes its mirror.
+  - **New stores** (S3-compatible, say) must pass `tests/store.test.ts`.
+  - **Messages by kind.** `vault.ts` words unreachable, meta-missing and exists errors by `store.kind` (folder or repository); an unreachable git vault gives `GIT_VAULT_UNREACHABLE` with git's own reason.
+
+- **Git vaults** (`src/main/store/git.ts`, `gitprivacy.ts`, `src/main/gitvault.ts`, `src/main/gh.ts`, `src/core/gitremote.ts`).
+  - **The mirror:** a bare repo in `<userData>/git-vaults/<16 hex of sha256(url, branch)>.git` (`git init --bare --template=`), `origin` = the URL. Never a working tree. `refs/remotes/origin/<branch>` tracks the last head fetched or pushed, which keeps its objects from gc.
+  - **Snapshot:** `ls-remote` (reused for `cacheMs`, 10 s; single-flight; a generation counter stops an older listing from replacing a head we pushed or fetched), then `fetch` only if that commit is missing. One commit per snapshot. `names` are the top-level regular files (mode 100644/100755) with valid store names; versions are blob ids. README, directories and links are ignored.
+  - **Write:** inside the store's own queue (also used by fetch, update-ref, gc, init): check `expected` against the head's tree, `hash-object`, `mktree -z` from the head's raw `ls-tree -z` records (other entries byte for byte), `commit-tree` as `EnvVault <envvault@users.noreply.invalid>`, then `push --porcelain --force-with-lease=refs/heads/<b>:<head>` (empty for a new branch). Up to 3 attempts: a `[rejected]` push fetches and rebuilds on the new head; `[remote rejected]` is a `GIT_ERROR`. After a push, the tracking ref and the cached head are updated, so the next snapshot sees it.
+  - **Hardening** (`hardening()`, `vaultEnv()`): `--git-dir` explicitly, `core.fsmonitor=false`, `core.hooksPath=<mirror>/no-hooks`, `protocol.allow=never` with only `https` and `ssh` allowed, `fetch.fsckObjects` and `transfer.fsckObjects`, `push.gpgSign=false`, `commit-tree --no-gpg-sign`, `push --no-verify`, `GIT_TERMINAL_PROMPT=0`, `LC_ALL=C`, inherited `GIT_DIR`-style variables removed, and `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` only when neither `GIT_SSH`/`GIT_SSH_COMMAND` nor `core.sshCommand` is set. Timeouts: 10 s for `ls-remote`, 30 s otherwise; output is capped (`runProcess` in `src/main/exec.ts`).
+  - **`check()`** (before create and unlock): the branch exists or the repository is empty (`GIT_VAULT_BRANCH_MISSING`), then the privacy check.
+  - **Privacy check** (`checkPrivate` in `store/gitprivacy.ts`): `git ls-remote` of the `httpsFormOf` URL with `anonymousEnv()` (an environment built from scratch: `PATH`, proxies and Windows essentials only; empty `HOME` and `GIT_CONFIG_GLOBAL`; `GIT_CONFIG_NOSYSTEM`; `GIT_CEILING_DIRECTORIES`), `ANONYMOUS_ARGS` (`credential.helper=`, `core.askPass=`, https only), cwd an empty temp folder. `classifyAnonymous`: exit 0 is public (`GIT_VAULT_PUBLIC`); only a server asking for credentials (401/403, "could not read Username", "Authentication failed") is private; anything else, a 404 included, is `GIT_VAULT_UNVERIFIED`. No override. Needs git 2.32 (`requireGitVersion`, `GIT_TOO_OLD`).
+  - **Choosing one** (`prepareGitVault`, outside `exclusive()`; the save inside it): `parseGitRemote`, git version, `defaultBranch()` (`ls-remote --symref` with your credentials, `main` for an empty repo), `checkPrivate`, then `holdsOtherFiles` refuses anything but vault files and README/LICENSE/`.gitignore`/`.gitattributes` (`GIT_VAULT_NOT_EMPTY`, mirror discarded).
+  - **Channels:** `settings:setGitVault { url }`; `git:ghStatus`, `git:listRepos`, `git:createRepo { name }` (then the same checks and save), `git:openNewRepoPage` (opens `NEW_REPO_PAGE`, a fixed URL). `gh.ts` finds `gh` like git, passes fixed arguments and a name matching `REPO_NAME_RE` (never an option), parses its JSON with zod and never logs it; each function takes an injectable `GhRunner`.
+  - **Tests only:** `GitStore`'s `allowLocal` allows local paths and `file://` and skips the privacy check; `cacheMs: 0` turns off listing reuse; `checkPrivacy` replaces the privacy check. Settings never sets them.
 
 - **Entry IDs.** A repo's vault entry ID is `entryId(name)` = the **lowercased** repo name (`src/main/vault.ts`). It is used for the file name, the encryption AAD and the `state.json` key.
 - **Errors in the list.** `listRepos` turns per-repo failures (a tampered entry, a symlinked `.env`) into rows with `status: 'error'` instead of failing the whole list.
@@ -139,12 +153,15 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - Background work must never make the renderer call IPC: every request resets the idle auto-lock (`ipcHooks.onAuthorizedCall`), so it would keep the vault unlocked. That's why `EV.autoPulled` and `EV.cliPushed` carry the updated rows and the renderer patches `store.repos` instead of refetching. Main-side background work uses `session.withKey`, which doesn't touch the timer.
 - Requests from the envvault socket never reset the idle timer either: they don't go through `ipcHooks`, so a script or Claude polling `status` can't keep the vault unlocked. Don't add a `touch()` there.
 - A store (`src/main/store/`) only ever sees encrypted entries and the plaintext `meta.json`, never a key or a value. ESLint stops store modules from importing `session`, `kdf`, `sync`, `vault`, `localkeys` and the crypto, env-diff and editor modules of `core`.
-- The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`).
+- The renderer never supplies file paths. Folders come from the native picker in main; repos are referenced by validated name (`isValidRepoName`), and paths are resolved with `resolveInside`/`isInside` (`src/core/paths.ts`). A git vault's URL is the one location the renderer sends (`setGitVault`, or a listed repo's URL round-tripping), and main parses it with `parseGitRemote` before git sees it: `https://`, `ssh://` or `user@host:path` only, no credentials, local paths, `file://`, other transports, whitespace or leading `-`. Its error messages never quote the URL. `GitStore` parses it again, so a hand-edited `config.json` can't reach git either.
 - `meta.json` in the vault is attacker-controlled. Read it only through `parseMeta` (`src/core/crypto.ts`), which bounds the KDF params to `KDF_DEFAULTS`..`KDF_MAX`; the key check is bound to the `vaultId`.
-- Run git only through `git()` in `src/main/git.ts`. It resolves an absolute git path from absolute PATH entries only, so a repo can't supply its own `git.exe`, and passes `-c core.fsmonitor=false`.
+- Run git only through `git()`/`runGit()` in `src/main/git.ts` (gh through `runGh` in `gh.ts`). Executables come from `findExecutable` (`src/main/exec.ts`), which uses absolute PATH entries only, so a repo can't supply its own `git.exe`. `git()` passes `-c core.fsmonitor=false`; git vault commands add the hardening above, and the privacy check its anonymous environment. Keep both lists intact.
+- A git vault's commits carry no machine name or user identity, only `EnvVault`; `updatedBy` stays inside the ciphertext.
 - The CSP is injected as a `<meta>` tag by a plugin in `electron.vite.config.ts` (strict in production, relaxed only for Vite dev). Don't add a second CSP header. Production `style-src 'self'` also blocks `style="..."` attributes, so put styles in `src/renderer/src/assets/main.css` (`:style` bindings are fine).
 
 ## Scope
+
+Git vaults don't yet cover: S3-compatible stores, choosing a branch, pruning history, `cat-file --batch` for many repos, or unlocking without network (`check()` needs the remote).
 
 v1 is manual-password unlock only. The `envvault` command does `status` and `push` only: no pull, no unlock. Bitwarden CLI unlock and a run mode (`envvault run`, starting a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a README threat-model update first.
 
@@ -161,10 +178,12 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{cliendpoint,crypto,envdiff,envedit,example,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{cliendpoint,crypto,envdiff,envedit,example,gitremote,linediff,localkeys,paths,status}.test.ts` unit-test `src/core/`. `gitremote.test.ts` covers URL parsing (accepted and refused forms), branch names, the https mapping and `classifyAnonymous` against real git stderr. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
-  - It mocks only `electron` (`app.getPath` returns a per-machine `userData`) and `../src/main/kdf` (fast KDF params).
-  - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData`.
+  - It mocks only `electron` (`app.getPath` returns a per-machine `userData`), `../src/main/kdf` (fast KDF params) and `../src/main/store/git` (`GitStore` with `allowLocal` and `cacheMs: 0`).
+  - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData` (`machine(name, { projects, vault })` for a git vault).
+  - `describe('git vault')` runs push → pull → edit → automatic pull between two machines over a local bare repository.
   - The symlink test is skipped on Windows.
-- `tests/store.test.ts` is the `VaultStore` contract, run with `describe.each` over every store (folder in a temp dir, memory): creating with `expected: null`, writes at the current and at a stale version, racing writes, versions read back, names, copied bytes. Then folder-only behaviour (temp files, conflict copies, a file changed outside the store). `tests/vault.test.ts` runs the vault policy on a `MemoryStore`: states, `check()` stopping create and open before the key is derived, create races, open failures, tampered and swapped entries, a write against a stale snapshot.
+- `tests/store.test.ts` is the `VaultStore` contract, run with `describe.each` over every store (folder in a temp dir, memory, git over a local bare repo): creating with `expected: null`, writes at the current and at a stale version, racing writes, versions read back, names, copied bytes. Then folder-only behaviour (temp files, conflict copies, a file changed outside the store) and git-only behaviour: two machines (conflict on one file, rebuild on another), a branch reset backwards (the lease), its own write seen through the cache, parallel snapshots, README/directories/links kept, commit identity, global hooks not run in the mirror, the privacy hook, invalid URLs, unreachable remotes. `tests/vault.test.ts` runs the vault policy on a `MemoryStore`: states, `check()` stopping create and open before the key is derived, create races, open failures, tampered and swapped entries, a write against a stale snapshot.
+- `tests/gitprivacy.test.ts` checks the anonymous environment shows no git config and drops askpass and config variables. `tests/gitvault.test.ts` covers `holdsOtherFiles` and URL refusals before git runs. `tests/gh.test.ts` runs `gh.ts` against a fake `GhRunner` (status, list parsing and order, create arguments and a taken name); the real `gh` is exercised by hand. `tests/config.test.ts` covers the `vaultPath` migration.
 - `tests/cli.test.ts` runs the envvault command (`src/cli/main.ts`) against the real socket server with a fake command table, in a short `/tmp` folder because Unix socket paths are limited to about 104 bytes. `tests/skill.test.ts` covers the skill text and installing it into a temp folder.

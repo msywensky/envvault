@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/msywensky/envvault/actions/workflows/ci.yml/badge.svg)](https://github.com/msywensky/envvault/actions/workflows/ci.yml)
 
-A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps each project's `.env` file in sync between your machines, through an **encrypted** vault folder such as a Google Drive folder. The sync folder only ever sees ciphertext. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
+A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps each project's `.env` file in sync between your machines, through an **encrypted** vault: a folder synced between them (such as a Google Drive folder), or a private git repository. The sync folder or the git host only ever sees ciphertext. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
 
 ![Repositories view](docs/repos.png)
 
@@ -14,6 +14,8 @@ Projects folder (each machine)          Vault folder (synced by Google Drive etc
   web/.env      ◀── pull ── decrypt ◀──   web.env.enc
                                           meta.json   (KDF params, salt, key check)
 ```
+
+The vault can also be a **private git repository** instead of a synced folder: the same files, on one branch, which EnvVault fetches and pushes itself (see [Git vaults](#git-vaults)).
 
 - **Key derivation:** Argon2id (libsodium `crypto_pwhash`, MODERATE: 3 passes, 256 MiB) from your master password, run in a short-lived worker thread so the app never freezes.
 - **Encryption:** XChaCha20-Poly1305 with a random 24-byte nonce for every write. The repo name is bound in as associated data, so copying `a.env.enc` over `b.env.enc` fails to decrypt instead of silently swapping secrets.
@@ -46,7 +48,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
   - it must come from the app's own window, main frame and URL;
   - its arguments are validated with a strict zod schema (unknown fields are rejected);
   - it always returns a `{ok, data}` / `{ok, error}` envelope, and error messages never echo input.
-- The renderer never supplies file paths: folders come from the native picker in the main process, and repos are referred to by validated name.
+- The renderer never supplies file paths: folders come from the native picker in the main process, and repos are referred to by validated name. A git vault's URL is the one location it sends, and the main process parses it strictly first: only `https://`, `ssh://` or `user@host:path`, never credentials, local paths, `file://` or other transports, and nothing git or ssh could read as an option.
 - **Env values cross IPC only in two places: the raw pull diff after you click Show values, and the vault-copy editor.** Everything else that crosses IPC is key names, statuses and metadata. The raw diff:
   - arrives masked: the main process replaces every value, the continuation lines of multi-line values and any unrecognised line with `••••••••` before sending it. Key names, comments and blank lines are kept;
   - is sent with values only when you click **Show values**, and only for the exact local and vault content the preview showed;
@@ -81,11 +83,20 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
   - EnvVault refuses to create a new vault in a folder that already holds encrypted entries.
 - git runs from an absolute path resolved through absolute `PATH` entries only, so a repo can't ship its own `git.exe`, and with `core.fsmonitor` disabled, so a repo's `.git/config` can't make git run commands.
 
+**Git vaults**
+
+- **What the host sees:** the same as a synced folder: ciphertext, the plaintext `meta.json` (KDF parameters, salt, key check), file names (your repo names, lowercased) and sizes, and when each change was made. Never values, key names or machine names: every commit is by `EnvVault <envvault@users.noreply.invalid>`, with the message "EnvVault update".
+- **Your own credentials:** git uses your SSH key or credential helper. EnvVault never sees, asks for or stores a token, and refuses a URL that contains one.
+- **Private repositories only:** checked when you choose the repository and again before every create and unlock, so a repository made public later is refused at the next unlock. EnvVault asks the host over https **with none of your credentials**: an environment built from scratch (no askpass programs, no config passed through variables), an empty home and global config, no system config, no credential helper, and a working folder outside any repository. If the host lists the branches, the repository is public and refused. Only a host asking for credentials counts as private: a "not found", an SSH-only host or no network gives no clear answer, and that is refused too. There is no override.
+- **No checkout, no hooks:** EnvVault keeps a bare mirror in its settings folder (`git-vaults/`) and never checks out a working tree, so nothing the remote sends is ever run. Every command runs with an empty hooks folder (your global hooks don't run either), `core.fsmonitor` off, only the `https` and `ssh` protocols, fsck on every object received, no terminal prompts, and ssh in batch mode unless you set `core.sshCommand`.
+- **Conditional pushes:** a write commits one file on top of the branch as EnvVault last saw it and pushes with a lease on that commit, so it lands only if nobody pushed in between (not even a reset). If someone did, EnvVault fetches and builds on their commit, and refuses if they changed the same file.
+- **Only a vault:** EnvVault uses a repository only if it is empty or already a vault (a README, LICENSE, `.gitignore` or `.gitattributes` is fine), so a project repository isn't turned into a vault by mistake. Other files in the repository are kept untouched by its commits.
+
 ## Threat model
 
 **Protects against**
 
-- The cloud provider, or anyone else with access to the vault folder, reading your secrets, tampering with them, swapping files between repos, rolling a file back, or weakening the KDF in `meta.json`.
+- The cloud provider or git host, or anyone else with access to the vault, reading your secrets, tampering with them, swapping files between repos, rolling a file back, or weakening the KDF in `meta.json`.
 - A stolen laptop while EnvVault is locked (the vault key is not stored anywhere).
 - Accidentally committing pulled secrets (ignore and tracked checks).
 
@@ -98,12 +109,15 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 - Secrets in `.env.example` that don't look like secrets. The same-value check is a heuristic.
 - Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.
 - Someone seeing your screen while a raw diff or the editor shows values. Those values also stay in the renderer's memory until they are garbage-collected, for the same reason. A masked field still shows how long its value is.
-- Metadata: repo names, file sizes and modification times are visible in the vault folder.
+- Metadata: repo names, file sizes and modification times are visible in the vault folder or repository.
+- Old copies in a git vault's history, which keeps every version of every file for good (Drive's version history keeps some too). If your master password leaks, change the secrets themselves, not just the password: the old copies open with the old password.
+- The git host's admins, or anyone who can push to the repository, deleting the vault or putting old copies back. A copy that went backwards shows as a conflict, as in a folder.
+- Secrets pushed while a git vault was public. It's refused at the next unlock, but anything pushed meanwhile may have been copied (it's ciphertext, so the master password still protects it).
 - A rollback on a machine that has never synced that repo (there is no earlier version to compare against).
 
 ## Setup
 
-Requirements: Node.js 22 or newer, git, and a folder synced between your machines (for example `My Drive/EnvVault` in Google Drive for desktop).
+Requirements: Node.js 22 or newer, git, and either a folder synced between your machines (for example `My Drive/EnvVault` in Google Drive for desktop) or a private git repository (git 2.32 or newer). The [GitHub CLI](https://cli.github.com), signed in with `gh auth login`, lets EnvVault create and list GitHub repositories for you; it's optional.
 
 ```sh
 npm install
@@ -114,8 +128,10 @@ npm run build      # typecheck and build to out/
 
 ## Using it
 
-1. **First machine:** choose your projects folder (the folder that contains your git repos) and the vault folder, then create the vault with a master password of at least 12 characters.
-2. **Other machines:** wait for Drive to finish syncing, then choose the same vault folder and unlock it with the same password. EnvVault won't offer to create a vault in a folder that already holds encrypted files.
+1. **First machine:** choose your projects folder (the folder that contains your git repos) and the vault, then create the vault with a master password of at least 12 characters. The vault is either:
+   - **a synced folder:** pick it with the folder picker;
+   - **a private git repository:** **Create a new vault repository** makes a private one on your GitHub account through the GitHub CLI, or, without it, opens GitHub's new-repository page so you can paste its URL. **Select an existing one** lists your private GitHub repositories, and always takes a pasted URL (GitHub, GitLab, a server of your own). Use a repository just for the vault: EnvVault refuses one that holds other files, and one that isn't private.
+2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password. EnvVault won't offer to create a vault where encrypted files already are.
 3. Push and pull from the Repositories table. For a conflict, pick **Keep local** (push, overwriting the vault copy) or **Keep vault** (pull, backing up your local file first).
 
 **Machine-specific keys:** some values differ between machines, such as a local path. Put `# envvault:local` on the line directly above such a key:
@@ -198,19 +214,21 @@ envvault push --expect <token>   # ...that pushes exactly what you saw, if nothi
 
 Anything else in the folder (for example Drive's `name (1).ext` conflict copies) is ignored.
 
+In a git vault, the same files sit at the top of the repository's default branch, one commit per change, with no temp files. Anything else there (a README, folders) is ignored and kept.
+
 ## Settings
 
-| Setting             | Default   | Notes                                               |
-| ------------------- | --------- | --------------------------------------------------- |
-| Projects folder     | —         | Repos are its direct subfolders that contain `.git` |
-| Vault folder        | —         | Changing it locks EnvVault                          |
-| Machine name        | hostname  | Shown to other machines as "updated by"             |
-| Auto-lock           | 5 minutes | 1–120 minutes of inactivity                         |
-| .env.example checks | On        | Warnings in the push and pull dialogs               |
-| Automatic pull      | On        | Every minute while unlocked; one-sided changes only |
-| Command-line access | Off       | The `envvault` command and the Claude Code skill    |
+| Setting             | Default   | Notes                                                                   |
+| ------------------- | --------- | ----------------------------------------------------------------------- |
+| Projects folder     | —         | Repos are its direct subfolders that contain `.git`                     |
+| Vault               | —         | A synced folder or a private git repository. Changing it locks EnvVault |
+| Machine name        | hostname  | Shown to other machines as "updated by"                                 |
+| Auto-lock           | 5 minutes | 1–120 minutes of inactivity                                             |
+| .env.example checks | On        | Warnings in the push and pull dialogs                                   |
+| Automatic pull      | On        | Every minute while unlocked; one-sided changes only                     |
+| Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
 
-Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too.
+Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, and a git vault's mirror is in `git-vaults/`.
 
 ## Development
 
@@ -226,7 +244,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 ```
 
 - `npm run lint`, `npm run typecheck` and `npm test` run in CI on macOS and Windows.
-- `tests/sync.test.ts` exercises the real push/pull flows with real git and real crypto in temp folders, simulating two machines.
+- `tests/sync.test.ts` exercises the real push/pull flows with real git and real crypto in temp folders, simulating two machines, over a vault folder and over a local git repository.
 - To test without touching your real settings, run `npm run dev:profile -- [name]` (default name `test`). Each profile keeps its own settings and sync state in `envvault-<name>` next to the real data folder, and profiles can run side by side, so two of them can act as two "machines" on one computer. Add `--reset` to start the profile from scratch. A profile doesn't isolate the folders you pick in it, so choose a scratch vault folder and projects folder. Under the hood this sets `ENVVAULT_PROFILE=<name>`, which works only in unpackaged runs.
 
 ## Roadmap
