@@ -18,6 +18,7 @@ Projects folder (each machine)          Vault folder (synced by Google Drive etc
 The vault can also be a **private git repository** instead of a synced folder: the same files, on one branch, which EnvVault fetches and pushes itself (see [Git vaults](#git-vaults)).
 
 - **Key derivation:** Argon2id (libsodium `crypto_pwhash`, MODERATE: 3 passes, 256 MiB) from your master password, run in a short-lived worker thread so the app never freezes.
+- **Setup code:** a vault can also have a 128-bit secret that each of your machines keeps and the vault never holds; a git vault always does. The key then comes from the password _and_ that secret (HKDF-SHA256), so a copy of the vault alone can't be used to guess your password. A new machine gets the secret once, as a **setup code** you type with the password.
 - **Encryption:** XChaCha20-Poly1305 with a random 24-byte nonce for every write. The repo name is bound in as associated data, so copying `a.env.enc` over `b.env.enc` fails to decrypt instead of silently swapping secrets.
 - **Sync status** is three-way: local file, vault copy, and what this machine last synced. That separates "local newer", "vault newer" and "conflict". A vault copy whose version went backwards (a rollback) is shown as a conflict, never offered as a simple pull. The one exception is when it is byte-identical to your local file: then nothing would change either way, and it shows as in sync.
 
@@ -63,6 +64,8 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 **Data handling**
 
+- A vault's secret (for setup codes) is kept on each machine in `vault-secrets.json` in EnvVault's settings folder, sealed with the OS's secure storage (the Keychain on macOS, DPAPI on Windows). It never goes into the vault. The setup code itself is shown when you create the vault and, after you re-enter the password, in Settings; it's never logged, and the app forgets it once it's off the screen. A setup code typed on a new machine is kept only once the password proves right.
+
 - The derived key lives only in the main process. Each operation gets its own copy, which is wiped when it finishes. The key is wiped on lock, on idle timeout (default 5 minutes), when the window closes, and when the computer sleeps or its screen locks.
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
 - `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
@@ -98,19 +101,21 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 - The cloud provider or git host, or anyone else with access to the vault, reading your secrets, tampering with them, swapping files between repos, rolling a file back, or weakening the KDF in `meta.json`.
 - A stolen laptop while EnvVault is locked (the vault key is not stored anywhere).
+- With a setup code: someone with a copy of the vault (a leaked or briefly public repository, its history, the host's staff, a shared Drive folder) guessing your master password offline. They'd need the vault's secret too, 128 random bits that never leave your machines and your password manager.
 - Accidentally committing pulled secrets (ignore and tracked checks).
 
 **Does not protect against**
 
 - Malware running as you on an unlocked machine. With command-line access on, such a program doesn't even need to read EnvVault's memory: it can list your repo and key names and push a `.env`, which automatic pull then brings to your other machines. It can't get values through the command line, but it could read your `.env` files directly anyway.
-- A weak master password. Use a long, unique one, and keep it in your password manager.
+- A weak master password, for a vault without a setup code, or for someone who also has one of your machines (with its OS login) or your setup code. Use a long, unique password, and keep it and the setup code in your password manager.
+- Losing the setup code and every machine that has it: the vault can't be opened, even with the password.
 - The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). Delete old backups you don't need.
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
 - Secrets in `.env.example` that don't look like secrets. The same-value check is a heuristic.
 - Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.
 - Someone seeing your screen while a raw diff or the editor shows values. Those values also stay in the renderer's memory until they are garbage-collected, for the same reason. A masked field still shows how long its value is.
 - Metadata: repo names, file sizes and modification times are visible in the vault folder or repository.
-- Old copies in a git vault's history, which keeps every version of every file for good (Drive's version history keeps some too). If your master password leaks, change the secrets themselves, not just the password: the old copies open with the old password.
+- Old copies in a git vault's history, which keeps every version of every file for good (Drive's version history keeps some too). If your master password and setup code leak, change the secrets themselves, not just the password: the old copies open with the old password and code.
 - The git host's admins, or anyone who can push to the repository, deleting the vault or putting old copies back. A copy that went backwards shows as a conflict, as in a folder.
 - Secrets pushed while a git vault was public. It's refused at the next unlock, but anything pushed meanwhile may have been copied (it's ciphertext, so the master password still protects it).
 - A rollback on a machine that has never synced that repo (there is no earlier version to compare against).
@@ -131,7 +136,8 @@ npm run build      # typecheck and build to out/
 1. **First machine:** choose your projects folder (the folder that contains your git repos) and the vault, then create the vault with a master password of at least 12 characters. The vault is either:
    - **a synced folder:** pick it with the folder picker;
    - **a private git repository:** **Create a new vault repository** makes a private one on your GitHub account through the GitHub CLI, or, without it, opens GitHub's new-repository page so you can paste its URL. **Select an existing one** lists your private GitHub repositories, and always takes a pasted URL (GitHub, GitLab, a server of your own). Use a repository just for the vault: EnvVault refuses one that holds other files, and one that isn't private.
-2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password. EnvVault won't offer to create a vault where encrypted files already are.
+     Creating it also offers **Require a setup code on every machine**, on by default and always on for a git vault. EnvVault then shows the vault's setup code once (`EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX`): save it in your password manager next to the master password, and type its last group to continue. You can show it again in Settings, after entering the password.
+2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password, plus the setup code the first time on each machine. EnvVault won't offer to create a vault where encrypted files already are.
 3. Push and pull from the Repositories table. For a conflict, pick **Keep local** (push, overwriting the vault copy) or **Keep vault** (pull, backing up your local file first).
 
 **Machine-specific keys:** some values differ between machines, such as a local path. Put `# envvault:local` on the line directly above such a key:
@@ -202,15 +208,15 @@ envvault push --expect <token>   # ...that pushes exactly what you saw, if nothi
 - The skill tells Claude never to read `.env` files. To enforce that for Claude's file tools, add `Read(**/.env)` and `Read(**/.env.bak.*)` to the `deny` list of your Claude Code permissions.
 - If Claude Code runs commands in its sandbox and the command reports that EnvVault isn't reachable, allow EnvVault's socket in the sandbox settings, or let the command run outside the sandbox.
 
-**Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
+**Recovery:** there is no backdoor. If you lose the master password, or the setup code and every machine that has it, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
 ## Vault format
 
-| File                | Contents                                                                                                                                                                                                                                            |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `meta.json`         | `{ formatVersion: 1, vaultId, kdf: { alg: "argon2id", opslimit, memlimit, salt }, keyCheck }` (plaintext)                                                                                                                                           |
-| `<repo>.env.enc`    | `"EVV1"` + 24-byte nonce + XChaCha20-Poly1305 ciphertext of `{ version, updatedAt, updatedBy, contentHash, envBase64 }`. The AAD is `envvault:v1:<repo>`. Repo names are lowercased. Machine-specific keys are stored as `KEY=` under their marker. |
-| `.<file>.<hex>.tmp` | In-flight atomic writes. Stale ones are removed when you unlock.                                                                                                                                                                                    |
+| File                | Contents                                                                                                                                                                                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `meta.json`         | `{ formatVersion: 1, vaultId, kdf: { alg: "argon2id", opslimit, memlimit, salt }, keyCheck }` (plaintext). Format 2, with a setup code, adds `secretId`, a public fingerprint of the vault's secret, and its key is HKDF-SHA256 of the Argon2id output salted with the secret. |
+| `<repo>.env.enc`    | `"EVV1"` + 24-byte nonce + XChaCha20-Poly1305 ciphertext of `{ version, updatedAt, updatedBy, contentHash, envBase64 }`. The AAD is `envvault:v1:<repo>`. Repo names are lowercased. Machine-specific keys are stored as `KEY=` under their marker.                            |
+| `.<file>.<hex>.tmp` | In-flight atomic writes. Stale ones are removed when you unlock.                                                                                                                                                                                                               |
 
 Anything else in the folder (for example Drive's `name (1).ext` conflict copies) is ignored.
 
@@ -222,13 +228,14 @@ In a git vault, the same files sit at the top of the repository's default branch
 | ------------------- | --------- | ----------------------------------------------------------------------- |
 | Projects folder     | —         | Repos are its direct subfolders that contain `.git`                     |
 | Vault               | —         | A synced folder or a private git repository. Changing it locks EnvVault |
+| Setup code          | —         | Shows this machine's setup code for the vault, after the password       |
 | Machine name        | hostname  | Shown to other machines as "updated by"                                 |
 | Auto-lock           | 5 minutes | 1–120 minutes of inactivity                                             |
 | .env.example checks | On        | Warnings in the push and pull dialogs                                   |
 | Automatic pull      | On        | Every minute while unlocked; one-sided changes only                     |
 | Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
 
-Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, and a git vault's mirror is in `git-vaults/`.
+Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
 
 ## Development
 
