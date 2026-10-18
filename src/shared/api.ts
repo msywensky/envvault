@@ -2,7 +2,9 @@ import type { Result } from './result'
 import type {
   AppState,
   EditorData,
+  GhStatus,
   GitignoreResult,
+  GitRepoChoice,
   PullPreview,
   PullRequest,
   PullResult,
@@ -26,6 +28,10 @@ export interface Responses {
   'settings:save': Settings
   'settings:pickFolder': Settings | null
   'settings:setGitVault': Settings
+  'git:ghStatus': GhStatus
+  'git:listRepos': GitRepoChoice[]
+  'git:createRepo': Settings
+  'git:openNewRepoPage': null
   'session:createVault': null
   'session:unlock': null
   'session:lock': null
@@ -65,6 +71,14 @@ export interface EnvVaultApi {
    * empty or a vault already), then saved. Locks EnvVault, like a new folder.
    */
   setGitVault(url: string): R<'settings:setGitVault'>
+  /** Whether the GitHub CLI is installed and signed in. */
+  ghStatus(): R<'git:ghStatus'>
+  /** Your private GitHub repositories, through the GitHub CLI. */
+  listGitRepos(): R<'git:listRepos'>
+  /** Create a private repository with the GitHub CLI and use it, like setGitVault. */
+  createGitRepo(name: string): R<'git:createRepo'>
+  /** Open GitHub's new-repository page (a fixed URL) in the browser. */
+  openNewRepoPage(): R<'git:openNewRepoPage'>
   createVault(password: string): R<'session:createVault'>
   unlock(password: string): R<'session:unlock'>
   lock(): R<'session:lock'>

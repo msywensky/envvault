@@ -99,6 +99,27 @@ export interface Settings {
   cliAccess: boolean
 }
 
+/** The GitHub CLI, as Setup sees it (see src/main/gh.ts). */
+export interface GhStatus {
+  /** gh is installed. */
+  available: boolean
+  signedIn: boolean
+  login: string | null
+  /** gh's git_protocol for github.com, which the clone URLs it gives use. */
+  protocol: 'ssh' | 'https'
+}
+
+/** A private GitHub repository that could hold the vault. */
+export interface GitRepoChoice {
+  /** owner/name */
+  name: string
+  /** The clone URL, for settings:setGitVault. */
+  url: string
+  isEmpty: boolean
+  /** ISO 8601. */
+  updatedAt: string
+}
+
 /** The Claude Code skill EnvVault installs (see src/main/skill.ts). */
 export interface SkillInfo {
   /**

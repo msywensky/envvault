@@ -1,4 +1,4 @@
-import { dialog } from 'electron'
+import { dialog, shell } from 'electron'
 import { relative, resolve } from 'node:path'
 import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
@@ -11,6 +11,7 @@ import { handle } from './ipc'
 import { exclusive } from './mutex'
 import * as session from './session'
 import * as skill from './skill'
+import * as gh from './gh'
 import { prepareGitVault } from './gitvault'
 import * as sync from './sync'
 import { configuredVault, requireVault } from './vault'
@@ -49,6 +50,17 @@ export function registerIpc(): void {
   handle(CH.setGitVault, async ({ url }) => {
     const location = await prepareGitVault(url)
     return exclusive(() => saveVault(location))
+  })
+  handle(CH.ghStatus, () => gh.ghStatus())
+  handle(CH.listGitRepos, () => gh.listPrivateRepos())
+  handle(CH.createGitRepo, async ({ name }) => {
+    const location = await prepareGitVault(await gh.createPrivateRepo(name))
+    return exclusive(() => saveVault(location))
+  })
+  // A fixed URL: the renderer never names one to open.
+  handle(CH.openNewRepoPage, async () => {
+    await shell.openExternal(gh.NEW_REPO_PAGE)
+    return null
   })
 
   // Automatic pull starts once exclusive() has finished: it takes exclusive()

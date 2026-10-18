@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { KEY_RE } from '../core/envdiff'
 import { isBranchName } from '../core/gitremote'
+import { REPO_NAME_RE } from './gh'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
 
@@ -51,6 +52,10 @@ export const requestSchemas = {
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
   // Only bounded here: prepareGitVault parses it before git sees it.
   [CH.setGitVault]: z.strictObject({ url: z.string().trim().min(1).max(2048) }),
+  [CH.ghStatus]: NoArgs,
+  [CH.listGitRepos]: NoArgs,
+  [CH.createGitRepo]: z.strictObject({ name: z.string().regex(REPO_NAME_RE) }),
+  [CH.openNewRepoPage]: NoArgs,
   [CH.createVault]: z.strictObject({ password: Password }),
   [CH.unlock]: z.strictObject({ password: Password }),
   [CH.lock]: NoArgs,
