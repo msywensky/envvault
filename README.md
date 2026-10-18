@@ -66,6 +66,12 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 - `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
 - Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
 - Automatic pull applies only one-sided changes (the vault copy is newer and your `.env` is unchanged since the last sync, or missing), never a conflict or a rollback, with the same git checks and backup as a manual pull. It runs only while EnvVault is unlocked and doesn't count as activity, so it never keeps the vault unlocked.
+- Command-line access is off by default. When it's on:
+  - EnvVault listens on a socket in its settings folder (mode `0600`) on macOS, or a named pipe on Windows;
+  - every request must carry a random token from a file only you can read, replaced each time it starts;
+  - requests are validated like IPC calls and get key names, statuses and hashes back, never values;
+  - they don't count as activity, so they never keep the vault unlocked;
+  - a push is refused if the vault copy changed on another machine.
 - Pulls are refused unless `.env` is git-ignored and **not tracked**. The backup and the temp file are named so `.env.bak.*` covers them, and they are checked too, so a crash never leaves secrets in a file git would commit.
 - Writes are atomic: temp file in the same folder, fsync, rename (retried on Windows sharing violations). `meta.json` is created exclusively, so it can't overwrite a vault that synced in at the same moment.
 - `meta.json` is treated as attacker-controlled:
@@ -84,7 +90,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 **Does not protect against**
 
-- Malware running as you on an unlocked machine.
+- Malware running as you on an unlocked machine. With command-line access on, such a program doesn't even need to read EnvVault's memory: it can list your repo and key names and push a `.env`, which automatic pull then brings to your other machines. It can't get values through the command line, but it could read your `.env` files directly anyway.
 - A weak master password. Use a long, unique one, and keep it in your password manager.
 - The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). Delete old backups you don't need.
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
@@ -147,6 +153,38 @@ You can turn the checks off in Settings.
 - It saves a backup first, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
 - It stops when EnvVault locks; it doesn't keep the vault unlocked. Turn it off in Settings.
 
+**Command line:** turn on **Allow command-line access** in Settings. Then, while EnvVault is running and unlocked, run `envvault` inside a repo in your projects folder:
+
+```sh
+envvault status                  # this repo's status (--all for every repo)
+envvault push                    # shows the key changes, asks, then pushes
+envvault push --dry-run          # only shows them, with a token...
+envvault push --expect <token>   # ...that pushes exactly what you saw, if nothing changed since
+```
+
+- Run `npm link` in this repo once to put `envvault` on your PATH, or run `node out/cli/envvault.mjs`. `npm run build` builds it. In a packaged app it's in `app.asar.unpacked/out/cli/`, and needs Node 22 or newer.
+- It shows key names only, never values.
+- It pushes only one-sided changes. If the vault copy changed on another machine, it tells you to resolve it in the app.
+- Options:
+  - `--repo <name>` picks a repo by name instead of the current folder;
+  - `--json` prints JSON;
+  - `--yes` pushes without asking.
+- Exit codes:
+  - 0: done;
+  - 1: refused or failed;
+  - 2: usage;
+  - 3: locked;
+  - 4: EnvVault isn't running, or command-line access is off.
+- It doesn't count as activity, so EnvVault still auto-locks; unlock it in the app.
+- There's no pull command: automatic pull covers it.
+
+**Claude Code skill:** with command-line access on, click **Install** next to _Claude Code skill_ in Settings. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env`, or type `/envvault`.
+
+- Claude runs `status` and `push --dry-run` on its own, shows you the key changes and warnings, and asks before the real push. Claude Code also asks you to approve that command.
+- The skill points at this copy of EnvVault's command. If you move or update EnvVault, Settings shows it as out of date: click **Update**.
+- The skill tells Claude never to read `.env` files. To enforce that for Claude's file tools, add `Read(**/.env)` and `Read(**/.env.bak.*)` to the `deny` list of your Claude Code permissions.
+- If Claude Code runs commands in its sandbox and the command reports that EnvVault isn't reachable, allow EnvVault's socket in the sandbox settings, or let the command run outside the sandbox.
+
 **Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
 ## Vault format
@@ -169,8 +207,9 @@ Anything else in the folder (for example Drive's `name (1).ext` conflict copies)
 | Auto-lock           | 5 minutes | 1–120 minutes of inactivity                         |
 | .env.example checks | On        | Warnings in the push and pull dialogs               |
 | Automatic pull      | On        | Every minute while unlocked; one-sided changes only |
+| Command-line access | Off       | The `envvault` command and the Claude Code skill    |
 
-Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`.
+Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too.
 
 ## Development
 
@@ -179,8 +218,9 @@ src/
   core/      pure, unit-tested logic: crypto, .env diff, sync status, path safety
   main/      Electron main process: window, IPC, session, vault, repos, git, sync
   preload/   contextBridge API (sandboxed, bundled)
-  shared/    channel names and types shared by all three
+  shared/    channel names and types shared by all of them
   renderer/  Vue 3 UI
+  cli/       the envvault command (plain Node; talks to the app over a socket)
 tests/       Vitest: unit tests for core/, integration tests for main/
 ```
 
