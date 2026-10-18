@@ -1,8 +1,8 @@
-import { dialog } from 'electron'
+import { dialog, shell } from 'electron'
 import { relative, resolve } from 'node:path'
 import { isInside } from '../core/paths'
 import { CH } from '../shared/channels'
-import type { Settings } from '../shared/types'
+import type { Settings, VaultLocation } from '../shared/types'
 import { kickAutoPull } from './autopull'
 import { setCliAccess } from './cliserver'
 import { getConfig, updateConfig } from './config'
@@ -11,6 +11,8 @@ import { handle } from './ipc'
 import { exclusive } from './mutex'
 import * as session from './session'
 import * as skill from './skill'
+import * as gh from './gh'
+import { prepareGitVault } from './gitvault'
 import * as sync from './sync'
 import { configuredVault, requireVault } from './vault'
 import { getMainWindow } from './window'
@@ -21,9 +23,14 @@ export function registerIpc(): void {
   handle(CH.getState, async () => {
     const cfg = await getConfig()
     const vault = await configuredVault()
+    const state = vault ? await vault.state() : 'not-configured'
+    // Unlocking reports a meta.json it can't read; the lock screen just needs to know.
+    const setupCode =
+      vault && state === 'ready' ? await vault.setupCodeState().catch(() => null) : null
     return {
       configured: Boolean(cfg.projectsPath && vault),
-      vault: vault ? await vault.state() : 'not-configured',
+      vault: state,
+      setupCode,
       locked: !session.isUnlocked()
     }
   })
@@ -43,27 +50,52 @@ export function registerIpc(): void {
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))
+  // Like the folder picker: the checks (network) run outside the queue, the
+  // save inside it.
+  handle(CH.setGitVault, async ({ url }) => {
+    const location = await prepareGitVault(url)
+    return exclusive(() => saveVault(location))
+  })
+  handle(CH.ghStatus, () => gh.ghStatus())
+  handle(CH.listGitRepos, () => gh.listPrivateRepos())
+  handle(CH.createGitRepo, async ({ name }) => {
+    const location = await prepareGitVault(await gh.createPrivateRepo(name))
+    return exclusive(() => saveVault(location))
+  })
+  // A fixed URL: the renderer never names one to open.
+  handle(CH.openNewRepoPage, async () => {
+    await shell.openExternal(gh.NEW_REPO_PAGE)
+    return null
+  })
 
   // Automatic pull starts once exclusive() has finished: it takes exclusive()
   // itself, which isn't re-entrant.
-  handle(CH.createVault, async ({ password }) => {
+  handle(CH.createVault, async ({ password, setupCode }) => {
+    const created = await exclusive(async () => {
+      const cfg = await getConfig()
+      const vault = await (await requireVault()).create(password, { setupCode })
+      session.unlock(vault.key, vault.vaultId, cfg.autoLockMinutes)
+      return vault
+    })
+    kickAutoPull()
+    // The setup code crosses IPC here once, to be shown and saved by the user.
+    return { setupCode: created.setupCode }
+  })
+  handle(CH.unlock, async ({ password, setupCode }) => {
     await exclusive(async () => {
       const cfg = await getConfig()
-      const { key, vaultId } = await (await requireVault()).create(password)
+      const { key, vaultId } = await (await requireVault()).open(password, setupCode)
       session.unlock(key, vaultId, cfg.autoLockMinutes)
     })
     kickAutoPull()
     return null
   })
-  handle(CH.unlock, async ({ password }) => {
-    await exclusive(async () => {
-      const cfg = await getConfig()
-      const { key, vaultId } = await (await requireVault()).open(password)
-      session.unlock(key, vaultId, cfg.autoLockMinutes)
-    })
-    kickAutoPull()
-    return null
-  })
+  // Read-only, but only while unlocked, and only with the password again.
+  handle(CH.showSetupCode, ({ password }) =>
+    session.withKey(async () => ({
+      setupCode: await (await requireVault()).showSetupCode(password)
+    }))
+  )
   handle(CH.lock, () => {
     session.lock()
     return null
@@ -121,26 +153,39 @@ async function pickFolder(which: 'projects' | 'vault'): Promise<Settings | null>
 
 async function saveFolder(which: 'projects' | 'vault', picked: string): Promise<Settings> {
   const cfg = await getConfig()
-  const other = which === 'projects' ? cfg.vaultPath : cfg.projectsPath
+  const other = which === 'projects' ? folderOf(cfg.vault) : cfg.projectsPath
   if (other && overlaps(picked, other)) {
     throw new AppError(
       'FOLDERS_OVERLAP',
       'The projects folder and the vault folder must be separate (neither inside the other).'
     )
   }
-  if (which === 'vault') {
-    if (cfg.vaultPath === picked) return cfg
-    // The key belongs to the old vault: wipe it now, but tell the renderer
-    // only after the new path is saved, so its refresh sees the new folder.
-    const wasUnlocked = session.isUnlocked()
-    session.lock({ notify: false })
-    try {
-      return await updateConfig({ vaultPath: picked })
-    } finally {
-      if (wasUnlocked) session.notifyLocked()
-    }
-  }
+  if (which === 'vault') return saveVault({ kind: 'folder', path: picked })
   return updateConfig({ projectsPath: picked })
+}
+
+/** Switch to another vault. Run inside exclusive(). */
+async function saveVault(location: VaultLocation): Promise<Settings> {
+  const cfg = await getConfig()
+  if (sameLocation(cfg.vault, location)) return cfg
+  // The key belongs to the old vault: wipe it now, but tell the renderer
+  // only after the new location is saved, so its refresh sees the new vault.
+  const wasUnlocked = session.isUnlocked()
+  session.lock({ notify: false })
+  try {
+    return await updateConfig({ vault: location })
+  } finally {
+    if (wasUnlocked) session.notifyLocked()
+  }
+}
+
+const folderOf = (location: VaultLocation | null): string | null =>
+  location?.kind === 'folder' ? location.path : null
+
+function sameLocation(a: VaultLocation | null, b: VaultLocation): boolean {
+  if (a?.kind === 'folder' && b.kind === 'folder') return a.path === b.path
+  if (a?.kind === 'git' && b.kind === 'git') return a.url === b.url && a.branch === b.branch
+  return false
 }
 
 function overlaps(a: string, b: string): boolean {

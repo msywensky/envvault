@@ -2,6 +2,8 @@
 // zod never reaches the renderer or the sandboxed preload.
 import { z } from 'zod'
 import { KEY_RE } from '../core/envdiff'
+import { isBranchName } from '../core/gitremote'
+import { REPO_NAME_RE } from './gh'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
 
@@ -25,6 +27,17 @@ export const MachineName = z
 
 export const AutoLockMinutes = z.int().min(1).max(120)
 
+/** Where the vault is kept (config.json only: the renderer never sends one). */
+// A git URL is only bounded here; GitStore parses it before git sees it.
+export const VaultLocation = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('folder'), path: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('git'),
+    url: z.string().min(1).max(2048),
+    branch: z.string().refine(isBranchName)
+  })
+])
+
 export const requestSchemas = {
   [CH.getState]: NoArgs,
   [CH.activity]: NoArgs,
@@ -37,9 +50,20 @@ export const requestSchemas = {
     cliAccess: z.boolean()
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
-  [CH.createVault]: z.strictObject({ password: Password }),
-  [CH.unlock]: z.strictObject({ password: Password }),
+  // Only bounded here: prepareGitVault parses it before git sees it.
+  [CH.setGitVault]: z.strictObject({ url: z.string().trim().min(1).max(2048) }),
+  [CH.ghStatus]: NoArgs,
+  [CH.listGitRepos]: NoArgs,
+  [CH.createGitRepo]: z.strictObject({ name: z.string().regex(REPO_NAME_RE) }),
+  [CH.openNewRepoPage]: NoArgs,
+  [CH.createVault]: z.strictObject({ password: Password, setupCode: z.boolean() }),
+  // Bounded only: parseSetupCode reads it.
+  [CH.unlock]: z.strictObject({
+    password: Password,
+    setupCode: z.string().min(1).max(100).optional()
+  }),
   [CH.lock]: NoArgs,
+  [CH.showSetupCode]: z.strictObject({ password: Password }),
   [CH.listRepos]: NoArgs,
   [CH.previewPush]: z.strictObject({ repoName: RepoName }),
   [CH.push]: z.strictObject({

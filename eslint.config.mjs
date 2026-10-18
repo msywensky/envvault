@@ -104,7 +104,9 @@ export default defineConfig(
                 '**/sync',
                 '**/vault',
                 '**/localkeys',
+                '**/secrets',
                 '**/core/crypto',
+                '**/core/setupcode',
                 '**/core/envdiff',
                 '**/core/envedit'
               ],

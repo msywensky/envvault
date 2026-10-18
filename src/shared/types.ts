@@ -82,9 +82,13 @@ export interface RawDiff {
   lines: RawDiffLine[]
 }
 
+/** Where the vault is kept: a synced folder, or a branch of a private git repository. */
+export type VaultLocation =
+  { kind: 'folder'; path: string } | { kind: 'git'; url: string; branch: string }
+
 export interface Settings {
   projectsPath: string | null
-  vaultPath: string | null
+  vault: VaultLocation | null
   autoLockMinutes: number
   machineName: string
   /** Compare .env with .env.example in the push and pull dialogs. */
@@ -93,6 +97,27 @@ export interface Settings {
   autoPull: boolean
   /** Let the envvault command check status and push (see src/main/cliserver.ts). */
   cliAccess: boolean
+}
+
+/** The GitHub CLI, as Setup sees it (see src/main/gh.ts). */
+export interface GhStatus {
+  /** gh is installed. */
+  available: boolean
+  signedIn: boolean
+  login: string | null
+  /** gh's git_protocol for github.com, which the clone URLs it gives use. */
+  protocol: 'ssh' | 'https'
+}
+
+/** A private GitHub repository that could hold the vault. */
+export interface GitRepoChoice {
+  /** owner/name */
+  name: string
+  /** The clone URL, for settings:setGitVault. */
+  url: string
+  isEmpty: boolean
+  /** ISO 8601. */
+  updatedAt: string
 }
 
 /** The Claude Code skill EnvVault installs (see src/main/skill.ts). */
@@ -117,9 +142,19 @@ export interface SkillInfo {
 export type VaultFolderState =
   'not-configured' | 'folder-missing' | 'empty' | 'meta-missing' | 'ready'
 
+/**
+ * Whether this machine can unlock the vault without its setup code:
+ * - not-used: a format 1 vault (password only)
+ * - saved: format 2, and this machine has the secret
+ * - needed: format 2, and the setup code must be entered with the password
+ */
+export type SetupCodeState = 'not-used' | 'saved' | 'needed'
+
 export interface AppState {
   configured: boolean
   vault: VaultFolderState
+  /** Set when `vault` is ready and meta.json could be read. */
+  setupCode: SetupCodeState | null
   locked: boolean
 }
 

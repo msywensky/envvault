@@ -43,17 +43,17 @@ import {
   type ScannedRepo
 } from './repos'
 import { getLast, setLast } from './state'
-import { entryId, vaultAt, type Vault } from './vault'
+import { entryId, vaultFor, type Vault } from './vault'
 
-// The vault is reached only through `vault` (see vault.ts), never by path.
-type Configured = Omit<Settings, 'vaultPath'> & { projectsPath: string; vault: Vault }
+// The vault is reached only through `vault` (see vault.ts), never by location.
+type Configured = Omit<Settings, 'vault'> & { projectsPath: string; vault: Vault }
 
 async function configured(): Promise<Configured> {
-  const { vaultPath, ...cfg } = await getConfig()
-  if (!cfg.projectsPath || !vaultPath) {
-    throw new AppError('NOT_CONFIGURED', 'Choose a projects folder and a vault folder first.')
+  const { vault, ...cfg } = await getConfig()
+  if (!cfg.projectsPath || !vault) {
+    throw new AppError('NOT_CONFIGURED', 'Choose a projects folder and a vault first.')
   }
-  return { ...cfg, projectsPath: cfg.projectsPath, vault: vaultAt(vaultPath) }
+  return { ...cfg, projectsPath: cfg.projectsPath, vault: vaultFor(vault) }
 }
 
 function toInfo(p: Payload): VaultInfo {

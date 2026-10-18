@@ -2,7 +2,9 @@ import type { Result } from './result'
 import type {
   AppState,
   EditorData,
+  GhStatus,
   GitignoreResult,
+  GitRepoChoice,
   PullPreview,
   PullRequest,
   PullResult,
@@ -25,9 +27,15 @@ export interface Responses {
   'settings:get': Settings
   'settings:save': Settings
   'settings:pickFolder': Settings | null
-  'session:createVault': null
+  'settings:setGitVault': Settings
+  'git:ghStatus': GhStatus
+  'git:listRepos': GitRepoChoice[]
+  'git:createRepo': Settings
+  'git:openNewRepoPage': null
+  'session:createVault': { setupCode: string | null }
   'session:unlock': null
   'session:lock': null
+  'vault:showSetupCode': { setupCode: string }
   'repos:list': RepoRow[]
   'repo:previewPush': PushPreview
   'repo:push': RepoRow
@@ -59,9 +67,26 @@ export interface EnvVaultApi {
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
-  createVault(password: string): R<'session:createVault'>
-  unlock(password: string): R<'session:unlock'>
+  /**
+   * Use a private git repository as the vault: checked (access, private,
+   * empty or a vault already), then saved. Locks EnvVault, like a new folder.
+   */
+  setGitVault(url: string): R<'settings:setGitVault'>
+  /** Whether the GitHub CLI is installed and signed in. */
+  ghStatus(): R<'git:ghStatus'>
+  /** Your private GitHub repositories, through the GitHub CLI. */
+  listGitRepos(): R<'git:listRepos'>
+  /** Create a private repository with the GitHub CLI and use it, like setGitVault. */
+  createGitRepo(name: string): R<'git:createRepo'>
+  /** Open GitHub's new-repository page (a fixed URL) in the browser. */
+  openNewRepoPage(): R<'git:openNewRepoPage'>
+  /** Create the vault and unlock it. With `setupCode` (always for git), returns the code to show. */
+  createVault(password: string, setupCode: boolean): R<'session:createVault'>
+  /** `setupCode` only when this machine doesn't have it yet (AppState.setupCode 'needed'). */
+  unlock(password: string, setupCode?: string): R<'session:unlock'>
   lock(): R<'session:lock'>
+  /** This machine's setup code for the vault, after checking the password. Unlocked only. */
+  showSetupCode(password: string): R<'vault:showSetupCode'>
   listRepos(): R<'repos:list'>
   previewPush(repoName: string): R<'repo:previewPush'>
   push(request: PushRequest): R<'repo:push'>

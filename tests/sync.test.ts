@@ -21,11 +21,34 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CliTable } from '../src/main/cliserver'
-import type { RepoRow } from '../src/shared/types'
+import type { RepoRow, VaultLocation } from '../src/shared/types'
 
-const h = vi.hoisted(() => ({ userData: '' }))
+const h = vi.hoisted(() => ({ userData: '', setupCode: undefined as string | undefined }))
 
-vi.mock('electron', () => ({ app: { getPath: () => h.userData } }))
+// safeStorage: a reversible stand-in for the Keychain / DPAPI.
+vi.mock('electron', () => ({
+  app: { getPath: () => h.userData },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (text: string) => Buffer.from(`sealed:${text}`),
+    decryptString: (blob: Buffer) => {
+      const text = blob.toString()
+      if (!text.startsWith('sealed:')) throw new Error('not ours')
+      return text.slice('sealed:'.length)
+    }
+  }
+}))
+// Git vaults in these tests are local bare repositories, which only
+// allowLocal accepts (it also skips the https privacy check).
+vi.mock('../src/main/store/git', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../src/main/store/git')>()
+  class LocalGitStore extends mod.GitStore {
+    constructor(opts: ConstructorParameters<typeof mod.GitStore>[0]) {
+      super({ ...opts, allowLocal: true, cacheMs: 0 })
+    }
+  }
+  return { ...mod, GitStore: LocalGitStore }
+})
 vi.mock('../src/main/kdf', async () => {
   const { deriveKey } = await import('../src/core/crypto')
   return {
@@ -63,7 +86,10 @@ interface Machine {
 }
 
 /** Load a fresh copy of the main modules for one "machine". */
-async function machine(name: 'a' | 'b'): Promise<Machine> {
+async function machine(
+  name: 'a' | 'b',
+  where: { projects: string; vault: VaultLocation } | null = null
+): Promise<Machine> {
   h.userData = join(root, `userData-${name}`)
   vi.resetModules()
   const config = await import('../src/main/config')
@@ -72,9 +98,18 @@ async function machine(name: 'a' | 'b'): Promise<Machine> {
   const session = await import('../src/main/session')
   const autopull = await import('../src/main/autopull')
   const clicommands = await import('../src/main/clicommands')
-  await config.updateConfig({ projectsPath: name === 'a' ? projA : projB, vaultPath: vaultDir })
-  const open = (): Promise<{ key: Uint8Array; vaultId: string }> =>
-    vault.vaultAt(vaultDir).open(PASSWORD)
+  const location: VaultLocation = where?.vault ?? { kind: 'folder', path: vaultDir }
+  await config.updateConfig({
+    projectsPath: where?.projects ?? (name === 'a' ? projA : projB),
+    vault: location
+  })
+  // A git vault is format 2: a machine's first unlock needs the setup code
+  // from its creation (h.setupCode); after that the machine has it.
+  const open = async (): Promise<{ key: Uint8Array; vaultId: string }> => {
+    const v = vault.vaultFor(location)
+    const needsCode = (await v.setupCodeState()) === 'needed'
+    return v.open(PASSWORD, needsCode ? h.setupCode : undefined)
+  }
   return { config, vault, sync, session, autopull, clicommands, open }
 }
 
@@ -1007,13 +1042,13 @@ describe('the configured vault', () => {
   it('comes from Settings, and is required wherever a vault is needed', async () => {
     const m = await machine('a')
     expect(await (await m.vault.requireVault()).state()).toBe('ready')
-    await m.config.updateConfig({ vaultPath: null })
+    await m.config.updateConfig({ vault: null })
     try {
       expect(await m.vault.configuredVault()).toBeNull()
       expect(await errorCode(m.vault.requireVault())).toBe('NOT_CONFIGURED')
       expect(await errorCode(m.sync.listRepos(new Uint8Array(32), 'any'))).toBe('NOT_CONFIGURED')
     } finally {
-      await m.config.updateConfig({ vaultPath: vaultDir })
+      await m.config.updateConfig({ vault: { kind: 'folder', path: vaultDir } })
     }
     expect(await (await m.vault.configuredVault())?.state()).toBe('ready')
   })
@@ -1077,5 +1112,117 @@ describe('git resolution', () => {
     } finally {
       process.env['PATH'] = savedPath
     }
+  })
+})
+
+// Many git processes per test, which start slowly on Windows.
+describe('git vault', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  let remote: string
+  let location: VaultLocation
+  let gpA: string
+  let gpB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? gpA : gpB, vault: location })
+  const inRemote = (...args: string[]): string =>
+    execFileSync('git', ['--git-dir', remote, ...args], { encoding: 'utf8' }).trim()
+
+  beforeAll(() => {
+    remote = join(root, 'vault-remote.git')
+    execFileSync('git', ['init', '--bare', '--quiet', remote])
+    location = { kind: 'git', url: remote, branch: 'main' }
+    gpA = join(root, 'git-projects-a')
+    gpB = join(root, 'git-projects-b')
+    makeRepo(gpA, 'gv1', { '.gitignore': IGNORE, '.env': 'A=1\n# envvault:local\nDB=/a\n' })
+    makeRepo(gpB, 'gv1', { '.gitignore': IGNORE })
+  })
+
+  it('syncs between two machines: push, pull, edit, automatic pull', async () => {
+    const a = await on('a')
+    expect(await a.vault.vaultFor(location).state()).toBe('empty')
+    // Always format 2 in a git repository, even when not asked for.
+    const created = await a.vault.vaultFor(location).create(PASSWORD)
+    expect(created.setupCode).toMatch(/^EV-/)
+    h.setupCode = created.setupCode ?? undefined
+    expect(await a.vault.vaultFor(location).state()).toBe('ready')
+    expect(await a.vault.vaultFor(location).setupCodeState()).toBe('saved')
+    expect(JSON.parse(inRemote('show', 'main:meta.json'))).toMatchObject({ formatVersion: 2 })
+    await pushRepo(a, 'gv1')
+    expect((await rows(a))['gv1']).toBe('in-sync')
+
+    const b = await on('b')
+    expect(await b.vault.vaultFor(location).setupCodeState()).toBe('needed')
+    expect(await errorCode(b.vault.vaultFor(location).open(PASSWORD))).toBe('SETUP_CODE_REQUIRED')
+    expect((await rows(b))['gv1']).toBe('vault-newer')
+    expect(await b.vault.vaultFor(location).setupCodeState()).toBe('saved')
+    await pullRepo(b, 'gv1')
+    expect(readFileSync(join(gpB, 'gv1', '.env'), 'utf8')).toBe('A=1\n# envvault:local\nDB=\n')
+
+    const { key, vaultId } = await b.open()
+    const editor = await b.sync.openEditor(key, 'gv1')
+    const saved = await b.sync.saveEdit(key, vaultId, {
+      repoName: 'gv1',
+      expectedVaultHash: editor.expectedVaultHash,
+      set: [{ key: 'A', value: '2' }],
+      add: [],
+      remove: []
+    })
+    expect(saved).toMatchObject({
+      changed: true,
+      vault: { version: 2, updatedBy: expect.any(String) }
+    })
+
+    const a2 = await on('a')
+    const opened = await a2.open()
+    a2.session.unlock(opened.key, opened.vaultId, 5)
+    try {
+      expect((await a2.autopull.runAutoPull()).map((r) => r.name)).toEqual(['gv1'])
+    } finally {
+      a2.session.lock()
+    }
+    expect(readFileSync(join(gpA, 'gv1', '.env'), 'utf8')).toBe('A=2\n# envvault:local\nDB=/a\n')
+
+    // The repository holds ciphertext only, committed by EnvVault.
+    expect(inRemote('ls-tree', '--name-only', 'main').split('\n').sort()).toEqual([
+      'gv1.env.enc',
+      'meta.json'
+    ])
+    expect(inRemote('log', '--format=%an <%ae>', 'main').split('\n')).toEqual(
+      Array(3).fill('EnvVault <envvault@users.noreply.invalid>')
+    )
+    expect(inRemote('show', 'main:gv1.env.enc')).not.toContain('A=2')
+  })
+
+  it('refuses a push over a copy another machine changed after it was reviewed', async () => {
+    const a = await on('a')
+    writeFileSync(join(gpA, 'gv1', '.env'), 'A=3\n# envvault:local\nDB=/a\n')
+    const ka = await a.open()
+    const preview = await a.sync.previewPush(ka.key, ka.vaultId, 'gv1')
+
+    const b = await on('b')
+    writeFileSync(join(gpB, 'gv1', '.env'), 'A=4\n# envvault:local\nDB=\n')
+    // b never pulled the edit it made, so this overwrites it.
+    await pushRepo(b, 'gv1', true)
+
+    const a2 = await on('a')
+    const ka2 = await a2.open()
+    expect(
+      await errorCode(
+        a2.sync.push(ka2.key, ka2.vaultId, {
+          repoName: 'gv1',
+          overwriteConfirmed: true,
+          expected: preview.expected
+        })
+      )
+    ).toBe('VAULT_CHANGED')
+  })
+
+  it('reports an unreachable repository', async () => {
+    const m = await machine('a', {
+      projects: gpA,
+      vault: { kind: 'git', url: join(root, 'no-such-remote.git'), branch: 'main' }
+    })
+    expect(await (await m.vault.requireVault()).state()).toBe('folder-missing')
+    expect(await errorCode(m.open())).toBe('GIT_VAULT_UNREACHABLE')
   })
 })
