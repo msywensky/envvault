@@ -79,15 +79,16 @@ function parseAndWipe(bytes: Buffer | null): Map<string, string> {
 
 export async function listRepos(key: Uint8Array, vaultId: string): Promise<RepoRow[]> {
   const cfg = await configured()
-  const [scanned, entryIds] = await Promise.all([scanRepos(cfg.projectsPath), cfg.vault.list()])
-  const ids = new Set(entryIds)
+  // One snapshot for every row, so the list is one consistent view of the vault.
+  const [scanned, snapshot] = await Promise.all([scanRepos(cfg.projectsPath), cfg.vault.snapshot()])
+  const ids = new Set(snapshot.ids)
 
   const row = async (name: string, repo: ScannedRepo | null, id: string): Promise<RepoRow> => {
     const hasEnv = repo !== null && (repo.localHash !== null || repo.envError !== null)
     try {
       if (repo?.envError) throw repo.envError
-      const payload = ids.has(id) ? await cfg.vault.read(key, id) : null
-      const vault = payload ? toInfo(payload) : null
+      const entry = ids.has(id) ? await snapshot.read(key, id) : null
+      const vault = entry ? toInfo(entry.payload) : null
       const last = await getLast(vaultId, id)
       const status = computeStatus({
         repoExists: repo !== null,
@@ -148,6 +149,8 @@ interface Snapshot {
   syncedHash: string | null
   payload: Payload | null
   vault: VaultInfo | null
+  /** The vault entry's storage version, which a push writes against (null: none). */
+  vaultVersion: string | null
 }
 
 /** Read the current local and vault state, run `fn`, then wipe the plaintext. */
@@ -163,7 +166,8 @@ async function withSnapshot<T>(
   let synced: Buffer | null = null
   try {
     synced = local ? syncedBytes(local) : null
-    const payload = await cfg.vault.read(key, id)
+    const entry = await (await cfg.vault.snapshot()).read(key, id)
+    const payload = entry?.payload ?? null
     return await fn({
       cfg,
       repoDir,
@@ -173,7 +177,8 @@ async function withSnapshot<T>(
       synced,
       syncedHash: synced ? sha256Hex(synced) : null,
       payload,
-      vault: payload ? toInfo(payload) : null
+      vault: payload ? toInfo(payload) : null,
+      vaultVersion: entry?.version ?? null
     })
   } finally {
     if (synced !== local) synced?.fill(0)
@@ -273,7 +278,9 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
     let vault = s.vault
     if (!vault || vault.contentHash !== s.syncedHash) {
       const payload = makePayload(s.synced, nextVersion(vault, last), s.cfg.machineName)
-      await s.cfg.vault.write(s.id, await encryptPayload(key, s.id, payload))
+      // `expected` above is what the user reviewed; the version makes the
+      // write itself fail if the vault copy changed after this snapshot.
+      await s.cfg.vault.write(s.id, await encryptPayload(key, s.id, payload), s.vaultVersion)
       vault = toInfo(payload)
     }
     await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
@@ -486,11 +493,18 @@ function editing<T>(fn: () => T): T {
   }
 }
 
+const editorStale = (): AppError =>
+  new AppError(
+    'VAULT_CHANGED',
+    'The vault copy changed since you opened the editor. Reload it and make your changes again.'
+  )
+
 /** The vault copy of a repo in the projects folder, as editor rows. */
 export async function openEditor(key: Uint8Array, repoName: string): Promise<EditorData> {
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, repoName)
-  const payload = await cfg.vault.read(key, entryId(repoName))
+  const entry = await (await cfg.vault.snapshot()).read(key, entryId(repoName))
+  const payload = entry?.payload ?? null
   const entries = editing(() => editorEntries(editableText(payload)))
   return {
     entries,
@@ -512,14 +526,10 @@ export async function saveEdit(
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, req.repoName)
   const id = entryId(req.repoName)
-  const payload = await cfg.vault.read(key, id)
+  const entry = await (await cfg.vault.snapshot()).read(key, id)
+  const payload = entry?.payload ?? null
   const vault = payload ? toInfo(payload) : null
-  if ((vault?.contentHash ?? null) !== req.expectedVaultHash) {
-    throw new AppError(
-      'VAULT_CHANGED',
-      'The vault copy changed since you opened the editor. Reload it and make your changes again.'
-    )
-  }
+  if ((vault?.contentHash ?? null) !== req.expectedVaultHash) throw editorStale()
   const edited = Buffer.from(
     editing(() => applyEdits(editableText(payload), req)),
     'utf8'
@@ -538,7 +548,12 @@ export async function saveEdit(
       nextVersion(vault, await getLast(vaultId, id)),
       cfg.machineName
     )
-    await cfg.vault.write(id, await encryptPayload(key, id, next))
+    try {
+      await cfg.vault.write(id, await encryptPayload(key, id, next), entry?.version ?? null)
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'VAULT_CHANGED') throw editorStale()
+      throw err
+    }
     return { vault: toInfo(next), changed: true }
   } finally {
     if (synced !== edited) synced?.fill(0)

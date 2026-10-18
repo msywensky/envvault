@@ -473,8 +473,8 @@ describe('machine-specific keys', () => {
 
   async function stored(m: Machine): Promise<string> {
     const { key } = await m.open()
-    const payload = await m.vault.vaultAt(vaultDir).read(key, 'local1')
-    return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
+    const entry = await (await m.vault.vaultAt(vaultDir).snapshot()).read(key, 'local1')
+    return Buffer.from(entry?.payload.envBase64 ?? '', 'base64').toString('utf8')
   }
 
   it('pushes marked keys blanked, and ignores local edits to them', async () => {
@@ -668,8 +668,8 @@ describe('editing the vault copy', () => {
 
   async function stored(m: Machine, id: string): Promise<string> {
     const { key } = await m.open()
-    const payload = await m.vault.vaultAt(vaultDir).read(key, id)
-    return Buffer.from(payload?.envBase64 ?? '', 'base64').toString('utf8')
+    const entry = await (await m.vault.vaultAt(vaultDir).snapshot()).read(key, id)
+    return Buffer.from(entry?.payload.envBase64 ?? '', 'base64').toString('utf8')
   }
 
   it('opens the vault copy as rows, with machine-specific values empty', async () => {

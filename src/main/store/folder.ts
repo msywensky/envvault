@@ -4,10 +4,24 @@
 //   <id>.env.enc         one encrypted entry per repo
 //   .<name>.<hex>.tmp    in-flight atomic writes (ours; removed when stale)
 // Anything else (Drive conflict copies, user files) is ignored.
+//
+// A folder has no versions or transactions, so this is best-effort: a
+// snapshot lists the folder now and reads each file when asked, and a write
+// re-reads the file and compares its hash with `expected` before replacing
+// it. That's exact within this process (writes are queued) and as good as
+// Drive allows between machines.
 import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { resolveInside } from '../../core/paths'
-import { atomicWrite, isErrno, writeNew } from '../fsutil'
-import { checkName, isStoreName, StoreExistsError, type VaultStore } from './types'
+import { atomicWrite, isErrno } from '../fsutil'
+import { createSerial } from '../mutex'
+import {
+  checkName,
+  contentVersion,
+  isStoreName,
+  StoreConflictError,
+  type StoreSnapshot,
+  type VaultStore
+} from './types'
 
 // atomicWrite's temp names: ".<final>.<16 hex>.tmp". The random suffix keeps
 // two machines' in-flight files (which Drive may sync) from colliding.
@@ -15,6 +29,10 @@ const TEMP_RE = /^\.([a-z0-9][a-z0-9._-]*)\.[0-9a-f]{16}\.tmp$/
 const STALE_TEMP_MS = 10 * 60_000
 
 export class FolderStore implements VaultStore {
+  readonly kind = 'folder'
+  // Each write's check and replace must not interleave with another's.
+  private readonly serial = createSerial()
+
   constructor(private readonly dir: string) {}
 
   async reachable(): Promise<boolean> {
@@ -25,35 +43,34 @@ export class FolderStore implements VaultStore {
     }
   }
 
-  async list(): Promise<string[]> {
-    return (await readdir(this.dir)).filter(isStoreName)
+  /** A folder needs no checks beyond being reachable. */
+  async check(): Promise<void> {
+    return undefined
   }
 
-  async get(name: string): Promise<Uint8Array | null> {
-    checkName(name)
-    try {
-      return await readFile(resolveInside(this.dir, name))
-    } catch (err) {
-      if (isErrno(err, 'ENOENT')) return null
-      throw err
+  async snapshot(): Promise<StoreSnapshot> {
+    const names = (await readdir(this.dir)).filter(isStoreName)
+    return {
+      names,
+      get: async (name) => {
+        const bytes = await this.read(name)
+        return bytes ? { bytes, version: contentVersion(bytes) } : null
+      }
     }
   }
 
-  // Exclusive create, never rename-over: of two machines creating at once
-  // (Drive syncing one in), the first file wins and the other fails.
-  async create(name: string, bytes: Uint8Array): Promise<void> {
+  // Check, then rename over. A meta.json used to be created with O_EXCL;
+  // now another process could slip one in between the check and the
+  // rename, a window of milliseconds that vault.ts narrows further by
+  // re-checking the vault state right before it creates one.
+  async write(name: string, bytes: Uint8Array, expected: string | null): Promise<string> {
     checkName(name)
-    try {
-      await writeNew(this.dir, name, bytes, 0o644)
-    } catch (err) {
-      if (isErrno(err, 'EEXIST')) throw new StoreExistsError()
-      throw err
-    }
-  }
-
-  async put(name: string, bytes: Uint8Array): Promise<void> {
-    checkName(name)
-    await atomicWrite(this.dir, name, bytes, { mode: 0o644 })
+    return this.serial(async () => {
+      const current = await this.read(name)
+      if ((current ? contentVersion(current) : null) !== expected) throw new StoreConflictError()
+      await atomicWrite(this.dir, name, bytes, { mode: 0o644 })
+      return contentVersion(bytes)
+    })
   }
 
   /** Remove our own temp files left by a crash. Recent ones may be in flight. */
@@ -65,6 +82,16 @@ export class FolderStore implements VaultStore {
       const file = resolveInside(this.dir, name)
       const info = await stat(file)
       if (now - info.mtimeMs > STALE_TEMP_MS) await rm(file, { force: true })
+    }
+  }
+
+  private async read(name: string): Promise<Buffer | null> {
+    checkName(name)
+    try {
+      return await readFile(resolveInside(this.dir, name))
+    } catch (err) {
+      if (isErrno(err, 'ENOENT')) return null
+      throw err
     }
   }
 }
