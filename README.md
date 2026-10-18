@@ -47,11 +47,17 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
   - its arguments are validated with a strict zod schema (unknown fields are rejected);
   - it always returns a `{ok, data}` / `{ok, error}` envelope, and error messages never echo input.
 - The renderer never supplies file paths: folders come from the native picker in the main process, and repos are referred to by validated name.
-- **Env values reach the renderer only when you click Show values in a raw pull diff.** Everything else that crosses IPC is key names, statuses and metadata. The raw diff:
+- **Env values cross IPC only in two places: the raw pull diff after you click Show values, and the vault-copy editor.** Everything else that crosses IPC is key names, statuses and metadata. The raw diff:
   - arrives masked: the main process replaces every value, the continuation lines of multi-line values and any unrecognised line with `••••••••` before sending it. Key names, comments and blank lines are kept;
   - is sent with values only when you click **Show values**, and only for the exact local and vault content the preview showed;
   - contains only the changed lines plus 3 lines of context around them (other unchanged lines are sent as a count);
   - keeps its values only in the pull dialog (never the app's store), never logs them, and drops them after 60 seconds, when the window is hidden, when the dialog closes and when EnvVault locks.
+
+  The editor:
+
+  - receives the vault copy's values when you open it, and sends back only the keys you added, changed or removed, together with the vault version it opened, so it can't overwrite a newer copy;
+  - shows every value masked until you click **Show**, and masks them all again when the window is hidden or after a minute without input;
+  - keeps its values only in the editor (never the app's store), never logs them, and drops them when it closes and when EnvVault locks.
 
 **Data handling**
 
@@ -83,7 +89,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
 - Secrets in `.env.example` that don't look like secrets. The same-value check is a heuristic.
 - Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.
-- Someone seeing your screen while a raw diff shows values. The values it showed also stay in the renderer's memory until they are garbage-collected, for the same reason.
+- Someone seeing your screen while a raw diff or the editor shows values. Those values also stay in the renderer's memory until they are garbage-collected, for the same reason. A masked field still shows how long its value is.
 - Metadata: repo names, file sizes and modification times are visible in the vault folder.
 - A rollback on a machine that has never synced that repo (there is no earlier version to compare against).
 
@@ -124,6 +130,14 @@ DATA_DIR=/Users/me/data
 - values that are the same in both files and look like secrets, since `.env.example` is usually committed. A value looks like a secret if it is a URL with a password for a non-local host, 8+ characters under a key name such as `*_SECRET`, `*_TOKEN`, `*_PASSWORD` or `*_KEY`, or a long token-like string. Localhost URLs, ports, other plain values and browser-public keys (`VITE_`, `NEXT_PUBLIC_`, ...) are never flagged.
 
 You can turn the checks off in Settings.
+
+**Editing the vault copy:** click **Edit** on a repo to change its vault copy in a table of keys and values, without a local `.env`. On a repo with no `.env` and no vault copy, this creates one.
+
+- Values are masked until you click **Show**. You can type or paste a new value into a masked field without displaying it. Multi-line values (such as a PEM key) need **Show** to edit.
+- You can add, change and remove keys. Machine-specific keys are listed but have no value to edit, since the vault doesn't store one.
+- Comments, blank lines, `export`, spacing and line endings stay as they are. A changed value keeps its line's prefix and trailing comment, and is quoted only as much as dotenv needs to read it back exactly.
+- **Review changes** lists the key names that change. **Save to vault** writes a new version, unless the vault copy changed since you opened the editor; then reload and edit again.
+- Saving never touches your local `.env`. A repo that has one shows "Vault newer" afterwards, and pulling brings the edit in, keeping machine-specific values.
 
 **Recovery:** there is no backdoor. If you lose the master password, the vault can't be opened. Your repos' plaintext `.env` files are your remaining copies, so you could start a new vault and push them again.
 
@@ -168,7 +182,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 ## Roadmap
 
 - Unlock with the Bitwarden CLI.
-- Reveal a `.env` in an auto-hiding view.
+- Run a command with the vault copy's values in its environment, without a `.env`.
 - Change the master password.
 - Packaged installers.
 
