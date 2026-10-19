@@ -2,9 +2,11 @@
 // key names, statuses and metadata, and the one response with values (the
 // raw pull diff after "Show values") is fetched and held only by SyncDialog.
 import { reactive } from 'vue'
+import { sameFile } from '../../shared/envfile'
 import { autoPullMessage, cliPushMessage } from '../../shared/messages'
 import type { Result } from '../../shared/result'
-import type { AppState, RepoRow, Settings } from '../../shared/types'
+import type { AppState, EnvFile, RepoRow, Settings } from '../../shared/types'
+import { fileOf } from './status'
 
 export type View = 'loading' | 'setup' | 'lock' | 'repos' | 'settings'
 
@@ -25,8 +27,8 @@ export const store = reactive({
   startupError: null as string | null,
   /** Bumped whenever the session locks, so open dialogs close themselves. */
   lockEpoch: 0,
-  /** Mini mode's repo (see MiniView), or null for the full window. */
-  mini: null as string | null
+  /** Mini mode's env file (see MiniView), or null for the full window. */
+  mini: null as EnvFile | null
 })
 
 let nextToastId = 1
@@ -109,10 +111,11 @@ export async function handleLocked(): Promise<void> {
 
 // Rows that changed without the renderer asking (automatic pull, the
 // envvault command). No IPC here: any request counts as activity, so
-// refetching would keep the vault from ever auto-locking.
+// refetching would keep the vault from ever auto-locking. A row is one env
+// file, so they are matched by file, never by repo name alone.
 function patchRepos(rows: RepoRow[]): void {
   for (const row of rows) {
-    const i = store.repos.findIndex((r) => r.name === row.name)
+    const i = store.repos.findIndex((r) => sameFile(r, row))
     if (i !== -1) store.repos[i] = row
   }
 }
@@ -129,16 +132,17 @@ export function applyCliPushed(row: RepoRow): void {
   toast('success', cliPushMessage(row))
 }
 
-/** Mini mode's repo, rechecked by main. No toast: the badge shows it. */
+/** Mini mode's env file, rechecked by main. No toast: the badge shows it. */
 export function applyRepoStatus(row: RepoRow): void {
   patchRepos([row])
 }
 
-/** Shrink the window to one repo. The view switches first, so it never shows squeezed. */
-export async function enterMini(repoName: string): Promise<void> {
-  store.mini = repoName
+/** Shrink the window to one env file. The view switches first, so it never shows squeezed. */
+export async function enterMini(row: RepoRow): Promise<void> {
+  const file = fileOf(row)
+  store.mini = file
   const res = await call(() =>
-    window.envvault.setLayout({ layout: 'mini', repoName, reviewing: false })
+    window.envvault.setLayout({ layout: 'mini', ...file, reviewing: false })
   )
   if (!res.ok) {
     store.mini = null
@@ -152,9 +156,13 @@ export async function exitMini(): Promise<void> {
   store.mini = null
 }
 
-export async function loadRepos(): Promise<void> {
+/**
+ * Load every row. `rescan` asks git again which env files each repo has: for
+ * opening the list and Refresh, not for reloading after a push or pull.
+ */
+export async function loadRepos(rescan = false): Promise<void> {
   const epoch = store.lockEpoch
-  const rows = await run(() => window.envvault.listRepos())
+  const rows = await run(() => window.envvault.listRepos(rescan))
   // A reply that raced a lock must not repopulate the cleared store.
   if (rows && epoch === store.lockEpoch) {
     store.repos = rows

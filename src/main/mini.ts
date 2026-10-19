@@ -1,19 +1,21 @@
-// Mini mode: the window shrinks to one repo (the renderer's MiniView), kept
-// above other windows unless the miniOnTop setting is off, so its Push button
-// is at hand while you work on that repo.
+// Mini mode: the window shrinks to one env file (the renderer's MiniView),
+// kept above other windows unless the miniOnTop setting is off, so its Push
+// button is at hand while you work on that repo.
 //
-// Main keeps that repo's row fresh: when its .env changes, when the window
+// Main keeps that file's row fresh: when the file changes, when the window
 // gains focus, and once a minute. Like automatic pull, it takes the key
 // through session.withKey, which doesn't count as activity, and the row goes
 // to the renderer as EV.repoStatus, which patches it in without calling IPC.
 // So mini mode never keeps the vault unlocked.
 import { BrowserWindow, screen } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
+import { envFileName } from '../core/envpath'
 import { placeWithin, type Rect, type Size } from '../core/layout'
 import { EV } from '../shared/channels'
-import type { Layout } from '../shared/types'
+import { sameFile } from '../shared/envfile'
+import type { EnvFile, Layout } from '../shared/types'
 import { getConfig } from './config'
-import { resolveRepo } from './repos'
+import { resolveEnvDir, resolveRepo } from './repos'
 import * as session from './session'
 import { listRepos } from './sync'
 import { getMainWindow } from './window'
@@ -31,7 +33,7 @@ const DEBOUNCE_MS = 300
 
 interface Mini {
   win: BrowserWindow
-  repoName: string
+  file: EnvFile
   /** Where the full window was, to go back to. */
   fullBounds: Rect
   wasMaximized: boolean
@@ -54,10 +56,11 @@ export async function setLayout(layout: Layout): Promise<null> {
     return null
   }
   const current = mini
-  if (current?.win !== win) await enter(win, layout.repoName)
-  else if (current.repoName !== layout.repoName) {
-    current.repoName = layout.repoName
-    await watchRepo(current)
+  const file = { repoName: layout.repoName, path: layout.path }
+  if (current?.win !== win) await enter(win, file)
+  else if (!isFile(current.file, file)) {
+    current.file = file
+    await watchFile(current)
   }
   resize(win, layout.reviewing ? REVIEW : MINI)
   win.setAlwaysOnTop((await getConfig()).miniOnTop, 'floating')
@@ -70,7 +73,14 @@ export function applyMiniOnTop(onTop: boolean): void {
   if (mini && !mini.win.isDestroyed()) mini.win.setAlwaysOnTop(onTop, 'floating')
 }
 
-async function enter(win: BrowserWindow, repoName: string): Promise<void> {
+/** True if `a` and `b` are the same env file (see sameFile). */
+const isFile = (a: EnvFile, b: EnvFile): boolean =>
+  sameFile(
+    { name: a.repoName, path: a.path, storedName: null },
+    { name: b.repoName, path: b.path, storedName: null }
+  )
+
+async function enter(win: BrowserWindow, file: EnvFile): Promise<void> {
   leave()
   if (win.isFullScreen()) {
     // macOS animates out of full screen; resizing before it ends is ignored.
@@ -91,7 +101,7 @@ async function enter(win: BrowserWindow, repoName: string): Promise<void> {
   win.once('closed', onClosed)
   mini = {
     win,
-    repoName,
+    file,
     fullBounds,
     wasMaximized,
     watcher: null,
@@ -100,7 +110,7 @@ async function enter(win: BrowserWindow, repoName: string): Promise<void> {
     onClosed
   }
   mini.timer.unref()
-  await watchRepo(mini)
+  await watchFile(mini)
 }
 
 /** Back to the full window, where it was. */
@@ -143,26 +153,27 @@ function resize(win: BrowserWindow, size: Size): void {
 }
 
 /**
- * Watch the repo folder for its .env (editors save by renaming over it, and
+ * Watch the env file's folder for it (editors save by renaming over it, and
  * it may not exist yet). Without a watcher, focus and the timer still recheck.
  */
-async function watchRepo(current: Mini): Promise<void> {
+async function watchFile(current: Mini): Promise<void> {
   current.watcher?.close()
   current.watcher = null
-  const name = current.repoName
-  let dir: string
+  const file = current.file
+  let dir: string | null
   try {
     const { projectsPath } = await getConfig()
     if (!projectsPath) return
-    dir = await resolveRepo(projectsPath, name)
+    dir = await resolveEnvDir(await resolveRepo(projectsPath, file.repoName), file.path)
   } catch {
     return
   }
-  // Left mini mode or switched repo while resolving.
-  if (mini !== current || current.repoName !== name) return
+  // Left mini mode or switched file while resolving.
+  if (!dir || mini !== current || current.file !== file) return
+  const name = envFileName(file.path)
   try {
-    current.watcher = watch(dir, { persistent: false }, (_event, file) => {
-      if (file === null || file === '.env') schedule()
+    current.watcher = watch(dir, { persistent: false }, (_event, changed) => {
+      if (changed === null || changed === name) schedule()
     })
     current.watcher.on('error', () => {
       current.watcher?.close()
@@ -181,7 +192,7 @@ function schedule(): void {
   }, DEBOUNCE_MS)
 }
 
-/** Recompute the repo's row and send it; one at a time, rerun if asked meanwhile. */
+/** Recompute the file's row and send it; one at a time, rerun if asked meanwhile. */
 function recheck(): void {
   if (checking) {
     again = true
@@ -203,10 +214,14 @@ function recheck(): void {
 async function sendRow(): Promise<void> {
   const current = mini
   if (!current || !session.isUnlocked()) return
-  const name = current.repoName
+  const file = current.file
   try {
-    const [row] = await session.withKey((key, id) => listRepos(key, id, name))
-    if (row && mini === current && current.repoName === name && !current.win.isDestroyed()) {
+    const rows = await session.withKey((key, id) => listRepos(key, id, { only: file.repoName }))
+    // The repo's rows: one per env file. Never just the first.
+    const row = rows.find((r) =>
+      sameFile(r, { name: file.repoName, path: file.path, storedName: null })
+    )
+    if (row && mini === current && current.file === file && !current.win.isDestroyed()) {
       current.win.webContents.send(EV.repoStatus, row)
     }
   } catch {

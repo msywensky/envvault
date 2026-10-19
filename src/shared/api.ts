@@ -2,6 +2,7 @@ import type { Result } from './result'
 import type {
   AppState,
   EditorData,
+  EnvFile,
   GhStatus,
   GitignoreResult,
   GitRepoChoice,
@@ -13,6 +14,7 @@ import type {
   PushRequest,
   RawDiff,
   RawDiffRequest,
+  RemoveRequest,
   RepoRow,
   SaveEditRequest,
   SaveEditResult,
@@ -45,6 +47,7 @@ export interface Responses {
   'repo:pullRawDiff': RawDiff
   'repo:openEditor': EditorData
   'repo:saveEdit': SaveEditResult
+  'repo:removeFromVault': null
   'repo:addGitignore': GitignoreResult
   'skill:status': SkillInfo
   'skill:install': SkillInfo
@@ -96,23 +99,29 @@ export interface EnvVaultApi {
   lock(): R<'session:lock'>
   /** This machine's setup code for the vault, after checking the password. Unlocked only. */
   showSetupCode(password: string): R<'vault:showSetupCode'>
-  listRepos(): R<'repos:list'>
-  previewPush(repoName: string): R<'repo:previewPush'>
+  /**
+   * A row per env file. `rescan` asks git again which env files each repo has;
+   * without it, the files found last time are used.
+   */
+  listRepos(rescan: boolean): R<'repos:list'>
+  previewPush(file: EnvFile): R<'repo:previewPush'>
   push(request: PushRequest): R<'repo:push'>
-  previewPull(repoName: string): R<'repo:previewPull'>
+  previewPull(file: EnvFile): R<'repo:previewPull'>
   pull(request: PullRequest): R<'repo:pull'>
   /** Line-by-line diff of what a pull would write, masked unless `values` is set. */
   pullRawDiff(request: RawDiffRequest): R<'repo:pullRawDiff'>
   /** The vault copy as editor rows, values included (see EnvEditorDialog). */
-  openEditor(repoName: string): R<'repo:openEditor'>
+  openEditor(file: EnvFile): R<'repo:openEditor'>
   /** Apply edits to the vault copy, if it is still the one openEditor returned. */
   saveEdit(request: SaveEditRequest): R<'repo:saveEdit'>
-  addGitignore(repoName: string): R<'repo:addGitignore'>
+  /** Delete an env file's vault copy, if it is still at `expectedVaultHash`. Local files stay. */
+  removeFromVault(request: RemoveRequest): R<'repo:removeFromVault'>
+  addGitignore(file: EnvFile): R<'repo:addGitignore'>
   skillStatus(): R<'skill:status'>
   /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
   installSkill(replace: boolean): R<'skill:install'>
   removeSkill(): R<'skill:remove'>
-  /** Switch between the full window and mini mode on one repo. */
+  /** Switch between the full window and mini mode on one env file. */
   setLayout(layout: Layout): R<'window:setLayout'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
@@ -123,6 +132,6 @@ export interface EnvVaultApi {
   onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
   /** Called with the row the envvault command just pushed. Must not trigger IPC either. */
   onCliPushed(callback: (row: RepoRow) => void): () => void
-  /** Called with mini mode's repo when main rechecks it. Must not trigger IPC either. */
+  /** Called with mini mode's env file when main rechecks it. Must not trigger IPC either. */
   onRepoStatus(callback: (row: RepoRow) => void): () => void
 }

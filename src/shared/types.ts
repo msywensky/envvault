@@ -73,8 +73,7 @@ export interface EnvChange {
   value: string
 }
 
-export interface SaveEditRequest {
-  repoName: string
+export interface SaveEditRequest extends EnvFile {
   expectedVaultHash: string | null
   set: EnvChange[]
   add: EnvChange[]
@@ -129,7 +128,8 @@ export interface Settings {
  * The window's layout: the full app, or mini mode on one repo (src/main/mini.ts).
  * `reviewing` makes the mini window big enough for the push or pull dialog.
  */
-export type Layout = { layout: 'full' } | { layout: 'mini'; repoName: string; reviewing: boolean }
+export type Layout =
+  { layout: 'full' } | { layout: 'mini'; repoName: string; path: string; reviewing: boolean }
 
 /** The GitHub CLI, as Setup sees it (see src/main/gh.ts). */
 export interface GhStatus {
@@ -190,8 +190,17 @@ export interface AppState {
   locked: boolean
 }
 
+/** One env file of one repo (see EnvFile). Match rows with sameFile (src/shared/envfile.ts). */
 export interface RepoRow {
+  /** The repo. */
   name: string
+  /**
+   * The file's path in the repo. Null only for a vault entry that couldn't be
+   * read, whose path is inside its ciphertext (see `storedName`).
+   */
+  path: string | null
+  /** The file's name in the vault (folder or repository), or null if it has no vault copy. */
+  storedName: string | null
   status: SyncStatus | 'error'
   hasEnv: boolean
   vault: VaultInfo | null
@@ -261,15 +270,18 @@ export interface PullPreview {
   expected: Expected
 }
 
-export interface PushRequest {
-  repoName: string
+export interface PushRequest extends EnvFile {
   overwriteConfirmed: boolean
   expected: Expected
 }
 
-export interface PullRequest {
-  repoName: string
+export interface PullRequest extends EnvFile {
   expected: Expected
+}
+
+/** Remove an env file's vault copy, if it is still the one the user saw. */
+export interface RemoveRequest extends EnvFile {
+  expectedVaultHash: string
 }
 
 export interface RawDiffRequest extends PullRequest {

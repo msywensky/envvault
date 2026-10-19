@@ -1,5 +1,5 @@
 // Automatic pull: while unlocked and the autoPull setting is on, pull every
-// repo whose change is one-sided (sync.autoPull decides). It takes the key
+// env file whose change is one-sided (sync.autoPull decides). It takes the key
 // through session.withKey, which doesn't count as activity, so it never keeps
 // the vault unlocked. For the same reason the renderer must not call IPC when
 // it hears about a pull: the event carries the updated rows instead.
@@ -26,12 +26,15 @@ export async function runAutoPull(): Promise<RepoRow[]> {
   const pulled: RepoRow[] = []
   try {
     if (!(await getConfig()).autoPull) return []
+    // Without asking git: only files the vault has a copy of can be newer there.
     const rows = await session.withKey((key, id) => listRepos(key, id))
-    for (const { name } of rows.filter((r) => r.status === 'vault-newer')) {
+    for (const { name, path } of rows.filter((r) => r.status === 'vault-newer')) {
+      if (path === null) continue
+      const file = { repoName: name, path }
       try {
-        // One repo per exclusive(): a user's push or pull waits at most for
-        // one repo, and autoPull re-checks a candidate that went stale.
-        const row = await exclusive(() => session.withKey((key, id) => autoPull(key, id, name)))
+        // One file per exclusive(): a user's push or pull waits at most for
+        // one file, and autoPull re-checks a candidate that went stale.
+        const row = await exclusive(() => session.withKey((key, id) => autoPull(key, id, file)))
         if (row) pulled.push(row)
       } catch (err) {
         if (err instanceof AppError && err.code === 'LOCKED') break

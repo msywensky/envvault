@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Mini mode: one repo in a small window, two rows tall. The header holds its
+// Mini mode: one env file in a small window, two rows tall. The header holds its
 // Push (or Pull) button with the window's controls, and the row below its
 // status. Main keeps the row fresh (EV.repoStatus, see src/main/mini.ts), so
 // nothing here polls. A push or pull still goes through SyncDialog's review;
@@ -8,6 +8,7 @@
 // unlock form takes over; anything it can't handle (a setup code, no vault
 // yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { sameFile } from '../../../shared/envfile'
 import type { RepoRow } from '../../../shared/types'
 import StatusBadge from '../components/StatusBadge.vue'
 import SyncDialog from '../components/SyncDialog.vue'
@@ -17,12 +18,22 @@ import {
   STATUS_HINT,
   absoluteTime,
   actionsFor,
+  fileOf,
+  fileTitle,
   relativeTime,
+  rowKey,
   type RowAction
 } from '../status'
 
-const name = computed(() => store.mini ?? '')
-const row = computed(() => store.repos.find((r) => r.name === store.mini) ?? null)
+const shown = computed(() =>
+  store.mini ? { name: store.mini.repoName, path: store.mini.path, storedName: null } : null
+)
+const name = computed(() => (shown.value ? fileTitle(shown.value) : ''))
+// Matched by file: a repo has a row per env file.
+const row = computed(() => {
+  const file = shown.value
+  return file ? (store.repos.find((r) => sameFile(r, file)) ?? null) : null
+})
 const locked = computed(() => store.view === 'lock')
 // The compact form only takes a password; a setup code needs the full lock screen.
 const canUnlockHere = computed(
@@ -45,10 +56,10 @@ const error = ref<string | null>(null)
 const passwordInput = ref<HTMLInputElement | null>(null)
 
 async function review(repo: RepoRow, action: RowAction): Promise<void> {
-  const repoName = repo.name
+  const file = fileOf(repo)
   // Grow first, so the dialog opens at its full size.
   const res = await call(() =>
-    window.envvault.setLayout({ layout: 'mini', repoName, reviewing: true })
+    window.envvault.setLayout({ layout: 'mini', ...file, reviewing: true })
   )
   if (!res.ok) return
   const mode = action === 'push' || action === 'keep-local' ? 'push' : 'pull'
@@ -57,8 +68,14 @@ async function review(repo: RepoRow, action: RowAction): Promise<void> {
 
 async function closeReview(done: boolean): Promise<void> {
   open.value = null
-  const repoName = name.value
-  await call(() => window.envvault.setLayout({ layout: 'mini', repoName, reviewing: false }))
+  const mini = store.mini
+  if (mini) {
+    // A plain copy: store.mini is reactive, which IPC can't clone.
+    const { repoName, path } = mini
+    await call(() =>
+      window.envvault.setLayout({ layout: 'mini', repoName, path, reviewing: false })
+    )
+  }
   if (done) await loadRepos()
 }
 
@@ -203,7 +220,7 @@ watch(locked, async (now) => {
     </div>
 
     <div v-else-if="!row" class="mini-body">
-      <span class="muted small">This repo is no longer in the projects folder.</span>
+      <span class="muted small">This .env is no longer in the projects folder.</span>
     </div>
 
     <div v-else class="mini-body" :title="vaultInfo">
@@ -218,7 +235,7 @@ watch(locked, async (now) => {
 
     <SyncDialog
       v-if="open"
-      :key="open.repo.name + open.mode"
+      :key="rowKey(open.repo) + open.mode"
       :repo="open.repo"
       :mode="open.mode"
       :conflict="open.conflict"

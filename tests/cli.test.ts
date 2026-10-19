@@ -24,7 +24,15 @@ const VAULT = {
   updatedBy: 'laptop',
   updatedAt: '2026-10-17T12:00:00Z'
 }
-const ROW: RepoRow = { name: 'web', status: 'local-newer', hasEnv: true, vault: VAULT, error: null }
+const ROW: RepoRow = {
+  name: 'web',
+  path: '.env',
+  storedName: 'web.env.enc',
+  status: 'local-newer',
+  hasEnv: true,
+  vault: VAULT,
+  error: null
+}
 
 function preview(overrides: Partial<PushPreview> = {}): PushPreview {
   return {

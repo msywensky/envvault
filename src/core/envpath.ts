@@ -3,10 +3,10 @@
 // are ASCII-only like repo names, so they need no normalisation. A valid path
 // never leaves its repo: no "." or ".." segments, no ".git", and nothing
 // Windows would read as another name (a trailing dot, a device name).
+import { ROOT_ENV } from '../shared/envfile'
 import { isWindowsReserved } from './paths'
 
-/** Every repo's own .env, at its root. */
-export const ROOT_ENV = '.env'
+export { ROOT_ENV }
 
 /** The file names that are synced, in any folder. */
 export const ENV_FILE_NAMES: readonly string[] = [ROOT_ENV]

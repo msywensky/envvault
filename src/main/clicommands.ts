@@ -6,6 +6,7 @@
 // elsewhere is left for the app.
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
+import { ROOT_ENV } from '../core/envpath'
 import type { RepoTarget } from '../shared/cli'
 import type { RepoRow } from '../shared/types'
 import type { CliTable } from './cliserver'
@@ -38,11 +39,18 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
       run: (args) =>
         session.withKey(async (key, id) => {
           const name = 'all' in args ? null : await repoOf(args)
-          const rows = await sync.listRepos(key, id)
+          // Asked for by the user, so git is asked too.
+          const rows = await sync.listRepos(key, id, {
+            find: true,
+            ...(name ? { only: name } : {})
+          })
           if (name === null) return rows
-          const row = rows.find((r) => entryId(r.name) === entryId(name))
-          if (!row) throw new AppError('REPO_NOT_FOUND', 'That repo is not in the projects folder.')
-          return [row]
+          // Every env file of the repo.
+          const repoRows = rows.filter((r) => entryId(r.name) === entryId(name))
+          if (repoRows.length === 0) {
+            throw new AppError('REPO_NOT_FOUND', 'That repo is not in the projects folder.')
+          }
+          return repoRows
         })
     },
     previewPush: {
@@ -50,7 +58,10 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
       run: (args) =>
         session.withKey(async (key, id) => {
           const repo = await repoOf(args)
-          return { repo, preview: await sync.previewPush(key, id, repo) }
+          return {
+            repo,
+            preview: await sync.previewPush(key, id, { repoName: repo, path: ROOT_ENV })
+          }
         })
     },
     push: {
@@ -65,6 +76,7 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
             try {
               return await sync.push(key, id, {
                 repoName,
+                path: ROOT_ENV,
                 expected: args.expected,
                 overwriteConfirmed: false
               })

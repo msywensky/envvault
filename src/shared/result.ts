@@ -27,6 +27,7 @@ export type ErrorCode =
   | 'REPO_NOT_FOUND'
   | 'ENV_NOT_FOUND'
   | 'ENV_SYMLINK'
+  | 'ENV_FOLDER_MISSING'
   | 'ENV_NOT_FILE'
   | 'ENV_TOO_LARGE'
   | 'ENV_NOT_UTF8'

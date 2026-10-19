@@ -20,8 +20,9 @@ import {
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { decodeEnv, decryptPayload } from '../src/core/crypto'
 import type { CliTable } from '../src/main/cliserver'
-import type { RepoRow, VaultLocation } from '../src/shared/types'
+import type { EnvFile, PullPreview, RepoRow, VaultLocation } from '../src/shared/types'
 
 const h = vi.hoisted(() => ({ userData: '', setupCode: undefined as string | undefined }))
 
@@ -113,29 +114,44 @@ async function machine(
   return { config, vault, sync, session, autopull, clicommands, open }
 }
 
-async function rows(m: Machine): Promise<Record<string, string>> {
+/** An env file: the repo's root .env unless `path` says otherwise. */
+const envFile = (repoName: string, path = '.env'): EnvFile => ({ repoName, path })
+
+/**
+ * Each row's status (or error code), by repo name for a root .env and by
+ * "repo/path" for any other file. `find` asks git which files each repo has.
+ */
+async function rows(m: Machine, find = false): Promise<Record<string, string>> {
   const { key, vaultId } = await m.open()
-  const list = await m.sync.listRepos(key, vaultId)
+  const list = await m.sync.listRepos(key, vaultId, { find })
   return Object.fromEntries(
-    list.map((r) => [r.name, r.status === 'error' ? `error:${r.error?.code}` : r.status])
+    list.map((r) => [
+      r.path === '.env' ? r.name : `${r.name}/${r.path ?? r.storedName}`,
+      r.status === 'error' ? `error:${r.error?.code}` : r.status
+    ])
   )
 }
 
-async function pushRepo(m: Machine, repo: string, overwriteConfirmed = false): Promise<void> {
+async function pushRepo(
+  m: Machine,
+  repo: string,
+  overwriteConfirmed = false,
+  path = '.env'
+): Promise<void> {
   const { key, vaultId } = await m.open()
-  const preview = await m.sync.previewPush(key, vaultId, repo)
+  const preview = await m.sync.previewPush(key, vaultId, envFile(repo, path))
   await m.sync.push(key, vaultId, {
-    repoName: repo,
+    ...envFile(repo, path),
     overwriteConfirmed,
     expected: preview.expected
   })
 }
 
-async function pullRepo(m: Machine, repo: string): Promise<string | null> {
+async function pullRepo(m: Machine, repo: string, path = '.env'): Promise<string | null> {
   const { key, vaultId } = await m.open()
-  const preview = await m.sync.previewPull(key, vaultId, repo)
-  return (await m.sync.pull(key, vaultId, { repoName: repo, expected: preview.expected }))
-    .backupName
+  const preview = await m.sync.previewPull(key, vaultId, envFile(repo, path))
+  const req = { ...envFile(repo, path), expected: preview.expected }
+  return (await m.sync.pull(key, vaultId, req)).backupName
 }
 
 const errorCode = async (p: Promise<unknown>): Promise<string> => {
@@ -147,11 +163,16 @@ const errorCode = async (p: Promise<unknown>): Promise<string> => {
   return 'no error'
 }
 
-/** An env file's vault copy as text ('' if there is none), read straight from the folder vault. */
-async function storedEnv(m: Machine, repoName: string, path = '.env'): Promise<string> {
+/** An env file's vault copy as text ('' if there is none), read straight from a folder vault. */
+async function storedEnv(
+  m: Machine,
+  repoName: string,
+  path = '.env',
+  folder = vaultDir
+): Promise<string> {
   const { key } = await m.open()
   const entry = await m.vault.withEntryKeys(key, async (keys) =>
-    (await m.vault.vaultAt(vaultDir).snapshot()).read(
+    (await m.vault.vaultAt(folder).snapshot()).read(
       keys,
       m.vault.entryFor(keys, { repoName, path })
     )
@@ -200,7 +221,7 @@ describe('machine A: create vault and push', () => {
   it('previews and pushes, refusing a stale preview', async () => {
     const m = await machine('a')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPush(key, vaultId, 'app1')
+    const preview = await m.sync.previewPush(key, vaultId, envFile('app1'))
     expect(preview.diff).toEqual({ added: ['A'], removed: [], changed: [], unchanged: 0 })
     expect(preview.needsOverwrite).toBe(false)
     writeFileSync(join(projA, 'app1', '.env'), 'A=1\nLATE=1\n')
@@ -208,6 +229,7 @@ describe('machine A: create vault and push', () => {
       await errorCode(
         m.sync.push(key, vaultId, {
           repoName: 'app1',
+          path: '.env',
           overwriteConfirmed: false,
           expected: preview.expected
         })
@@ -216,6 +238,7 @@ describe('machine A: create vault and push', () => {
     writeFileSync(join(projA, 'app1', '.env'), 'A=1\n')
     await m.sync.push(key, vaultId, {
       repoName: 'app1',
+      path: '.env',
       overwriteConfirmed: false,
       expected: preview.expected
     })
@@ -242,29 +265,31 @@ describe('machine A: create vault and push', () => {
     const m = await machine('a')
     const { key, vaultId } = await m.open()
     const all = await m.sync.listRepos(key, vaultId)
-    expect(await m.sync.listRepos(key, vaultId, 'APP1')).toEqual(
+    expect(await m.sync.listRepos(key, vaultId, { only: 'APP1' })).toEqual(
       all.filter((r) => r.name === 'app1')
     )
-    expect(await m.sync.listRepos(key, vaultId, 'missing')).toEqual([])
+    expect(await m.sync.listRepos(key, vaultId, { only: 'missing' })).toEqual([])
   })
 
   it('blocks pulls into a repo whose .env is not ignored, until fixed', async () => {
     const m = await machine('a')
     await pushRepo(m, 'app3')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPull(key, vaultId, 'app3')
+    const preview = await m.sync.previewPull(key, vaultId, envFile('app3'))
     expect(preview.ignored).toBe(false)
     expect(
-      await errorCode(m.sync.pull(key, vaultId, { repoName: 'app3', expected: preview.expected }))
+      await errorCode(
+        m.sync.pull(key, vaultId, { repoName: 'app3', path: '.env', expected: preview.expected })
+      )
     ).toBe('ENV_NOT_IGNORED')
-    expect(await m.sync.addGitignore('app3')).toEqual({
+    expect(await m.sync.addGitignore(envFile('app3'))).toEqual({
       ignored: true,
       backupIgnored: true,
       tracked: false
     })
     expect(readFileSync(join(projA, 'app3', '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
     // Idempotent.
-    await m.sync.addGitignore('app3')
+    await m.sync.addGitignore(envFile('app3'))
     expect(readFileSync(join(projA, 'app3', '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
   })
 
@@ -274,14 +299,14 @@ describe('machine A: create vault and push', () => {
     await pushRepo(m, 'envonly')
     writeFileSync(join(dir, '.env'), 'E=2\n')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPull(key, vaultId, 'envonly')
+    const preview = await m.sync.previewPull(key, vaultId, envFile('envonly'))
     expect(preview).toMatchObject({ ignored: true, backupIgnored: false, tracked: false })
     expect(
       await errorCode(
-        m.sync.pull(key, vaultId, { repoName: 'envonly', expected: preview.expected })
+        m.sync.pull(key, vaultId, { repoName: 'envonly', path: '.env', expected: preview.expected })
       )
     ).toBe('BACKUP_NOT_IGNORED')
-    expect(await m.sync.addGitignore('envonly')).toMatchObject({ backupIgnored: true })
+    expect(await m.sync.addGitignore(envFile('envonly'))).toMatchObject({ backupIgnored: true })
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
     rmSync(dir, { recursive: true, force: true })
     rmSync(join(vaultDir, 'envonly.env.enc'))
@@ -292,10 +317,12 @@ describe('machine A: create vault and push', () => {
     await pushRepo(m, 'app2')
     git(join(projA, 'app2'), 'add', '-f', '.env')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPull(key, vaultId, 'app2')
+    const preview = await m.sync.previewPull(key, vaultId, envFile('app2'))
     expect(preview.tracked).toBe(true)
     expect(
-      await errorCode(m.sync.pull(key, vaultId, { repoName: 'app2', expected: preview.expected }))
+      await errorCode(
+        m.sync.pull(key, vaultId, { repoName: 'app2', path: '.env', expected: preview.expected })
+      )
     ).toBe('ENV_TRACKED')
     git(join(projA, 'app2'), 'rm', '-q', '--cached', '.env')
   })
@@ -320,7 +347,7 @@ describe('machine B: unlock, resolve, push', () => {
   it('pulls (keep vault) with a backup, writing the exact bytes', async () => {
     const m = await machine('b')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPull(key, vaultId, 'app1')
+    const preview = await m.sync.previewPull(key, vaultId, envFile('app1'))
     expect(preview.diff).toEqual({ added: ['NEW'], removed: ['OLD'], changed: [], unchanged: 1 })
     expect(preview.rollback).toBe(false)
     const backup = await pullRepo(m, 'app1')
@@ -343,8 +370,8 @@ describe('machine A again', () => {
   it('shows the raw diff masked, with values only on request, for the reviewed content', async () => {
     const m = await machine('a')
     const { key, vaultId } = await m.open()
-    const preview = await m.sync.previewPull(key, vaultId, 'app1')
-    const req = { repoName: 'app1', expected: preview.expected }
+    const preview = await m.sync.previewPull(key, vaultId, envFile('app1'))
+    const req = { repoName: 'app1', path: '.env', expected: preview.expected }
     // Local A=1\nNEW=2\n -> B's BOM + CRLF copy: line endings don't count, the BOM does.
     const masked = await m.sync.pullRawDiff(key, { ...req, values: false })
     expect(masked.lines.map((l) => (l.kind === 'gap' ? l : l.text))).toEqual([
@@ -373,6 +400,7 @@ describe('machine A again', () => {
       await errorCode(
         m.sync.pullRawDiff(key, {
           repoName: 'novault',
+          path: '.env',
           expected: { localHash: null, vaultHash: null },
           values: false
         })
@@ -397,13 +425,14 @@ describe('machine A again', () => {
     writeFileSync(join(projA, 'app1', '.env'), 'A=a-edit\n')
     expect((await rows(a))['app1']).toBe('conflict')
     const { key, vaultId } = await a.open()
-    const preview = await a.sync.previewPush(key, vaultId, 'app1')
+    const preview = await a.sync.previewPush(key, vaultId, envFile('app1'))
     expect(preview.needsOverwrite).toBe(true)
     expect(preview.diff.changed).toEqual(['A'])
     expect(
       await errorCode(
         a.sync.push(key, vaultId, {
           repoName: 'app1',
+          path: '.env',
           overwriteConfirmed: false,
           expected: preview.expected
         })
@@ -411,6 +440,7 @@ describe('machine A again', () => {
     ).toBe('OVERWRITE_NOT_CONFIRMED')
     await a.sync.push(key, vaultId, {
       repoName: 'app1',
+      path: '.env',
       overwriteConfirmed: true,
       expected: preview.expected
     })
@@ -420,14 +450,16 @@ describe('machine A again', () => {
   it('refuses a pull if the vault changed after the preview', async () => {
     const a = await machine('a')
     const { key, vaultId } = await a.open()
-    const preview = await a.sync.previewPull(key, vaultId, 'app2')
+    const preview = await a.sync.previewPull(key, vaultId, envFile('app2'))
     const b = await machine('b')
     // B has no app2 folder, so write the entry by pushing from a temporary repo.
     makeRepo(projB, 'app2', { '.gitignore': '.env\n.env.bak.*\n', '.env': 'B=from-b\n' })
     await pushRepo(b, 'app2', true)
     const a2 = await machine('a')
     expect(
-      await errorCode(a2.sync.pull(key, vaultId, { repoName: 'app2', expected: preview.expected }))
+      await errorCode(
+        a2.sync.pull(key, vaultId, { repoName: 'app2', path: '.env', expected: preview.expected })
+      )
     ).toBe('VAULT_CHANGED')
     rmSync(join(projB, 'app2'), { recursive: true, force: true })
   })
@@ -537,7 +569,7 @@ describe('machine-specific keys', () => {
       '.env': 'SHARED=1\n# envvault:local\nDB_PATH=/a/data\n'
     })
     const { key, vaultId } = await a.open()
-    const preview = await a.sync.previewPush(key, vaultId, 'local1')
+    const preview = await a.sync.previewPush(key, vaultId, envFile('local1'))
     expect(preview.kept).toEqual(['DB_PATH'])
     expect(preview.unmarked).toEqual([])
     await pushRepo(a, 'local1')
@@ -553,7 +585,7 @@ describe('machine-specific keys', () => {
     makeRepo(projB, 'local1', { '.gitignore': IGNORE, '.env': 'SHARED=0\nDB_PATH=C:\\b\\data\n' })
     expect((await rows(b))['local1']).toBe('conflict')
     const { key, vaultId } = await b.open()
-    const preview = await b.sync.previewPull(key, vaultId, 'local1')
+    const preview = await b.sync.previewPull(key, vaultId, envFile('local1'))
     expect(preview.kept).toEqual(['DB_PATH'])
     expect(preview.unset).toEqual([])
     expect(preview.sameContent).toBe(false)
@@ -562,6 +594,7 @@ describe('machine-specific keys', () => {
     // The raw diff shows what the pull writes, not the vault copy as stored.
     const raw = await b.sync.pullRawDiff(key, {
       repoName: 'local1',
+      path: '.env',
       expected: preview.expected,
       values: true
     })
@@ -598,7 +631,7 @@ describe('machine-specific keys', () => {
     const a = await machine('a')
     writeFileSync(envA(), 'SHARED=2\nDB_PATH=/a/other\n')
     const { key, vaultId } = await a.open()
-    const preview = await a.sync.previewPush(key, vaultId, 'local1')
+    const preview = await a.sync.previewPush(key, vaultId, envFile('local1'))
     expect(preview.kept).toEqual([])
     expect(preview.unmarked).toEqual(['DB_PATH'])
     expect(preview.diff.changed).toEqual(['DB_PATH'])
@@ -610,7 +643,9 @@ describe('machine-specific keys', () => {
     writeFileSync(envA(), 'SHARED=2\n# envvault:local\nDB_PATH=/a\nDB_PATH=/b\n')
     expect((await rows(a))['local1']).toBe('error:ENV_DUPLICATE_KEY')
     const { key, vaultId } = await a.open()
-    expect(await errorCode(a.sync.previewPull(key, vaultId, 'local1'))).toBe('ENV_DUPLICATE_KEY')
+    expect(await errorCode(a.sync.previewPull(key, vaultId, envFile('local1')))).toBe(
+      'ENV_DUPLICATE_KEY'
+    )
     writeFileSync(envA(), 'SHARED=2\n# envvault:local\nDB_PATH=/a/other\n')
   })
 
@@ -618,7 +653,7 @@ describe('machine-specific keys', () => {
     const b = await machine('b')
     rmSync(envB())
     const { key, vaultId } = await b.open()
-    const preview = await b.sync.previewPull(key, vaultId, 'local1')
+    const preview = await b.sync.previewPull(key, vaultId, envFile('local1'))
     expect(preview.kept).toEqual([])
     expect(preview.unset).toEqual(['DB_PATH'])
     await pullRepo(b, 'local1')
@@ -637,7 +672,7 @@ describe('.env.example checks', () => {
     const a = await machine('a')
     makeRepo(projA, 'ex1', { '.gitignore': IGNORE, '.env': 'A=1\n' })
     const { key, vaultId } = await a.open()
-    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toBeNull()
+    expect((await a.sync.previewPush(key, vaultId, envFile('ex1'))).example).toBeNull()
   })
 
   it('compares the local .env on push, flagging only secret-looking shared values', async () => {
@@ -651,7 +686,7 @@ describe('.env.example checks', () => {
       `URL=http://localhost:3000\nPORT=3000\nAPI_TOKEN=${TOKEN}\nDB_PATH=\nREDIS_URL=\n# OPTIONAL=\n`
     )
     const { key, vaultId } = await a.open()
-    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toEqual({
+    expect((await a.sync.previewPush(key, vaultId, envFile('ex1'))).example).toEqual({
       status: 'ok',
       tracked: false,
       sameValue: ['API_TOKEN'],
@@ -659,7 +694,7 @@ describe('.env.example checks', () => {
       undocumented: ['EXTRA']
     })
     git(dirA(), 'add', '.env.example')
-    expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toMatchObject({
+    expect((await a.sync.previewPush(key, vaultId, envFile('ex1'))).example).toMatchObject({
       tracked: true
     })
     await pushRepo(a, 'ex1')
@@ -673,7 +708,7 @@ describe('.env.example checks', () => {
       '.env.example': 'DB_PATH=\nB_ONLY=\nREDIS_URL=\nAPI_TOKEN=\n'
     })
     const { key, vaultId } = await b.open()
-    const preview = await b.sync.previewPull(key, vaultId, 'ex1')
+    const preview = await b.sync.previewPull(key, vaultId, envFile('ex1'))
     // B_ONLY isn't in the vault copy, but the pull keeps it, so it isn't missing.
     expect(preview.kept).toEqual(['B_ONLY', 'DB_PATH'])
     expect(preview.example).toEqual({
@@ -693,7 +728,7 @@ describe('.env.example checks', () => {
       writeFileSync(join(root, 'outside-example'), 'X=1\n')
       symlinkSync(join(root, 'outside-example'), join(dirA(), '.env.example'))
       const { key, vaultId } = await a.open()
-      expect((await a.sync.previewPush(key, vaultId, 'ex1')).example).toEqual({
+      expect((await a.sync.previewPush(key, vaultId, envFile('ex1'))).example).toEqual({
         status: 'unreadable',
         message: '.env.example is a symlink, which EnvVault refuses to follow.'
       })
@@ -706,8 +741,8 @@ describe('.env.example checks', () => {
     expect((await b.config.getConfig()).checkExample).toBe(true)
     await b.config.updateConfig({ checkExample: false })
     const { key, vaultId } = await b.open()
-    expect((await b.sync.previewPull(key, vaultId, 'ex1')).example).toBeNull()
-    expect((await b.sync.previewPush(key, vaultId, 'ex1')).example).toBeNull()
+    expect((await b.sync.previewPull(key, vaultId, envFile('ex1'))).example).toBeNull()
+    expect((await b.sync.previewPush(key, vaultId, envFile('ex1'))).example).toBeNull()
     await b.config.updateConfig({ checkExample: true })
   })
 })
@@ -726,7 +761,7 @@ describe('editing the vault copy', () => {
     makeRepo(projA, 'ed1', { '.gitignore': IGNORE, '.env': ORIGINAL })
     await pushRepo(a, 'ed1')
     const { key } = await a.open()
-    const data = await a.sync.openEditor(key, 'ed1')
+    const data = await a.sync.openEditor(key, envFile('ed1'))
     expect(data.entries).toEqual([
       { key: 'API_URL', value: 'https://api.example.com', marked: false },
       { key: 'SECRET', value: 's3cret value', marked: false },
@@ -740,9 +775,10 @@ describe('editing the vault copy', () => {
   it('saves edits to the vault copy only; a pull then brings them, keeping local values', async () => {
     const a = await machine('a')
     const { key, vaultId } = await a.open()
-    const { expectedVaultHash } = await a.sync.openEditor(key, 'ed1')
+    const { expectedVaultHash } = await a.sync.openEditor(key, envFile('ed1'))
     const result = await a.sync.saveEdit(key, vaultId, {
       repoName: 'ed1',
+      path: '.env',
       expectedVaultHash,
       set: [{ key: 'SECRET', value: 'new # secret' }],
       add: [{ key: 'NEW_KEY', value: 'line1\nline2' }],
@@ -763,7 +799,7 @@ describe('editing the vault copy', () => {
 
   it('refuses to save over a vault copy that changed after the editor opened', async () => {
     const a = await machine('a')
-    const opened = await a.sync.openEditor((await a.open()).key, 'ed1')
+    const opened = await a.sync.openEditor((await a.open()).key, envFile('ed1'))
     const b = await machine('b')
     makeRepo(projB, 'ed1', { '.gitignore': IGNORE, '.env': 'FROM_B=1\n' })
     await pushRepo(b, 'ed1', true)
@@ -772,6 +808,7 @@ describe('editing the vault copy', () => {
     const { key, vaultId } = await a2.open()
     const save = a2.sync.saveEdit(key, vaultId, {
       repoName: 'ed1',
+      path: '.env',
       expectedVaultHash: opened.expectedVaultHash,
       set: [],
       add: [{ key: 'X', value: '1' }],
@@ -783,9 +820,10 @@ describe('editing the vault copy', () => {
   it('reports a save that changes nothing without writing a version', async () => {
     const a = await machine('a')
     const { key, vaultId } = await a.open()
-    const opened = await a.sync.openEditor(key, 'ed1')
+    const opened = await a.sync.openEditor(key, envFile('ed1'))
     const result = await a.sync.saveEdit(key, vaultId, {
       repoName: 'ed1',
+      path: '.env',
       expectedVaultHash: opened.expectedVaultHash,
       set: [{ key: 'FROM_B', value: '1' }],
       add: [],
@@ -798,12 +836,19 @@ describe('editing the vault copy', () => {
     const a = await machine('a')
     makeRepo(projA, 'ed2', { '.gitignore': IGNORE })
     const { key, vaultId } = await a.open()
-    expect(await a.sync.openEditor(key, 'ed2')).toEqual({
+    expect(await a.sync.openEditor(key, envFile('ed2'))).toEqual({
       entries: [],
       vault: null,
       expectedVaultHash: null
     })
-    const empty = { repoName: 'ed2', expectedVaultHash: null, set: [], add: [], remove: [] }
+    const empty = {
+      repoName: 'ed2',
+      path: '.env',
+      expectedVaultHash: null,
+      set: [],
+      add: [],
+      remove: []
+    }
     expect(await a.sync.saveEdit(key, vaultId, empty)).toEqual({ vault: null, changed: false })
     const result = await a.sync.saveEdit(key, vaultId, {
       ...empty,
@@ -820,12 +865,13 @@ describe('editing the vault copy', () => {
     makeRepo(projA, 'ed3', { '.gitignore': IGNORE, '.env': 'A=1\nA=2\n' })
     await pushRepo(a, 'ed3')
     const { key, vaultId } = await a.open()
-    expect(await errorCode(a.sync.openEditor(key, 'ed3'))).toBe('ENV_DUPLICATE_KEY')
+    expect(await errorCode(a.sync.openEditor(key, envFile('ed3')))).toBe('ENV_DUPLICATE_KEY')
 
-    const opened = await a.sync.openEditor(key, 'ed2')
+    const opened = await a.sync.openEditor(key, envFile('ed2'))
     const err = await a.sync
       .saveEdit(key, vaultId, {
         repoName: 'ed2',
+        path: '.env',
         expectedVaultHash: opened.expectedVaultHash,
         set: [{ key: 'MISSING_SECRET_KEY', value: 'hunter2-secret' }],
         add: [],
@@ -859,7 +905,7 @@ describe('automatic pull', () => {
 
     const b2 = await machine('b')
     const { key, vaultId } = await b2.open()
-    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toMatchObject({
+    expect(await b2.sync.autoPull(key, vaultId, envFile('ap1'))).toMatchObject({
       name: 'ap1',
       status: 'in-sync',
       hasEnv: true,
@@ -868,7 +914,7 @@ describe('automatic pull', () => {
     expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=2\n# envvault:local\nDB=/b\n')
     expect(backups('ap1')).toHaveLength(1)
     expect((await rows(b2))['ap1']).toBe('in-sync')
-    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toBeNull()
+    expect(await b2.sync.autoPull(key, vaultId, envFile('ap1'))).toBeNull()
   })
 
   it('leaves a conflict and a rollback alone', async () => {
@@ -880,7 +926,7 @@ describe('automatic pull', () => {
     const b2 = await machine('b')
     const { key, vaultId } = await b2.open()
     expect((await rows(b2))['ap1']).toBe('conflict')
-    expect(await b2.sync.autoPull(key, vaultId, 'ap1')).toBeNull()
+    expect(await b2.sync.autoPull(key, vaultId, envFile('ap1'))).toBeNull()
     expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=2\nB_ONLY=1\n# envvault:local\nDB=/b\n')
 
     // Resolve by hand (keep vault), then let v4 arrive automatically.
@@ -892,14 +938,14 @@ describe('automatic pull', () => {
     await pushRepo(a2, 'ap1')
     const b3 = await machine('b')
     const k3 = await b3.open()
-    expect(await b3.sync.autoPull(k3.key, k3.vaultId, 'ap1')).toMatchObject({
+    expect(await b3.sync.autoPull(k3.key, k3.vaultId, envFile('ap1'))).toMatchObject({
       vault: { version: 4 }
     })
 
     // Someone puts v3 back: that's a rollback, never pulled automatically.
     writeFileSync(entry, v3)
     expect((await rows(b3))['ap1']).toBe('conflict')
-    expect(await b3.sync.autoPull(k3.key, k3.vaultId, 'ap1')).toBeNull()
+    expect(await b3.sync.autoPull(k3.key, k3.vaultId, envFile('ap1'))).toBeNull()
     expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=4\n# envvault:local\nDB=/b\n')
   })
 
@@ -911,7 +957,7 @@ describe('automatic pull', () => {
     makeRepo(projB, 'ap2', {})
     const { key, vaultId } = await b.open()
     expect((await rows(b))['ap2']).toBe('vault-newer')
-    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toBeNull()
+    expect(await b.sync.autoPull(key, vaultId, envFile('ap2'))).toBeNull()
     expect(existsSync(envB('ap2'))).toBe(false)
   })
 
@@ -919,12 +965,12 @@ describe('automatic pull', () => {
     const b = await machine('b')
     writeFileSync(join(projB, 'ap2', '.gitignore'), IGNORE)
     const { key, vaultId } = await b.open()
-    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toMatchObject({ status: 'in-sync' })
+    expect(await b.sync.autoPull(key, vaultId, envFile('ap2'))).toMatchObject({ status: 'in-sync' })
     expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
 
     rmSync(envB('ap2'))
     expect((await rows(b))['ap2']).toBe('vault-newer')
-    expect(await b.sync.autoPull(key, vaultId, 'ap2')).toMatchObject({ status: 'in-sync' })
+    expect(await b.sync.autoPull(key, vaultId, envFile('ap2'))).toMatchObject({ status: 'in-sync' })
     expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
   })
 
@@ -1230,9 +1276,10 @@ describe('git vault', { timeout: 30_000 }, () => {
     expect(readFileSync(join(gpB, 'gv1', '.env'), 'utf8')).toBe('A=1\n# envvault:local\nDB=\n')
 
     const { key, vaultId } = await b.open()
-    const editor = await b.sync.openEditor(key, 'gv1')
+    const editor = await b.sync.openEditor(key, envFile('gv1'))
     const saved = await b.sync.saveEdit(key, vaultId, {
       repoName: 'gv1',
+      path: '.env',
       expectedVaultHash: editor.expectedVaultHash,
       set: [{ key: 'A', value: '2' }],
       add: [],
@@ -1269,7 +1316,7 @@ describe('git vault', { timeout: 30_000 }, () => {
     const a = await on('a')
     writeFileSync(join(gpA, 'gv1', '.env'), 'A=3\n# envvault:local\nDB=/a\n')
     const ka = await a.open()
-    const preview = await a.sync.previewPush(ka.key, ka.vaultId, 'gv1')
+    const preview = await a.sync.previewPush(ka.key, ka.vaultId, envFile('gv1'))
 
     const b = await on('b')
     writeFileSync(join(gpB, 'gv1', '.env'), 'A=4\n# envvault:local\nDB=\n')
@@ -1282,11 +1329,30 @@ describe('git vault', { timeout: 30_000 }, () => {
       await errorCode(
         a2.sync.push(ka2.key, ka2.vaultId, {
           repoName: 'gv1',
+          path: '.env',
           overwriteConfirmed: true,
           expected: preview.expected
         })
       )
     ).toBe('VAULT_CHANGED')
+  })
+
+  it('syncs an .env in a folder through the repository', async () => {
+    const a = await on('a')
+    mkdirSync(join(gpA, 'gv1', 'apps', 'web'), { recursive: true })
+    writeFileSync(join(gpA, 'gv1', 'apps', 'web', '.env'), 'WEB=1\n')
+    await pushRepo(a, 'gv1', false, 'apps/web/.env')
+    const tree = inRemote('ls-tree', '--name-only', 'main').split('\n')
+    expect(tree.filter((name) => name.endsWith('.file.enc'))).toEqual([
+      expect.stringMatching(/^gv1\.[0-9a-f]{16}\.file\.enc$/)
+    ])
+    expect(tree.join(' ')).not.toContain('web')
+
+    const b = await on('b')
+    mkdirSync(join(gpB, 'gv1', 'apps', 'web'), { recursive: true })
+    expect((await rows(b))['gv1/apps/web/.env']).toBe('vault-newer')
+    await pullRepo(b, 'gv1', 'apps/web/.env')
+    expect(readFileSync(join(gpB, 'gv1', 'apps', 'web', '.env'), 'utf8')).toBe('WEB=1\n')
   })
 
   it('reports an unreachable repository', async () => {
@@ -1296,5 +1362,314 @@ describe('git vault', { timeout: 30_000 }, () => {
     })
     expect(await (await m.vault.requireVault()).state()).toBe('folder-missing')
     expect(await errorCode(m.open())).toBe('GIT_VAULT_UNREACHABLE')
+  })
+})
+
+// A monorepo: a .env in its packages as well as at its root, found by git.
+// Its own vault folder, so other tests never see its entries.
+describe('monorepo', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\nnode_modules/\n'
+  const WEB = envFile('platform', 'apps/web/.env')
+  const API = envFile('platform', 'apps/api/.env')
+  let monoVault: string
+  let location: VaultLocation
+  let mpA: string
+  let mpB: string
+  let dirA: string
+  let dirB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? mpA : mpB, vault: location })
+  const write = (dir: string, file: string, text: string): void => {
+    mkdirSync(join(dir, file, '..'), { recursive: true })
+    writeFileSync(join(dir, file), text)
+  }
+  const entries = (): string[] =>
+    readdirSync(monoVault)
+      .filter((name) => name.endsWith('.enc'))
+      .sort()
+  const backupsIn = (dir: string): string[] =>
+    readdirSync(dir).filter((name) => name.startsWith('.env.bak.'))
+
+  beforeAll(async () => {
+    monoVault = join(root, 'mono-vault')
+    mkdirSync(monoVault)
+    location = { kind: 'folder', path: monoVault }
+    mpA = join(root, 'mono-a')
+    mpB = join(root, 'mono-b')
+    dirA = makeRepo(mpA, 'platform', { '.gitignore': IGNORE, '.env': 'ROOT=1\n' })
+    write(dirA, WEB.path, 'WEB=1\n')
+    write(dirA, API.path, 'API=1\n')
+    write(dirA, 'node_modules/dep/.env', 'DEP=1\n')
+    // Backups must be ignored too, and this folder says otherwise.
+    write(dirA, 'apps/docs/.env', 'DOCS=1\n')
+    write(dirA, 'apps/docs/.gitignore', '!.env.bak.*\n')
+    // One that git would commit, and one committed by mistake.
+    write(dirA, 'tools/open/.gitignore', '!.env\n')
+    write(dirA, 'tools/open/.env', 'OPEN=1\n')
+    write(dirA, 'tools/tracked/.env', 'TRACKED=1\n')
+    git(dirA, 'add', '-f', 'tools/tracked/.env')
+    dirB = makeRepo(mpB, 'platform', { '.gitignore': IGNORE })
+    mkdirSync(join(dirB, 'apps', 'web'), { recursive: true })
+    await (await on('a')).vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('finds every .env git reports, none in ignored folders, and asks git only when told to', async () => {
+    const a = await on('a')
+    expect(await rows(a)).toEqual({ platform: 'local-only' })
+    const found = {
+      platform: 'local-only',
+      'platform/apps/api/.env': 'local-only',
+      'platform/apps/docs/.env': 'local-only',
+      'platform/apps/web/.env': 'local-only',
+      'platform/tools/open/.env': 'local-only',
+      'platform/tools/tracked/.env': 'local-only'
+    }
+    expect(await rows(a, true)).toEqual(found)
+    // Remembered, so background work lists them without running git.
+    expect(await rows(a)).toEqual(found)
+  })
+
+  it('pushes an .env in a folder under a name that hides its path, and pulls it elsewhere', async () => {
+    const a = await on('a')
+    await pushRepo(a, 'platform', false, WEB.path)
+    expect(entries()).toEqual([expect.stringMatching(/^platform\.[0-9a-f]{16}\.file\.enc$/)])
+    expect(await storedEnv(a, 'platform', WEB.path, monoVault)).toBe('WEB=1\n')
+    const { key, vaultId } = await a.open()
+    expect((await a.sync.listRepos(key, vaultId)).find((r) => r.path === WEB.path)).toMatchObject({
+      status: 'in-sync',
+      storedName: entries()[0]
+    })
+
+    // B has the folder but no .env in it yet, and the repo has nothing else.
+    const b = await on('b')
+    expect(await rows(b, true)).toEqual({ 'platform/apps/web/.env': 'vault-newer' })
+    expect(await pullRepo(b, 'platform', WEB.path)).toBeNull()
+    expect(readFileSync(join(dirB, WEB.path), 'utf8')).toBe('WEB=1\n')
+    expect((await rows(b))['platform/apps/web/.env']).toBe('in-sync')
+  })
+
+  it('never pulls into a folder this copy of the repo lacks, and never creates one', async () => {
+    await pushRepo(await on('a'), 'platform', false, API.path)
+    const b = await on('b')
+    expect((await rows(b))['platform/apps/api/.env']).toBe('vault-only')
+    const { key, vaultId } = await b.open()
+    expect(await errorCode(b.sync.previewPull(key, vaultId, API))).toBe('ENV_FOLDER_MISSING')
+    const expected = { localHash: null, vaultHash: null }
+    expect(await errorCode(b.sync.pull(key, vaultId, { ...API, expected }))).toBe(
+      'ENV_FOLDER_MISSING'
+    )
+    expect(await b.sync.autoPull(key, vaultId, API)).toBeNull()
+    expect(existsSync(join(dirB, 'apps', 'api'))).toBe(false)
+  })
+
+  it('pulls each file of a repo on its own, backing it up in its own folder', async () => {
+    const a = await on('a')
+    write(dirA, WEB.path, 'WEB=2\n')
+    await pushRepo(a, 'platform', false, WEB.path)
+    write(dirA, API.path, 'API=2\n')
+    await pushRepo(a, 'platform', false, API.path)
+    mkdirSync(join(dirB, 'apps', 'api'))
+
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    // Every file of the repo, never just the first.
+    const listed = await b.sync.listRepos(key, vaultId, { only: 'platform' })
+    expect(listed.map((r) => [r.path, r.status])).toEqual([
+      [API.path, 'vault-newer'],
+      [WEB.path, 'vault-newer']
+    ])
+    await b.config.updateConfig({ autoPull: true })
+    b.session.unlock(key, vaultId, 5)
+    try {
+      const pulled = await b.autopull.runAutoPull()
+      expect(pulled.map((r) => [r.name, r.path, r.status]).sort()).toEqual([
+        ['platform', API.path, 'in-sync'],
+        ['platform', WEB.path, 'in-sync']
+      ])
+    } finally {
+      b.session.lock()
+      await b.config.updateConfig({ autoPull: false })
+    }
+    expect(readFileSync(join(dirB, API.path), 'utf8')).toBe('API=2\n')
+    expect(readFileSync(join(dirB, WEB.path), 'utf8')).toBe('WEB=2\n')
+    // Only the web .env existed, and its backup is next to it.
+    expect(backupsIn(join(dirB, 'apps', 'web'))).toHaveLength(1)
+    expect(backupsIn(join(dirB, 'apps', 'api'))).toEqual([])
+    expect(backupsIn(dirB)).toEqual([])
+  })
+
+  it('runs the git checks in the folder of the .env', async () => {
+    const a = await on('a')
+    for (const path of ['tools/open/.env', 'tools/tracked/.env', 'apps/docs/.env']) {
+      await pushRepo(a, 'platform', false, path)
+    }
+    const { key, vaultId } = await a.open()
+    const preview = (path: string): Promise<PullPreview> =>
+      a.sync.previewPull(key, vaultId, envFile('platform', path))
+    expect(await preview(WEB.path)).toMatchObject({
+      ignored: true,
+      backupIgnored: true,
+      tracked: false
+    })
+    expect(await preview('apps/docs/.env')).toMatchObject({ ignored: true, backupIgnored: false })
+    expect(await preview('tools/open/.env')).toMatchObject({ ignored: false, tracked: false })
+    expect(await preview('tools/tracked/.env')).toMatchObject({ tracked: true })
+
+    const tracked = envFile('platform', 'tools/tracked/.env')
+    const trackedPreview = await preview(tracked.path)
+    expect(
+      await a.sync
+        .pull(key, vaultId, { ...tracked, expected: trackedPreview.expected })
+        .catch((err: unknown) => err)
+    ).toMatchObject({
+      code: 'ENV_TRACKED',
+      message: expect.stringContaining('git rm --cached tools/tracked/.env')
+    })
+    const open = envFile('platform', 'tools/open/.env')
+    const openPreview = await preview(open.path)
+    expect(
+      await errorCode(a.sync.pull(key, vaultId, { ...open, expected: openPreview.expected }))
+    ).toBe('ENV_NOT_IGNORED')
+  })
+
+  it('adds the ignore lines to the root .gitignore for an .env in a folder', async () => {
+    const svc = makeRepo(mpA, 'svc', {})
+    write(svc, 'api/.env', 'S=1\n')
+    const a = await on('a')
+    expect((await rows(a, true))['svc/api/.env']).toBe('local-only')
+    await pushRepo(a, 'svc', false, 'api/.env')
+    expect(await a.sync.addGitignore(envFile('svc', 'api/.env'))).toEqual({
+      ignored: true,
+      backupIgnored: true,
+      tracked: false
+    })
+    expect(readFileSync(join(svc, '.gitignore'), 'utf8')).toBe('.env\n.env.bak.*\n')
+    expect(existsSync(join(svc, 'api', '.gitignore'))).toBe(false)
+  })
+
+  it('edits the vault copy of an .env in a folder, which must be in this copy of the repo', async () => {
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const opened = await a.sync.openEditor(key, WEB)
+    expect(opened.entries.map((e) => e.key)).toEqual(['WEB'])
+    await a.sync.saveEdit(key, vaultId, {
+      ...WEB,
+      expectedVaultHash: opened.expectedVaultHash,
+      set: [{ key: 'WEB', value: '3' }],
+      add: [],
+      remove: []
+    })
+    expect(await storedEnv(a, 'platform', WEB.path, monoVault)).toBe('WEB=3\n')
+    expect((await rows(a))['platform/apps/web/.env']).toBe('vault-newer')
+
+    const b = await on('b')
+    const docs = envFile('platform', 'apps/docs/.env')
+    expect(await errorCode(b.sync.openEditor((await b.open()).key, docs))).toBe(
+      'ENV_FOLDER_MISSING'
+    )
+  })
+
+  it('lists a file entry that fails verification as its own row, and the others as usual', async () => {
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const docs = (await a.sync.listRepos(key, vaultId)).find((r) => r.path === 'apps/docs/.env')
+    const file = join(monoVault, docs?.storedName ?? 'missing')
+    const bytes = readFileSync(file)
+    try {
+      const bad = Buffer.from(bytes)
+      bad[bad.length - 1] = (bad[bad.length - 1] ?? 0) ^ 1
+      writeFileSync(file, bad)
+      const listed = await a.sync.listRepos(key, vaultId)
+      expect(listed.filter((r) => r.path === null)).toEqual([
+        expect.objectContaining({
+          name: 'platform',
+          storedName: docs?.storedName,
+          status: 'error',
+          error: expect.objectContaining({ code: 'VAULT_TAMPERED' })
+        })
+      ])
+      expect(listed.find((r) => r.path === WEB.path)?.status).toBe('vault-newer')
+    } finally {
+      writeFileSync(file, bytes)
+    }
+  })
+
+  it('removes a vault copy, leaving every local file, and a later push continues its versions', async () => {
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const api = (await a.sync.listRepos(key, vaultId)).find((r) => r.path === API.path)
+    expect(api).toMatchObject({ status: 'in-sync', vault: { version: 2 } })
+    const wrong = { ...API, expectedVaultHash: 'a'.repeat(64) }
+    expect(await errorCode(a.sync.removeFromVault(key, vaultId, wrong))).toBe('VAULT_CHANGED')
+    const before = entries()
+    await a.sync.removeFromVault(key, vaultId, {
+      ...API,
+      expectedVaultHash: api?.vault?.contentHash ?? ''
+    })
+    expect(entries()).toEqual(before.filter((name) => name !== api?.storedName))
+    expect(readFileSync(join(dirA, API.path), 'utf8')).toBe('API=2\n')
+    expect((await rows(a, true))['platform/apps/api/.env']).toBe('local-only')
+    const b = await on('b')
+    expect((await rows(b, true))['platform/apps/api/.env']).toBe('local-only')
+    expect(readFileSync(join(dirB, API.path), 'utf8')).toBe('API=2\n')
+
+    write(dirA, API.path, 'API=3\n')
+    await pushRepo(a, 'platform', false, API.path)
+    const again = (await a.sync.listRepos(key, vaultId)).find((r) => r.path === API.path)
+    expect(again?.vault?.version).toBe(3)
+    // Not a rollback on B, which had synced version 2.
+    expect((await rows(b))['platform/apps/api/.env']).toBe('vault-newer')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses an .env behind a symlinked folder, and skips a symlinked .env',
+    async () => {
+      mkdirSync(join(dirA, 'apps', 'shared'))
+      symlinkSync('../../.env', join(dirA, 'apps', 'shared', '.env'))
+      write(dirB, 'apps/linked/.env', 'L=1\n')
+      await pushRepo(await on('b'), 'platform', false, 'apps/linked/.env')
+      symlinkSync(join(dirA, 'apps', 'web'), join(dirA, 'apps', 'linked'))
+
+      const a = await on('a')
+      const listed = await rows(a, true)
+      expect(listed['platform/apps/shared/.env']).toBeUndefined()
+      expect(listed['platform/apps/linked/.env']).toBe('error:ENV_SYMLINK')
+      const { key, vaultId } = await a.open()
+      const linked = envFile('platform', 'apps/linked/.env')
+      expect(await errorCode(a.sync.previewPull(key, vaultId, linked))).toBe('ENV_SYMLINK')
+    }
+  )
+
+  it('falls back to the root .env and the vault copies for a repo git refuses', async () => {
+    const broken = join(mpA, 'broken')
+    write(broken, 'sub/.env', 'S=1\n')
+    writeFileSync(join(broken, '.env'), 'B=1\n')
+    writeFileSync(join(broken, '.git'), 'gitdir: ./nowhere\n')
+    const a = await on('a')
+    const listed = await rows(a, true)
+    expect(listed['broken']).toBe('local-only')
+    expect(listed['broken/sub/.env']).toBeUndefined()
+    expect(listed['platform/apps/web/.env']).toBe('vault-newer')
+  })
+
+  it('keeps the root .env in its own entry, written exactly as before', async () => {
+    const a = await on('a')
+    await pushRepo(a, 'platform')
+    expect(entries()).toContain('platform.env.enc')
+    expect((await rows(a))['platform']).toBe('in-sync')
+    const { key } = await a.open()
+    const payload = await decryptPayload(
+      key,
+      'platform',
+      readFileSync(join(monoVault, 'platform.env.enc'))
+    )
+    expect(Object.keys(payload).sort()).toEqual([
+      'contentHash',
+      'envBase64',
+      'updatedAt',
+      'updatedBy',
+      'version'
+    ])
+    expect(decodeEnv(payload).toString('utf8')).toBe('ROOT=1\n')
   })
 })

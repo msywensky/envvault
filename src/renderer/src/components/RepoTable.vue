@@ -6,6 +6,7 @@ import {
   actionsFor,
   canEdit,
   relativeTime,
+  rowKey,
   type RowAction
 } from '../status'
 import StatusBadge from './StatusBadge.vue'
@@ -29,9 +30,14 @@ defineEmits<{
       </tr>
     </thead>
     <tbody>
-      <tr v-for="row in rows" :key="row.name" :class="{ 'row-dim': row.status === 'vault-only' }">
+      <tr
+        v-for="row in rows"
+        :key="rowKey(row)"
+        :class="{ 'row-dim': row.status === 'vault-only' }"
+      >
         <td>
           <div class="repo-name">{{ row.name }}</div>
+          <div v-if="row.path !== '.env'" class="muted small">{{ row.path ?? row.storedName }}</div>
           <div v-if="row.error" class="row-error">{{ row.error.message }}</div>
         </td>
         <td><StatusBadge :status="row.status" /></td>
@@ -65,10 +71,10 @@ defineEmits<{
               Edit
             </button>
             <button
-              v-if="row.status !== 'vault-only'"
+              v-if="row.status !== 'vault-only' && row.path !== null"
               type="button"
               class="btn btn-sm"
-              title="Show only this repo, in a small window"
+              title="Show only this .env, in a small window"
               @click="$emit('mini', row)"
             >
               Mini

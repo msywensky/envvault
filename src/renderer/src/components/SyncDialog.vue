@@ -9,7 +9,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, run, store, toast } from '../store'
-import { absoluteTime, relativeTime } from '../status'
+import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
 import RawDiffView from './RawDiffView.vue'
 
 const props = defineProps<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean }>()
@@ -76,8 +76,8 @@ async function load(): Promise<void> {
   rawValues.value = null
   const res =
     props.mode === 'push'
-      ? await call(() => window.envvault.previewPush(props.repo.name))
-      : await call(() => window.envvault.previewPull(props.repo.name))
+      ? await call(() => window.envvault.previewPush(fileOf(props.repo)))
+      : await call(() => window.envvault.previewPull(fileOf(props.repo)))
   loading.value = false
   if (!res.ok) {
     error.value = res.error.message
@@ -91,28 +91,29 @@ async function confirm(): Promise<void> {
   if (!canConfirm.value || !preview.value) return
   busy.value = true
   error.value = null
-  const repoName = props.repo.name
+  const file = fileOf(props.repo)
+  const name = fileTitle(props.repo)
   // A plain copy: preview.value.expected is a reactive proxy, which IPC can't clone.
   const { localHash, vaultHash } = preview.value.expected
   const expected = { localHash, vaultHash }
   if (props.mode === 'push') {
     const res = await call(() =>
-      window.envvault.push({ repoName, overwriteConfirmed: overwrite.value, expected })
+      window.envvault.push({ ...file, overwriteConfirmed: overwrite.value, expected })
     )
     busy.value = false
     if (res.ok) {
-      toast('success', `Pushed ${repoName} (v${res.data.vault?.version ?? '?'}).`)
+      toast('success', `Pushed ${name} (v${res.data.vault?.version ?? '?'}).`)
       emit('done')
     } else await failed(res.error.code, res.error.message)
   } else {
-    const res = await call(() => window.envvault.pull({ repoName, expected }))
+    const res = await call(() => window.envvault.pull({ ...file, expected }))
     busy.value = false
     if (res.ok) {
       toast(
         'success',
         res.data.backupName
-          ? `Pulled ${repoName}. Previous .env saved as ${res.data.backupName}.`
-          : `Pulled ${repoName}.`
+          ? `Pulled ${name}. Previous .env saved as ${res.data.backupName}.`
+          : `Pulled ${name}.`
       )
       emit('done')
     } else await failed(res.error.code, res.error.message)
@@ -124,11 +125,11 @@ async function fetchRaw(values: boolean): Promise<void> {
   rawLoading.value = true
   error.value = null
   const gen = rawGen
-  const repoName = props.repo.name
+  const file = fileOf(props.repo)
   // A plain copy: pullPreview.value.expected is a reactive proxy, which IPC can't clone.
   const { localHash, vaultHash } = pullPreview.value.expected
   const expected = { localHash, vaultHash }
-  const res = await call(() => window.envvault.pullRawDiff({ repoName, expected, values }))
+  const res = await call(() => window.envvault.pullRawDiff({ ...file, expected, values }))
   rawLoading.value = false
   if (!res.ok) return failed(res.error.code, res.error.message)
   // Hidden or reloaded meanwhile, or the window was hidden: don't show stale values.
@@ -155,7 +156,7 @@ async function failed(code: string, message: string): Promise<void> {
 
 async function fixGitignore(): Promise<void> {
   busy.value = true
-  const res = await run(() => window.envvault.addGitignore(props.repo.name))
+  const res = await run(() => window.envvault.addGitignore(fileOf(props.repo)))
   busy.value = false
   if (res) {
     toast('success', 'Added .env and .env.bak.* to .gitignore.')
@@ -184,7 +185,7 @@ watch(
     @cancel.prevent="emit('close')"
   >
     <div class="dialog-header">
-      <h2 id="sync-title">{{ title }}: {{ repo.name }}</h2>
+      <h2 id="sync-title">{{ title }}: {{ fileTitle(repo) }}</h2>
       <p class="muted small">
         {{
           mode === 'push'
