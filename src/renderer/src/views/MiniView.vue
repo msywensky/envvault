@@ -1,10 +1,12 @@
 <script setup lang="ts">
-// Mini mode: one repo in a small window, its status and its Push (or Pull)
-// button. Main keeps the row fresh (EV.repoStatus, see src/main/mini.ts), so
+// Mini mode: one repo in a small window, two rows tall. The header holds its
+// Push (or Pull) button with the window's controls, and the row below its
+// status. Main keeps the row fresh (EV.repoStatus, see src/main/mini.ts), so
 // nothing here polls. A push or pull still goes through SyncDialog's review;
-// the window grows while it's open. When the vault locks, a compact unlock
-// form takes over; anything it can't handle (a setup code, no vault yet) goes
-// back to the full window.
+// the window grows while it's open. A conflict's two choices don't fit, so
+// Resolve goes back to the full window. When the vault locks, a compact
+// unlock form takes over; anything it can't handle (a setup code, no vault
+// yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { RepoRow } from '../../../shared/types'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -27,6 +29,13 @@ const canUnlockHere = computed(
   () => store.app?.vault === 'ready' && store.app.setupCode !== 'needed'
 )
 const onTop = computed(() => store.settings?.miniOnTop ?? true)
+const actions = computed(() => (row.value ? actionsFor(row.value) : []))
+const conflict = computed(() => row.value?.status === 'conflict' && actions.value.length > 1)
+const vaultInfo = computed(() => {
+  const v = row.value?.vault
+  if (!v) return ''
+  return `Vault copy v${v.version} from ${v.updatedBy}, ${relativeTime(v.updatedAt)} (${absoluteTime(v.updatedAt)})`
+})
 
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
 const busy = ref(false)
@@ -123,7 +132,31 @@ watch(locked, async (now) => {
 <template>
   <main class="mini">
     <header class="mini-header">
-      <span class="repo-name truncate grow" :title="name">{{ name }}</span>
+      <!-- The repo's name, or why the last unlock failed. -->
+      <span v-if="locked && error" class="mini-error truncate grow" role="alert" :title="error">
+        {{ error }}
+      </span>
+      <span v-else class="repo-name truncate grow" :title="name">{{ name }}</span>
+      <template v-if="!locked && row">
+        <button
+          v-if="conflict"
+          type="button"
+          class="btn btn-sm"
+          title="Choose which copy to keep, in the full window"
+          @click="exitMini"
+        >
+          Resolve…
+        </button>
+        <button
+          v-for="action in conflict ? [] : actions"
+          :key="action"
+          type="button"
+          class="btn btn-sm btn-primary"
+          @click="review(row, action)"
+        >
+          {{ ACTION_LABEL[action] }}
+        </button>
+      </template>
       <button
         type="button"
         class="btn btn-sm"
@@ -142,31 +175,25 @@ watch(locked, async (now) => {
     </header>
 
     <form v-if="locked && canUnlockHere" class="mini-body" @submit.prevent="unlock">
-      <div class="row">
-        <input
-          ref="passwordInput"
-          v-model="password"
-          class="input grow"
-          type="password"
-          placeholder="Master password"
-          aria-label="Master password"
-          autocomplete="current-password"
-          :disabled="busy"
-        />
-        <button type="submit" class="btn btn-primary" :disabled="busy || !password">
-          <span v-if="busy" class="spinner" />
-          Unlock
-        </button>
-      </div>
-      <p v-if="error" class="mini-error" role="alert">{{ error }}</p>
-      <p v-else class="muted small">EnvVault is locked.</p>
+      <input
+        ref="passwordInput"
+        v-model="password"
+        class="input grow"
+        type="password"
+        placeholder="Master password"
+        aria-label="Master password"
+        autocomplete="current-password"
+        :aria-invalid="error !== null"
+        :disabled="busy"
+      />
+      <button type="submit" class="btn btn-primary" :disabled="busy || !password">
+        <span v-if="busy" class="spinner" />
+        Unlock
+      </button>
     </form>
 
     <div v-else-if="locked" class="mini-body">
-      <p class="muted small">EnvVault is locked, and needs the full window to unlock.</p>
-      <div class="row">
-        <button type="button" class="btn btn-primary" @click="exitMini">Open full window</button>
-      </div>
+      <span class="muted small">Locked. Use Full view to unlock.</span>
     </div>
 
     <div v-else-if="!store.reposLoaded" class="mini-body">
@@ -174,35 +201,17 @@ watch(locked, async (now) => {
     </div>
 
     <div v-else-if="!row" class="mini-body">
-      <p class="muted small">This repo is no longer in the projects folder.</p>
+      <span class="muted small">This repo is no longer in the projects folder.</span>
     </div>
 
-    <div v-else class="mini-body">
-      <div class="row">
-        <StatusBadge :status="row.status" />
-        <span
-          v-if="row.vault"
-          class="muted small truncate"
-          :title="absoluteTime(row.vault.updatedAt)"
-        >
-          v{{ row.vault.version }} · {{ row.vault.updatedBy }} ·
-          {{ relativeTime(row.vault.updatedAt) }}
-        </span>
-      </div>
-      <p v-if="row.error" class="mini-error">{{ row.error.message }}</p>
-      <p v-else class="muted small">{{ STATUS_HINT[row.status] }}</p>
-      <div v-if="actionsFor(row).length" class="row">
-        <button
-          v-for="(action, i) in actionsFor(row)"
-          :key="action"
-          type="button"
-          class="btn"
-          :class="{ 'btn-primary': i === 0 && row.status !== 'conflict' }"
-          @click="review(row, action)"
-        >
-          {{ ACTION_LABEL[action] }}
-        </button>
-      </div>
+    <div v-else class="mini-body" :title="vaultInfo">
+      <StatusBadge :status="row.status" />
+      <span v-if="row.error" class="mini-error truncate" :title="row.error.message">
+        {{ row.error.message }}
+      </span>
+      <span v-else class="muted small truncate" :title="STATUS_HINT[row.status]">
+        {{ STATUS_HINT[row.status] }}
+      </span>
     </div>
 
     <SyncDialog

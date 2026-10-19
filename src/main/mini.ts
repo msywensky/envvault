@@ -18,10 +18,11 @@ import * as session from './session'
 import { listRepos } from './sync'
 import { getMainWindow } from './window'
 
-/** Content sizes. Reviewing fits the push or pull dialog. */
-const MINI: Size = { width: 380, height: 196 }
+/** Content sizes: MiniView's two rows, and big enough for the push or pull dialog. */
+const MINI: Size = { width: 420, height: 101 }
 const REVIEW: Size = { width: 600, height: 640 }
-const MINI_MIN: Size = { width: 320, height: 160 }
+/** Window sizes, title bar included. */
+const MINI_MIN: Size = { width: 340, height: 120 }
 /** The full window's minimum, as in createMainWindow. */
 const FULL_MIN: Size = { width: 720, height: 480 }
 const RECHECK_MS = 60_000

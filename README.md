@@ -176,10 +176,11 @@ You can turn the checks off in Settings.
 - It saves a backup first, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
 - It stops when EnvVault locks; it doesn't keep the vault unlocked. Turn it off in Settings.
 
-**Mini mode:** click **Mini** next to a repo to shrink EnvVault to a small window with just that repo's status and its **Push** (or **Pull**) button, kept above your other windows. Click **Full view** to go back.
+**Mini mode:** click **Mini** next to a repo to shrink EnvVault to a small window, two rows tall, kept above your other windows: that repo's **Push** (or **Pull**) button next to the window's controls, and its status below. Hover over the status for the vault copy's version. Click **Full view** to go back.
 
 - The status updates when the repo's `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
+- A conflict shows **Resolve…**, which goes back to the full window to choose which copy to keep.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
 - **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in Settings.
 

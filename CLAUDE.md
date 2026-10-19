@@ -149,7 +149,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - `window:setLayout` (`Layout` in `src/shared/types.ts`) switches between `full` and `mini` on one repo, `reviewing` while SyncDialog is open. Main owns the sizes; the renderer never sends numbers. `placeWithin` (`src/core/layout.ts`) keeps the window on its display.
   - Entering it saves the full window's normal bounds (and maximized/full screen state) and restores them on `full`. It works while locked: a compact unlock form replaces the lock screen, and a machine that needs the setup code goes back to the full window.
   - Main rechecks the repo's row (`listRepos(key, id, only)`) when its `.env` changes (`fs.watch` on the repo folder, debounced), on window focus and every 60 s, through `session.withKey`, and sends it as `EV.repoStatus`. Like `EV.autoPulled`, the renderer patches it in without calling IPC.
-  - Pushes and pulls still go through `SyncDialog`, never a one-click path.
+  - Pushes and pulls still go through `SyncDialog`, never a one-click path. A conflict's two choices don't fit the header, so it shows **Resolve…**, which goes back to the full window.
 - **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
 
 ### Invariants to preserve

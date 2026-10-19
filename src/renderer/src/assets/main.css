@@ -512,15 +512,17 @@ code,
   background: var(--surface);
 }
 
+/* One row: the status, or the unlock form (whose input sets the height). */
 .mini-body {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 11px 12px;
 }
 
-.mini-body p {
-  margin: 0;
+.mini .input[aria-invalid='true'] {
+  border-color: var(--danger-text);
 }
 
 .mini-error {
