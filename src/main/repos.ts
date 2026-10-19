@@ -5,9 +5,10 @@
 import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
 import { relative, sep } from 'node:path'
-import { ROOT_ENV, envFileName, envFolders } from '../core/envpath'
+import { ROOT_ENV, envFileName, envFolders, isEnvPath } from '../core/envpath'
 import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
+import type { EnvFile } from '../shared/types'
 import { AppError } from './errors'
 import { isErrno } from './fsutil'
 import { findEnvFiles } from './git'
@@ -81,10 +82,12 @@ export async function resolveRepo(projectsPath: string, name: string): Promise<s
 }
 
 /**
- * The name of the repo that contains `dir`, the envvault command's working
- * directory. The path is used only to work out the name.
+ * The env file the envvault command means in `dir`, its working directory:
+ * the .env in the nearest folder at or above `dir` within the repo that
+ * contains it, or else that repo's root .env. The path is used only to work
+ * out the names; no file is read.
  */
-export async function repoNameAt(projectsPath: string, dir: string): Promise<string> {
+export async function envTargetAt(projectsPath: string, dir: string): Promise<EnvFile> {
   const root = await projectsRoot(projectsPath)
   const notFound = (): AppError =>
     new AppError(
@@ -98,9 +101,19 @@ export async function repoNameAt(projectsPath: string, dir: string): Promise<str
     throw notFound()
   }
   if (!isInside(root, real)) throw notFound()
-  const [name] = relative(root, real).split(sep)
-  if (!name || !(await findRepo(root, name))) throw notFound()
-  return name
+  const [name, ...folders] = relative(root, real).split(sep)
+  const repoDir = name ? await findRepo(root, name) : null
+  if (!name || !repoDir) throw notFound()
+  for (let n = folders.length; n > 0; n--) {
+    const path = [...folders.slice(0, n), ROOT_ENV].join('/')
+    // Folders EnvVault wouldn't sync from (see isEnvPath) are passed over.
+    if (!isEnvPath(path)) continue
+    const envDir = await resolveEnvDir(repoDir, path).catch(() => null)
+    if (envDir && (await lstat(resolveInside(envDir, envFileName(path))).catch(() => null))) {
+      return { repoName: name, path }
+    }
+  }
+  return { repoName: name, path: ROOT_ENV }
 }
 
 /**

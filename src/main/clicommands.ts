@@ -8,27 +8,27 @@ import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { ROOT_ENV } from '../core/envpath'
 import type { RepoTarget } from '../shared/cli'
-import type { RepoRow } from '../shared/types'
+import type { EnvFile, RepoRow } from '../shared/types'
 import type { CliTable } from './cliserver'
 import { getConfig } from './config'
 import { AppError } from './errors'
 import { exclusive } from './mutex'
-import { repoNameAt } from './repos'
-import { Expected, RepoName } from './schemas'
+import { envTargetAt } from './repos'
+import { EnvPath, Expected, RepoName } from './schemas'
 import * as session from './session'
 import * as sync from './sync'
 import { entryId } from './vault'
 
 const Dir = z.string().min(1).max(4096).refine(isAbsolute)
 const ByDir = z.strictObject({ dir: Dir })
-const ByName = z.strictObject({ repo: RepoName })
+const ByName = z.strictObject({ repo: RepoName, path: EnvPath.optional() })
 
-/** The repo a request is about, from its name or from a folder inside it. */
-async function repoOf(target: RepoTarget): Promise<string> {
-  if ('repo' in target) return target.repo
+/** The env file a request is about, from its repo and path or from a folder inside the repo. */
+async function fileOf(target: RepoTarget): Promise<EnvFile> {
+  if ('repo' in target) return { repoName: target.repo, path: target.path ?? ROOT_ENV }
   const { projectsPath } = await getConfig()
   if (!projectsPath) throw new AppError('NOT_CONFIGURED', 'Choose a projects folder first.')
-  return repoNameAt(projectsPath, target.dir)
+  return envTargetAt(projectsPath, target.dir)
 }
 
 /** `onPushed` hears about every push that changed the vault copy. */
@@ -38,7 +38,7 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
       schema: z.union([ByDir, ByName, z.strictObject({ all: z.literal(true) })]),
       run: (args) =>
         session.withKey(async (key, id) => {
-          const name = 'all' in args ? null : await repoOf(args)
+          const name = 'all' in args ? null : (await fileOf(args)).repoName
           // Asked for by the user, so git is asked too.
           const rows = await sync.listRepos(key, id, {
             find: true,
@@ -57,10 +57,11 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
       schema: z.union([ByDir, ByName]),
       run: (args) =>
         session.withKey(async (key, id) => {
-          const repo = await repoOf(args)
+          const file = await fileOf(args)
           return {
-            repo,
-            preview: await sync.previewPush(key, id, { repoName: repo, path: ROOT_ENV })
+            repo: file.repoName,
+            path: file.path,
+            preview: await sync.previewPush(key, id, file)
           }
         })
     },
@@ -72,11 +73,10 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
       run: async (args) => {
         const row = await exclusive(() =>
           session.withKey(async (key, id) => {
-            const repoName = await repoOf(args)
+            const file = await fileOf(args)
             try {
               return await sync.push(key, id, {
-                repoName,
-                path: ROOT_ENV,
+                ...file,
                 expected: args.expected,
                 overwriteConfirmed: false
               })

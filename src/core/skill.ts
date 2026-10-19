@@ -12,7 +12,7 @@ export const SKILL_MARKER =
 export function skillMarkdown(command: string): string {
   return `---
 name: envvault
-description: Check whether a repo's .env is in sync with the EnvVault vault, or push it to the vault. Use when the user asks to push, sync or check a .env with EnvVault.
+description: Check whether a repo's .env files are in sync with the EnvVault vault, or push one to the vault. Use when the user asks to push, sync or check a .env with EnvVault.
 allowed-tools:
   - Bash(${command} status *)
   - Bash(${command} push --dry-run *)
@@ -22,27 +22,29 @@ ${SKILL_MARKER}
 
 # EnvVault
 
-EnvVault syncs each repo's \`.env\` between the user's machines through an encrypted vault. The \`envvault\` command below talks to the EnvVault app, which must be running and unlocked, with command-line access turned on in its Settings. The command reports key names only, never values.
+EnvVault syncs \`.env\` files between the user's machines through an encrypted vault: each repo's root \`.env\`, and in a monorepo the \`.env\` in each package's folder. The \`envvault\` command below talks to the EnvVault app, which must be running and unlocked, with command-line access turned on in its Settings. The command reports key names only, never values.
 
 **Never read, print, search, copy or edit \`.env\` or \`.env.bak.*\` files, and never put an env value in a command.** Nothing here needs the values.
 
-Run each command from inside the repo (or add \`--repo <name>\` for a repo in the user's projects folder), always with \`--json\`. The output is \`{"ok": true, "data": ...}\` or \`{"ok": false, "error": {"code": ..., "message": ...}}\`.
+Run each command from inside the repo, always with \`--json\`. The output is \`{"ok": true, "data": ...}\` or \`{"ok": false, "error": {"code": ..., "message": ...}}\`.
+
+\`push\` uses the \`.env\` in the current folder or the nearest one above it in the repo, or else the repo's root \`.env\`. In a monorepo, run it from the package's folder. Instead of the current folder, \`--repo <name>\` names a repo in the user's projects folder, and with \`push\`, \`--path <path>\` names a \`.env\` in one of its folders (for example \`--path apps/web/.env\`).
 
 ## Check the status
 
-\`${command} status --json\`, or \`${command} status --all --json\` for every repo. \`data\` is a list of rows with \`name\`, \`status\` and \`vault\` (\`version\`, \`updatedBy\`, \`updatedAt\`):
+\`${command} status --json\`, or \`${command} status --all --json\` for every repo. \`data\` is a list of rows, one per \`.env\` file, with \`name\` (the repo), \`path\` (the file in it: \`.env\` for the repo's root), \`status\` and \`vault\` (\`version\`, \`updatedBy\`, \`updatedAt\`):
 
 - \`in-sync\`: nothing to do.
 - \`local-newer\`: the local .env changed since the last sync. Push it.
 - \`local-only\`: the vault has no copy yet. Push it.
 - \`vault-newer\`: another machine pushed. EnvVault pulls it automatically (if that's turned on), or the user pulls it in the app.
 - \`conflict\`: both sides changed. The user resolves it in the app.
-- \`vault-only\` or \`no-env\`: there is no local .env.
+- \`vault-only\` or \`no-env\`: there is no local .env (for \`vault-only\`, its folder may not be in this copy of the repo).
 - \`error\`: see the row's \`error.message\`.
 
 ## Push
 
-1. Run \`${command} push --dry-run --json\`. \`data.preview\` has:
+1. Run \`${command} push --dry-run --json\`. \`data.repo\` and \`data.path\` say which file it is, and \`data.preview\` has:
    - \`diff.added\`, \`diff.removed\`, \`diff.changed\`: the key names that change in the vault copy;
    - \`kept\`: machine-specific keys, whose values stay on this machine;
    - \`unmarked\`: keys the vault treats as machine-specific but this .env doesn't mark, so **their values would be uploaded**. Point these out;
@@ -51,8 +53,8 @@ Run each command from inside the repo (or add \`--repo <name>\` for a repo in th
    - \`sameContent\`: if true, there is nothing to push.
 
    \`data.expect\` is the token for step 3.
-2. Show the user the repo name, the key changes and any warnings, and ask whether to push. Never push without a yes.
-3. Run \`${command} push --expect <token> --json\` with the token from step 1. If it fails with \`LOCAL_CHANGED\` or \`VAULT_CHANGED\`, something changed since step 1: start again from step 1.
+2. Show the user the repo name, the file's path, the key changes and any warnings, and ask whether to push. Never push without a yes.
+3. Run \`${command} push --expect <token> --json\` with the token from step 1, from the same folder (or with the same \`--repo\` and \`--path\`). If it fails with \`LOCAL_CHANGED\` or \`VAULT_CHANGED\`, something changed since step 1: start again from step 1.
 
 ## Errors
 

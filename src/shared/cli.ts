@@ -5,13 +5,18 @@
 import type { Expected, PushPreview, RepoRow } from './types'
 
 /** Bumped whenever a request or response changes shape. */
-export const CLI_PROTOCOL = 1
+export const CLI_PROTOCOL = 2
 
 /** Dev profile names (ENVVAULT_PROFILE, --profile). scripts/dev-profile.mjs keeps a copy. */
 export const PROFILE_RE = /^[A-Za-z0-9-]{1,20}$/
 
-/** Which repo: the one containing the command's working directory, or one by name. */
-export type RepoTarget = { dir: string } | { repo: string }
+/**
+ * Which env file: from the command's working directory, the .env in the
+ * nearest folder at or above it within its repo (else the repo's root .env);
+ * or a repo by name, with the file's path in it (its root .env if left out).
+ * `status` uses only the repo.
+ */
+export type RepoTarget = { dir: string } | { repo: string; path?: string }
 
 export interface CliArgs {
   status: RepoTarget | { all: true }
@@ -20,9 +25,9 @@ export interface CliArgs {
 }
 
 export interface CliResponses {
-  /** One row, or every row with `all`. */
+  /** A row per env file of the repo, or of every repo with `all`. */
   status: RepoRow[]
-  previewPush: { repo: string; preview: PushPreview }
+  previewPush: { repo: string; path: string; preview: PushPreview }
   push: RepoRow
 }
 

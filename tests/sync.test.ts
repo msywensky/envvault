@@ -1097,6 +1097,35 @@ describe('command line', () => {
     }
   })
 
+  it('uses the nearest .env at or above the folder, in a monorepo', async () => {
+    const dir = makeRepo(projA, 'cl2', { '.gitignore': IGNORE, '.env': 'ROOT=1\n' })
+    mkdirSync(join(dir, 'packages', 'a', 'src'), { recursive: true })
+    mkdirSync(join(dir, 'packages', 'b', 'src'), { recursive: true })
+    mkdirSync(join(dir, 'packages', 'has space'), { recursive: true })
+    writeFileSync(join(dir, 'packages', 'a', '.env'), 'A=1\n')
+    writeFileSync(join(dir, 'packages', 'has space', '.env'), 'S=1\n')
+    const { m, cli } = await unlocked('a')
+    try {
+      const at = async (...folders: string[]): Promise<string> =>
+        (await cli.previewPush.run({ dir: join(dir, ...folders) })).path
+      expect(await at('packages', 'a', 'src')).toBe('packages/a/.env')
+      expect(await at('packages', 'a')).toBe('packages/a/.env')
+      expect(await at('packages', 'b', 'src')).toBe('.env')
+      // A folder EnvVault doesn't sync from is passed over.
+      expect(await at('packages', 'has space')).toBe('.env')
+      expect(await at()).toBe('.env')
+      const named = await cli.previewPush.run({ repo: 'cl2', path: 'packages/a/.env' })
+      expect(named).toMatchObject({ repo: 'cl2', path: 'packages/a/.env' })
+      expect(named.preview.diff.added).toEqual(['A'])
+      // Status lists every .env of the repo, found by git.
+      expect(
+        (await cli.status.run({ dir: join(dir, 'packages', 'a', 'src') })).map((r) => r.path)
+      ).toEqual(['.env', 'packages/a/.env'])
+    } finally {
+      m.session.lock()
+    }
+  })
+
   it('pushes a one-sided change, and reports only pushes that changed the vault', async () => {
     const { m, cli } = await unlocked('a')
     try {

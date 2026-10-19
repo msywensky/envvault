@@ -7,10 +7,10 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { appUserData, type Machine } from '../src/cli/client'
-import { decodeExpect, encodeExpect, formatPreview } from '../src/cli/format'
+import { decodeExpect, encodeExpect, formatPreview, formatRows } from '../src/cli/format'
 import { main } from '../src/cli/main'
 import { cliEndpoint, type CliEndpoint } from '../src/core/cliendpoint'
-import type { CliArgs, CliCommand } from '../src/shared/cli'
+import { CLI_PROTOCOL, type CliArgs, type CliCommand } from '../src/shared/cli'
 import type { PushPreview, RepoRow } from '../src/shared/types'
 import { configureCli, setCliAccess, type CliTable } from '../src/main/cliserver'
 import { AppError } from '../src/main/errors'
@@ -51,6 +51,8 @@ function preview(overrides: Partial<PushPreview> = {}): PushPreview {
 let calls: { command: CliCommand; args: unknown }[] = []
 let locked = false
 let nextPreview = preview()
+// The file the app finds from the working directory (see envTargetAt).
+let nearest = '.env'
 
 const any = <T>(): z.ZodType<T> => z.custom<T>(() => true)
 const record = <C extends CliCommand>(command: C, args: CliArgs[C]): void => {
@@ -69,7 +71,8 @@ const table: CliTable = {
     schema: any(),
     run: async (args) => {
       record('previewPush', args)
-      return { repo: 'web', preview: nextPreview }
+      if ('dir' in args) return { repo: 'web', path: nearest, preview: nextPreview }
+      return { repo: args.repo, path: args.path ?? '.env', preview: nextPreview }
     }
   },
   push: {
@@ -147,6 +150,7 @@ beforeEach(() => {
   calls = []
   locked = false
   nextPreview = preview()
+  nearest = '.env'
 })
 
 describe('envvault status', () => {
@@ -200,8 +204,39 @@ describe('envvault push', () => {
     expect(yes.code).toBe(0)
     expect(calls.at(-1)).toEqual({
       command: 'push',
-      args: { repo: 'web', expected: { localHash: H1, vaultHash: H2 } }
+      args: { repo: 'web', path: '.env', expected: { localHash: H1, vaultHash: H2 } }
     })
+  })
+
+  it('pushes exactly the file it previewed, in a folder of a monorepo', async () => {
+    nearest = 'apps/web/.env'
+    const r = await cli(['push', '--yes'])
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('web/apps/web/.env: push to the vault as v5')
+    expect(calls.at(-1)).toEqual({
+      command: 'push',
+      args: { repo: 'web', path: 'apps/web/.env', expected: { localHash: H1, vaultHash: H2 } }
+    })
+  })
+
+  it('names a .env in a folder of a repo with --path', async () => {
+    const dry = await cli(['push', '--dry-run', '--repo', 'platform', '--path', 'apps/web/.env'])
+    expect(dry.code).toBe(0)
+    expect(calls.map((c) => c.args)).toEqual([{ repo: 'platform', path: 'apps/web/.env' }])
+    expect(dry.out).toContain('platform/apps/web/.env: push to the vault as v5')
+    expect(dry.out).toContain(
+      `To push this: envvault push --repo platform --path apps/web/.env --expect ${H1}.${H2}\n`
+    )
+    const j = await cli([
+      'push',
+      '--dry-run',
+      '--json',
+      '--repo',
+      'platform',
+      '--path',
+      'apps/web/.env'
+    ])
+    expect(JSON.parse(j.out).data).toMatchObject({ repo: 'platform', path: 'apps/web/.env' })
   })
 
   it('never pushes over a vault copy that changed elsewhere', async () => {
@@ -238,7 +273,12 @@ describe('exit codes', () => {
       ['pull'],
       ['status', 'extra'],
       ['status', '--profile', 'no spaces'],
-      ['status', '--bogus']
+      ['status', '--bogus'],
+      ['push', '--yes', '--path', 'apps/web/.env'],
+      ['status', '--repo', 'web', '--path', '.env'],
+      ['push', '--yes', '--repo', 'web', '--path', '../.env'],
+      ['push', '--yes', '--repo', 'web', '--path', 'apps/web/.env.local'],
+      ['push', '--yes', '--repo', 'web', '--path', 'apps\\web\\.env']
     ]) {
       expect((await cli(argv)).code, argv.join(' ')).toBe(2)
     }
@@ -271,7 +311,7 @@ describe('exit codes', () => {
 
 describe('the server', () => {
   const request = (fields: Record<string, unknown>): string =>
-    `${JSON.stringify({ v: 1, token: token(), command: 'status', args: { all: true }, ...fields })}\n`
+    `${JSON.stringify({ v: CLI_PROTOCOL, token: token(), command: 'status', args: { all: true }, ...fields })}\n`
 
   it('answers only requests with the current token', async () => {
     expect(JSON.parse(await raw(request({})))).toMatchObject({ ok: true })
@@ -285,10 +325,12 @@ describe('the server', () => {
   it('rejects malformed requests without echoing them', async () => {
     for (const bad of [
       'not json\n',
-      `${JSON.stringify({ v: 1, token: token(), command: 'status' })}\n`,
+      `${JSON.stringify({ v: CLI_PROTOCOL, token: token(), command: 'status' })}\n`,
       request({ command: 'pull' }),
       request({ command: 'toString' }),
-      request({ v: 2 })
+      // The protocol before env files in folders, and one from the future.
+      request({ v: 1 }),
+      request({ v: CLI_PROTOCOL + 1 })
     ]) {
       const reply = JSON.parse(await raw(bad))
       expect(reply).toMatchObject({ ok: false, error: { code: 'BAD_REQUEST' } })
@@ -309,6 +351,27 @@ describe('the server', () => {
 })
 
 describe('format', () => {
+  it("names each row's file, a repo's root .env by the repo alone", () => {
+    const text = formatRows([
+      ROW,
+      { ...ROW, path: 'apps/web/.env', storedName: 'web.0123456789abcdef.file.enc' },
+      {
+        ...ROW,
+        path: null,
+        storedName: 'web.fedcba9876543210.file.enc',
+        status: 'error',
+        vault: null,
+        error: { code: 'VAULT_TAMPERED', message: 'It failed verification.' }
+      }
+    ])
+    expect(text.split('\n')).toEqual([
+      expect.stringMatching(/^web {32}local newer: /),
+      expect.stringMatching(/^web\/apps\/web\/\.env {18}local newer: /),
+      'web/web.fedcba9876543210.file.enc  error: It failed verification.',
+      ''
+    ])
+  })
+
   it('round-trips the --expect token', () => {
     const e = { localHash: H1, vaultHash: null }
     expect(decodeExpect(encodeExpect(e))).toEqual(e)

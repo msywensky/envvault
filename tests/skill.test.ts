@@ -36,6 +36,13 @@ describe('skillMarkdown', () => {
     expect(text).not.toContain('--yes')
   })
 
+  it('explains which .env a push uses, in a monorepo too', () => {
+    expect(text).toContain('the nearest one above it in the repo')
+    expect(text).toContain("run it from the package's folder")
+    expect(text).toContain('`--path apps/web/.env`')
+    expect(text).toContain('`data.repo` and `data.path` say which file it is')
+  })
+
   it('tells Claude never to touch .env files, and is marked as EnvVault’s', () => {
     expect(text).toContain('Never read, print, search, copy or edit `.env` or `.env.bak.*` files')
     expect(text).toContain(SKILL_MARKER)
