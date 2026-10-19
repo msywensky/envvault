@@ -74,8 +74,11 @@ export interface EnvVaultApi {
   /**
    * Use a private git repository as the vault: checked (access, private,
    * empty or a vault already), then saved. Locks EnvVault, like a new folder.
+   * A host whose privacy can't be checked fails with GIT_VAULT_UNVERIFIED;
+   * `confirmPrivate` is the user's word that the repository is private. It
+   * never overrides a repository found to be public.
    */
-  setGitVault(url: string): R<'settings:setGitVault'>
+  setGitVault(url: string, confirmPrivate?: boolean): R<'settings:setGitVault'>
   /** Whether the GitHub CLI is installed and signed in. */
   ghStatus(): R<'git:ghStatus'>
   /** Your private GitHub repositories, through the GitHub CLI. */

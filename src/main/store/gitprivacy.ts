@@ -100,7 +100,7 @@ export async function checkPrivate(url: string): Promise<void> {
     if (visibility === 'unknown') {
       throw new AppError(
         'GIT_VAULT_UNVERIFIED',
-        "EnvVault couldn't confirm that this repository is private. It asks the host over https without your credentials and got no clear answer. Check your network, or use a host that serves the repository over https."
+        "EnvVault couldn't confirm that this repository is private. It asks the host over https without your credentials and got no clear answer. Check your network. If the repository is on your own server, you can confirm that it is private."
       )
     }
   } finally {

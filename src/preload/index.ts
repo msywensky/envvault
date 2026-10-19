@@ -20,7 +20,7 @@ const api: EnvVaultApi = {
   getSettings: () => invoke(CH.getSettings),
   saveSettings: (patch) => invoke(CH.saveSettings, patch),
   pickFolder: (which) => invoke(CH.pickFolder, { which }),
-  setGitVault: (url) => invoke(CH.setGitVault, { url }),
+  setGitVault: (url, confirmPrivate = false) => invoke(CH.setGitVault, { url, confirmPrivate }),
   ghStatus: () => invoke(CH.ghStatus),
   listGitRepos: () => invoke(CH.listGitRepos),
   createGitRepo: (name) => invoke(CH.createGitRepo, { name }),

@@ -20,8 +20,13 @@ const EXTRAS = /^(?:(?:README|LICENSE|LICENCE)(?:\.[A-Za-z0-9]+)?|\.gitignore|\.
  * The location of a repository that can be the vault: the URL is valid, git
  * is new enough, you can reach it, it's private, and it's empty or already a
  * vault. Talks to the network, so run it outside exclusive().
+ *
+ * A host that gives no clear answer to the privacy check (GIT_VAULT_UNVERIFIED,
+ * e.g. an SSH-only server) is accepted only with `confirmPrivate`, and the
+ * location then records it. A repository found to be public is always refused
+ * when it is chosen.
  */
-export async function prepareGitVault(url: string): Promise<GitLocation> {
+export async function prepareGitVault(url: string, confirmPrivate = false): Promise<GitLocation> {
   try {
     parseGitRemote(url)
   } catch (err) {
@@ -30,8 +35,18 @@ export async function prepareGitVault(url: string): Promise<GitLocation> {
   }
   await requireGitVersion()
   const branch = await defaultBranch(url, app.getPath('userData'))
-  await checkPrivate(url)
-  const location: GitLocation = { kind: 'git', url, branch }
+  let privateConfirmed = false
+  try {
+    await checkPrivate(url)
+  } catch (err) {
+    if (!(confirmPrivate && err instanceof AppError && err.code === 'GIT_VAULT_UNVERIFIED')) {
+      throw err
+    }
+    privateConfirmed = true
+  }
+  const location: GitLocation = privateConfirmed
+    ? { kind: 'git', url, branch, privateConfirmed: true }
+    : { kind: 'git', url, branch }
   const store = storeFor(location)
   if (!(store instanceof GitStore)) throw new Error('Expected a git store.')
   if (holdsOtherFiles(await store.topLevel())) {

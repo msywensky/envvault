@@ -34,7 +34,8 @@ export const VaultLocation = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('git'),
     url: z.string().min(1).max(2048),
-    branch: z.string().refine(isBranchName)
+    branch: z.string().refine(isBranchName),
+    privateConfirmed: z.literal(true).optional()
   })
 ])
 
@@ -58,7 +59,10 @@ export const requestSchemas = {
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
   // Only bounded here: prepareGitVault parses it before git sees it.
-  [CH.setGitVault]: z.strictObject({ url: z.string().trim().min(1).max(2048) }),
+  [CH.setGitVault]: z.strictObject({
+    url: z.string().trim().min(1).max(2048),
+    confirmPrivate: z.boolean()
+  }),
   [CH.ghStatus]: NoArgs,
   [CH.listGitRepos]: NoArgs,
   [CH.createGitRepo]: z.strictObject({ name: z.string().regex(REPO_NAME_RE) }),

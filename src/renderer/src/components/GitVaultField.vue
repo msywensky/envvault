@@ -44,18 +44,29 @@ async function choose(next: 'create' | 'select'): Promise<void> {
   if (!res.ok) error.value = res.error.message
 }
 
-async function save(request: () => Promise<Result<Settings>>): Promise<void> {
+// A URL whose privacy main couldn't check (an SSH-only server, say). The user
+// may confirm it is private; main still refuses a repository found to be public.
+const unverifiedUrl = ref<string | null>(null)
+
+async function save(request: () => Promise<Result<Settings>>, url?: string): Promise<void> {
   if (checking.value) return
   checking.value = true
   error.value = null
+  unverifiedUrl.value = null
   const res = await call(request)
   checking.value = false
   if (!res.ok) {
     error.value = res.error.message
+    if (url && res.error.code === 'GIT_VAULT_UNVERIFIED') unverifiedUrl.value = url
     return
   }
   changing.value = false
   emit('saved', res.data)
+}
+
+function confirmPrivate(): void {
+  const url = unverifiedUrl.value
+  if (url) void save(() => window.envvault.setGitVault(url, true))
 }
 
 function create(): void {
@@ -65,12 +76,12 @@ function create(): void {
 
 function useListed(): void {
   const url = picked.value
-  if (url) void save(() => window.envvault.setGitVault(url))
+  if (url) void save(() => window.envvault.setGitVault(url), url)
 }
 
 function usePasted(): void {
   const url = pasted.value.trim()
-  if (url) void save(() => window.envvault.setGitVault(url))
+  if (url) void save(() => window.envvault.setGitVault(url), url)
 }
 
 async function openGitHub(): Promise<void> {
@@ -96,7 +107,10 @@ const updated = (iso: string): string => {
           Change…
         </button>
       </div>
-      <p class="muted small">Private repository · branch {{ current.branch }}</p>
+      <p class="muted small">
+        {{ current.privateConfirmed ? 'Private (confirmed by you)' : 'Private repository' }} ·
+        branch {{ current.branch }}
+      </p>
     </template>
 
     <div v-else class="git-choice stack">
@@ -235,6 +249,18 @@ const updated = (iso: string): string => {
         Checking access, privacy and contents…
       </div>
       <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
+      <div v-if="unverifiedUrl" class="stack">
+        <p class="small">
+          Only do this for a server you control, where the repository can't be read without signing
+          in. The vault is encrypted either way, but a public repository would expose it to offline
+          guessing. EnvVault will not ask again for this repository.
+        </p>
+        <div class="row">
+          <button type="button" class="btn" :disabled="checking" @click="confirmPrivate">
+            Yes, this repository is private
+          </button>
+        </div>
+      </div>
       <div v-if="current" class="row">
         <button type="button" class="btn btn-link" :disabled="checking" @click="changing = false">
           Keep the current repository
