@@ -29,7 +29,9 @@ export function createMainWindow(): BrowserWindow {
       sandbox: true,
       webSecurity: true,
       webviewTag: false,
-      spellcheck: false
+      spellcheck: false,
+      // The packaged app can't open DevTools at all, from any menu or shortcut.
+      devTools: is.dev
     }
   })
 

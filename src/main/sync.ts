@@ -4,6 +4,8 @@
 // write at a time) is done by the IPC handlers. Machine-specific keys
 // (# envvault:local, see core/localkeys) are blanked in what a push uploads
 // and status hashes, and kept from the local file by a pull.
+import { lstat, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
@@ -30,7 +32,7 @@ import type {
   VaultInfo
 } from '../shared/types'
 import { getConfig } from './config'
-import { AppError } from './errors'
+import { AppError, errnoCode } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { mergedBytes, syncedBytes } from './localkeys'
@@ -425,7 +427,7 @@ async function applyPull(
       // and checked like the backup: a crash must never leave secrets in an
       // un-ignored file.
       const tmpName = `.env.bak.tmp-${randomHex(8)}`
-      const wantBackup = s.local ? `.env.bak.${backupStamp(new Date())}` : null
+      const wantBackup = s.local && s.cfg.backups ? `.env.bak.${backupStamp(new Date())}` : null
       for (const name of [tmpName, wantBackup]) {
         if (name && !(await checkIgnored(s.repoDir, name))) {
           throw new AppError(
@@ -436,6 +438,8 @@ async function applyPull(
       }
       if (s.local && wantBackup) backupName = await writeBackup(s.repoDir, wantBackup, s.local)
       await atomicWrite(s.repoDir, '.env', bytes, { tmpName, mode: 0o600 })
+      // Only once .env is written: a failed pull never costs an older backup.
+      if (backupName) await pruneBackups(s.repoDir, s.cfg.backupCount)
     }
   } finally {
     bytes.fill(0)
@@ -458,6 +462,34 @@ async function writeBackup(repoDir: string, name: string, bytes: Buffer): Promis
     }
   }
   throw new AppError('FS_ERROR', 'Could not create a unique backup file name.')
+}
+
+// What writeBackup names a backup: .env.bak.<stamp>, with -<4 hex> if that
+// was taken. Never the pull's temp file (.env.bak.tmp-<hex>) or anyone else's.
+const BACKUP_RE = /^\.env\.bak\.\d{8}T\d{6}Z(?:-[0-9a-f]{4})?$/
+
+/**
+ * Delete all but the newest `keep` backups (the names sort by time). Best
+ * effort: the pull has succeeded, and what can't be deleted now is tried
+ * again after the next backup.
+ */
+async function pruneBackups(repoDir: string, keep: number): Promise<void> {
+  let names: string[]
+  try {
+    names = (await readdir(repoDir)).filter((name) => BACKUP_RE.test(name)).sort()
+  } catch (err) {
+    console.error(`[envvault] listing backups failed: ${errnoCode(err) ?? 'unknown'}`)
+    return
+  }
+  for (const name of names.slice(0, Math.max(0, names.length - keep))) {
+    const file = join(repoDir, name)
+    try {
+      // A regular file only: never a symlink or a folder that happens to match.
+      if ((await lstat(file)).isFile()) await rm(file)
+    } catch (err) {
+      console.error(`[envvault] removing an old backup failed: ${errnoCode(err) ?? 'unknown'}`)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

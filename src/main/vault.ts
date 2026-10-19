@@ -24,6 +24,7 @@ import {
   type Meta,
   type Payload
 } from '../core/crypto'
+import { passwordProblem } from '../core/password'
 import { isValidRepoName } from '../core/paths'
 import { formatSetupCode, parseSetupCode, SetupCodeError } from '../core/setupcode'
 import type { SetupCodeState, VaultFolderState, VaultLocation } from '../shared/types'
@@ -190,6 +191,8 @@ async function createVault(
   if ([...password].length < MIN_PASSWORD_CHARS) {
     throw new AppError('PASSWORD_TOO_SHORT', `Use at least ${MIN_PASSWORD_CHARS} characters.`)
   }
+  const weak = await passwordProblem(password, await passwordContext())
+  if (weak) throw new AppError('PASSWORD_WEAK', weak)
   await store.check()
   const salt = await randomSalt()
   const vaultId = randomUUID()
@@ -236,6 +239,16 @@ async function createVault(
   } finally {
     secret?.fill(0)
   }
+}
+
+/** Words an attacker would try first: the app's name, this machine's, and the folders' and repository's. */
+async function passwordContext(): Promise<string[]> {
+  const cfg = await getConfig()
+  const where = cfg.vault?.kind === 'git' ? cfg.vault.url : cfg.vault?.path
+  const words = [cfg.machineName, cfg.projectsPath, where].flatMap(
+    (s) => s?.split(/[^\p{L}\p{N}]+/u) ?? []
+  )
+  return ['envvault', cfg.machineName, ...words].filter((w) => w.length >= 3)
 }
 
 async function openVault(

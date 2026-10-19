@@ -5,12 +5,25 @@ directories:
   buildResources: build
 
 # Ship only the compiled app. electron-builder adds package.json and the
-# production dependencies (libsodium, zod, @electron-toolkit/utils) itself.
+# production dependencies (libsodium, zod, zxcvbn-ts, @electron-toolkit/utils) itself.
 files:
   - out/**/*
 # The envvault command runs under plain Node, which can't read app.asar.
 asarUnpack:
   - out/cli/**
+
+# Fuses are flipped in the packaged binary: no run-as-node, no NODE_OPTIONS, no
+# --inspect, and only app.asar is loaded (and integrity-checked).
+# The envvault command runs under the user's own Node, not Electron's.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Left on (the default): the renderer loads over file://, and turning it off
+  # leaves a blank window.
+  grantFileProtocolExtraPrivileges: true
 
 # No native modules (libsodium is WebAssembly), so nothing to rebuild.
 npmRebuild: false

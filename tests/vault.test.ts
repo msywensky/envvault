@@ -51,6 +51,10 @@ describe('vault policy on a memory store', () => {
     expect(await vault.state()).toBe('empty')
     expect(await errorCode(vault.open(PASSWORD))).toBe('VAULT_NOT_FOUND')
     expect(await errorCode(vault.create('too short'))).toBe('PASSWORD_TOO_SHORT')
+    // Refused before the key is derived.
+    const derives = h.derives
+    expect(await errorCode(vault.create('password12345'))).toBe('PASSWORD_WEAK')
+    expect(h.derives).toBe(derives)
 
     const created = await vault.create(PASSWORD)
     expect(await vault.state()).toBe('ready')

@@ -372,7 +372,12 @@ watch(
             It may have been restored from a backup or rolled back.
           </div>
           <p v-if="pullPreview.hasLocal && !pullPreview.sameContent" class="muted small">
-            Your current .env will be saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+            <template v-if="store.settings?.backups ?? true">
+              Your current .env will be saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+            </template>
+            <template v-else
+              >Backups are off in Settings, so your current .env isn't saved.</template
+            >
           </p>
           <p class="muted small">
             Vault copy: v{{ pullPreview.vault.version }} from {{ pullPreview.vault.updatedBy }},

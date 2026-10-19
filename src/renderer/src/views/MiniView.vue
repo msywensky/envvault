@@ -74,6 +74,8 @@ async function toggleOnTop(): Promise<void> {
       machineName: s.machineName,
       checkExample: s.checkExample,
       autoPull: s.autoPull,
+      backups: s.backups,
+      backupCount: s.backupCount,
       cliAccess: s.cliAccess,
       miniOnTop: !s.miniOnTop
     })

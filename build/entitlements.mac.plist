@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <!-- V8's JIT, including the WebAssembly that libsodium runs on. -->
+    <!-- V8's JIT, including the WebAssembly that libsodium runs on. Unsigned builds
+         don't enforce entitlements: recheck that this alone is enough (without
+         allow-unsigned-executable-memory) once the app is signed with the hardened runtime. -->
     <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
   </dict>
 </plist>

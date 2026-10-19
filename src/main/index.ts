@@ -1,4 +1,4 @@
-import { app, BrowserWindow, powerMonitor, session } from 'electron'
+import { app, BrowserWindow, dialog, Menu, powerMonitor, session } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { EV } from '../shared/channels'
@@ -19,7 +19,18 @@ import { createMainWindow, getMainWindow } from './window'
 const profile = devProfile()
 if (profile) app.setPath('userData', join(app.getPath('appData'), `envvault-${profile}`))
 
-if (!app.requestSingleInstanceLock()) {
+// The fuses turn off --inspect, but not Chromium's DevTools protocol: anything
+// connected to it could drive the window once you unlock, and read every value.
+// Unpackaged runs keep it for development (see CLAUDE.md).
+const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe']
+
+if (app.isPackaged && DEBUG_SWITCHES.some((s) => app.commandLine.hasSwitch(s))) {
+  dialog.showErrorBox(
+    'EnvVault',
+    "EnvVault doesn't run with remote debugging turned on. Start it without --remote-debugging-port or --remote-debugging-pipe."
+  )
+  app.exit(1)
+} else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -46,6 +57,9 @@ if (!app.requestSingleInstanceLock()) {
 
       // F12 toggles DevTools in dev; Ctrl/Cmd+R reload is disabled in production.
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
+      // Packaged, there's no View menu (DevTools, reload). macOS keeps an Edit
+      // menu, without which copy and paste don't work in text fields.
+      if (app.isPackaged) Menu.setApplicationMenu(packagedMenu())
 
       // Session lifecycle: any authorised request counts as activity; lock
       // when the machine sleeps or its screen locks, and tell the renderer.
@@ -83,4 +97,15 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
+}
+
+/** No menu bar on Windows; on macOS, only the app, File, Edit and Window menus. */
+function packagedMenu(): Menu | null {
+  if (process.platform !== 'darwin') return null
+  return Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' }
+  ])
 }

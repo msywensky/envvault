@@ -17,6 +17,7 @@ How EnvVault protects your `.env` files: the cryptography, how the app is harden
 ## Cryptography
 
 - **Key derivation:** Argon2id (libsodium `crypto_pwhash`, MODERATE: 3 passes, 256 MiB) from your master password, run in a short-lived worker thread so the app never freezes.
+- **Master password:** a new vault needs at least 12 characters and a password that [zxcvbn-ts](https://zxcvbn-ts.github.io/zxcvbn/) scores 3 or more (an estimated 10^8 guesses or more), counting your machine's name, your folders' names and "EnvVault" as easy to guess. This is checked before the key is derived. A delay in the app wouldn't help: someone with a copy of the vault guesses offline, on their own hardware, and pays only Argon2id's cost per guess.
 - **Setup code:** a vault can also have a 128-bit secret that each of your machines keeps and the vault never holds; a git vault always does. The key then comes from the password _and_ that secret (HKDF-SHA256), so a copy of the vault alone can't be used to guess your password. A new machine gets the secret once, as a **setup code** you type with the password.
 - **Encryption:** XChaCha20-Poly1305 with a random 24-byte nonce for every write. The repo name is bound in as associated data, so copying `a.env.enc` over `b.env.enc` fails to decrypt instead of silently swapping secrets.
 - **Rollbacks:** each vault copy carries a version, inside the ciphertext. A copy whose version went backwards is shown as a conflict, never offered as a simple pull (see [sync status](../README.md#how-it-works)).
@@ -24,7 +25,9 @@ How EnvVault protects your `.env` files: the cryptography, how the app is harden
 ## Electron hardening
 
 - Renderer is sandboxed and context-isolated with no Node integration. Navigation, `window.open`, webviews and all permission requests are denied, and only one instance runs.
-- Strict Content-Security-Policy in production: `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'` (no inline scripts or styles, no `eval`).
+- Strict Content-Security-Policy in production: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'` (no inline scripts or styles, no `eval`). Only the Vite dev server relaxes it, with inline styles and `ws://localhost:*` for hot reload.
+- Electron fuses (`electronFuses` in `electron-builder.yml`) are set in the packaged app: `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and the `--inspect` family are off, the app loads only from `app.asar`, and the asar's integrity is validated. The `envvault` command runs under the user's own Node, so it doesn't depend on run-as-node.
+- The packaged app refuses to start with `--remote-debugging-port` or `--remote-debugging-pipe` (Chromium's DevTools protocol, which the fuses don't cover), can't open DevTools, and has no View menu (DevTools, reload).
 - The preload exposes named functions only (`window.envvault.*`), never `ipcRenderer` or IPC event objects.
 - Every IPC call is checked:
   - it must come from the app's own window, main frame and URL;
@@ -56,7 +59,7 @@ The editor:
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
 - `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
 - Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
-- Automatic pull applies only one-sided changes (the vault copy is newer and your `.env` is unchanged since the last sync, or missing), never a conflict or a rollback, with the same git checks and backup as a manual pull. It runs only while EnvVault is unlocked and doesn't count as activity, so it never keeps the vault unlocked. Mini mode's status checks don't count as activity either.
+- Automatic pull is off by default: with it on, a push from any of your machines (or from anything allowed to push, such as the command line) changes this machine's `.env` files without review. When on, it applies only one-sided changes (the vault copy is newer and your `.env` is unchanged since the last sync, or missing), never a conflict or a rollback, with the same git checks and backup as a manual pull. It runs only while EnvVault is unlocked and doesn't count as activity, so it never keeps the vault unlocked. Mini mode's status checks don't count as activity either.
 - Command-line access is off by default. When it's on:
   - EnvVault listens on a socket in its settings folder (mode `0600`) on macOS, or a named pipe on Windows;
   - every request must carry a random token from a file only you can read, replaced each time it starts;
@@ -93,9 +96,9 @@ The editor:
 ### Does not protect against
 
 - Malware running as you on an unlocked machine. With command-line access on, such a program doesn't even need to read EnvVault's memory: it can list your repo and key names and push a `.env`, which automatic pull then brings to your other machines. It can't get values through the command line, but it could read your `.env` files directly anyway.
-- A weak master password, for a vault without a setup code, or for someone who also has one of your machines (with its OS login) or your setup code. Use a long, unique password, and keep it and the setup code in your password manager.
+- A weak master password, for a vault without a setup code, or for someone who also has one of your machines (with its OS login) or your setup code. Use a long, unique password, and keep it and the setup code in your password manager. The strength check can't tell whether you use the password anywhere else, and a score of 3 still lets through passwords like `Summer2026!!!`.
 - Losing the setup code and every machine that has it: the vault can't be opened, even with the password.
-- The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). Delete old backups you don't need.
+- The plaintext `.env` and `.env.bak.*` files in your repos. They are created with mode `0600` on macOS, but **on Windows file permissions come from the folder's ACL** (your user profile is normally private to you). EnvVault keeps the 3 newest backups per repo by default (Settings: 1–50, or none) and deletes older ones when a pull writes a new one. Git ignores them, but tools that don't read `.gitignore` (a Docker build context, a zip of the folder) include them unless told not to.
 - The master password sitting briefly in JavaScript memory. JS strings can't be wiped; only the derived key is.
 - Secrets in `.env.example` that don't look like secrets. The same-value check is a heuristic.
 - Secrets kept in comments (for example a commented-out key). Comments aren't values, so the masked raw diff shows them.

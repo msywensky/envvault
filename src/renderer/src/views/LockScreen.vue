@@ -282,8 +282,9 @@ onBeforeUnmount(() => {
             </p>
           </div>
           <p class="muted small">
-            There is no recovery: if you lose this password, the vault can't be opened. Keep it in
-            your password manager.
+            EnvVault refuses passwords that are easy to guess: use several random words, or let your
+            password manager generate one. There is no recovery: if you lose this password, the
+            vault can't be opened. Keep it in your password manager.
           </p>
           <button type="submit" class="btn btn-primary" :disabled="busy || !canCreate">
             <span v-if="busy" class="spinner" />
