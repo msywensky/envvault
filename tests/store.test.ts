@@ -149,6 +149,47 @@ describe.each(kinds)('%s store', (_kind, make, unreachable) => {
     expect(await read(store, 'web.env.enc')).toBe(`machine ${won[0]}`)
   })
 
+  it('deletes at the current version only', async () => {
+    const store = make()
+    await store.write('meta.json', bytes('{}'), null)
+    const v1 = await store.write('web.env.enc', bytes('one'), null)
+    const v2 = await store.write('web.env.enc', bytes('two'), v1)
+    await expect(store.delete('web.env.enc', v1)).rejects.toBeInstanceOf(StoreConflictError)
+    expect(await read(store, 'web.env.enc')).toBe('two')
+
+    await store.delete('web.env.enc', v2)
+    const snapshot = await store.snapshot()
+    expect(snapshot.names).toEqual(['meta.json'])
+    expect(await snapshot.get('web.env.enc')).toBeNull()
+    expect(await read(store, 'meta.json')).toBe('{}')
+    // Nothing there now: every version conflicts, and it can be created again.
+    await expect(store.delete('web.env.enc', v2)).rejects.toBeInstanceOf(StoreConflictError)
+    await expect(store.delete('api.env.enc', v2)).rejects.toBeInstanceOf(StoreConflictError)
+    await store.write('web.env.enc', bytes('three'), null)
+    expect(await read(store, 'web.env.enc')).toBe('three')
+  })
+
+  it('can delete its only object', async () => {
+    const store = make()
+    const version = await store.write('web.env.enc', bytes('one'), null)
+    await store.delete('web.env.enc', version)
+    expect((await store.snapshot()).names).toEqual([])
+  })
+
+  it('lets exactly one of a delete and a write from the same version win', async () => {
+    const store = make()
+    const version = await store.write('web.env.enc', bytes('start'), null)
+    const [deleted, written] = await Promise.allSettled([
+      store.delete('web.env.enc', version),
+      store.write('web.env.enc', bytes('newer'), version)
+    ])
+    expect([deleted.status, written.status].sort()).toEqual(['fulfilled', 'rejected'])
+    for (const r of [deleted, written]) {
+      if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(StoreConflictError)
+    }
+    expect(await read(store, 'web.env.enc')).toBe(written.status === 'fulfilled' ? 'newer' : null)
+  })
+
   it('keeps its own copy of the bytes', async () => {
     const store = make()
     const input = bytes('secret')
@@ -167,6 +208,7 @@ describe.each(kinds)('%s store', (_kind, make, unreachable) => {
       await expect(store.write(name, bytes('x'), null), name).rejects.toThrow(
         'Not a valid store name.'
       )
+      await expect(store.delete(name, 'v1'), name).rejects.toThrow('Not a valid store name.')
     }
     expect((await store.snapshot()).names).toEqual([])
   })
@@ -336,6 +378,69 @@ describe('git store only', () => {
       ['README.md', 'api.env.enc', 'docs', WEB].sort()
     )
     expect(inRemote(remote, 'show', 'main:docs/web.env.enc')).toBe('not an entry')
+  })
+
+  it('deletes one file, keeping the others, README.md and the history', async () => {
+    const remote = bareRemote()
+    const work = join(root, `work${n++}`)
+    mkdirSync(work)
+    writeFileSync(join(work, 'README.md'), '# Vault\r\nkept byte for byte\n')
+    const g = (...args: string[]): void => {
+      execFileSync('git', [
+        '-C',
+        work,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'core.autocrlf=false',
+        ...args
+      ])
+    }
+    g('init', '--quiet')
+    g('add', '.')
+    g('commit', '--quiet', '-m', 'seed')
+    g('push', '--quiet', remote, 'HEAD:refs/heads/main')
+    const readme = inRemote(remote, 'rev-parse', 'main:README.md')
+
+    const store = gitStore(remote)
+    const web = await store.write(WEB, bytes('one'), null)
+    await store.write('api.env.enc', bytes('api'), null)
+    await store.delete(WEB, web)
+    expect(inRemote(remote, 'ls-tree', '--name-only', 'main').split('\n').sort()).toEqual([
+      'README.md',
+      'api.env.enc'
+    ])
+    expect(inRemote(remote, 'rev-parse', 'main:README.md')).toBe(readme)
+    expect(inRemote(remote, 'show', `main~1:${WEB}`)).toBe('one')
+    expect(inRemote(remote, 'log', '-1', '--format=%an|%s', 'main')).toBe(
+      'EnvVault|EnvVault update'
+    )
+  })
+
+  it('deletes between two machines: conflicts on a changed file, builds on top of others', async () => {
+    const remote = bareRemote()
+    const a = gitStore(remote)
+    // Machine b reuses what it last saw, so it starts out of date.
+    const b = gitStore(remote, 60_000)
+    const v1 = await a.write(WEB, bytes('one'), null)
+    expect(await versionOf(b, WEB)).toBe(v1)
+    const v2 = await a.write(WEB, bytes('two'), v1)
+    await expect(b.delete(WEB, v1)).rejects.toBeInstanceOf(StoreConflictError)
+    expect(inRemote(remote, 'show', `main:${WEB}`)).toBe('two')
+
+    // Behind by one commit that didn't touch the file: the delete lands on top.
+    const api = await a.write('api.env.enc', bytes('api'), null)
+    const c = gitStore(remote, 60_000)
+    expect(await versionOf(c, 'api.env.enc')).toBe(api)
+    await a.write('other.env.enc', bytes('other'), null)
+    await c.delete('api.env.enc', api)
+    expect(inRemote(remote, 'ls-tree', '--name-only', 'main').split('\n').sort()).toEqual([
+      'other.env.enc',
+      WEB
+    ])
+    expect(await versionOf(a, WEB)).toBe(v2)
   })
 
   it('commits as EnvVault, never as you or your machine', async () => {

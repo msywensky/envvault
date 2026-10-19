@@ -56,6 +56,12 @@ export class MemoryStore implements VaultStore {
     return stored.version
   }
 
+  async delete(name: string, expected: string): Promise<void> {
+    this.guard(name)
+    if (this.objects.get(name)?.version !== expected) throw new StoreConflictError()
+    this.objects.delete(name)
+  }
+
   async cleanUp(): Promise<void> {
     this.guard()
   }

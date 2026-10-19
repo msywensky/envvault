@@ -7,12 +7,12 @@
 //
 // A folder has no versions or transactions, so this is best-effort: a
 // snapshot lists the folder now and reads each file when asked, and a write
-// re-reads the file and compares its hash with `expected` before replacing
-// it. That's exact within this process (writes are queued) and as good as
-// Drive allows between machines.
+// or delete re-reads the file and compares its hash with `expected` before
+// replacing or removing it. That's exact within this process (writes are
+// queued) and as good as Drive allows between machines.
 import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { resolveInside } from '../../core/paths'
-import { atomicWrite, isErrno } from '../fsutil'
+import { atomicWrite, isErrno, removeFile } from '../fsutil'
 import { createSerial } from '../mutex'
 import {
   checkName,
@@ -70,6 +70,15 @@ export class FolderStore implements VaultStore {
       if ((current ? contentVersion(current) : null) !== expected) throw new StoreConflictError()
       await atomicWrite(this.dir, name, bytes, { mode: 0o644 })
       return contentVersion(bytes)
+    })
+  }
+
+  async delete(name: string, expected: string): Promise<void> {
+    checkName(name)
+    await this.serial(async () => {
+      const current = await this.read(name)
+      if (!current || contentVersion(current) !== expected) throw new StoreConflictError()
+      await removeFile(this.dir, name)
     })
   }
 
