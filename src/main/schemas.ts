@@ -2,6 +2,7 @@
 // zod never reaches the renderer or the sandboxed preload.
 import { z } from 'zod'
 import { KEY_RE } from '../core/envdiff'
+import { isEnvPath } from '../core/envpath'
 import { isBranchName } from '../core/gitremote'
 import { REPO_NAME_RE } from './gh'
 import { isValidRepoName } from '../core/paths'
@@ -11,9 +12,13 @@ const NoArgs = z.undefined()
 /** A sha256 hex digest. */
 export const Hash = z.string().regex(/^[0-9a-f]{64}$/)
 export const RepoName = z.string().max(100).refine(isValidRepoName)
+/** An env file's path in its repo (see core/envpath): never absolute, never outside it. */
+export const EnvPath = z.string().max(255).refine(isEnvPath)
+/** An env file: the fields every per-file request starts with. */
+const File = { repoName: RepoName, path: EnvPath }
 const Password = z.string().min(1).max(1024)
 export const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
-const PullReq = z.strictObject({ repoName: RepoName, expected: Expected })
+const PullReq = z.strictObject({ ...File, expected: Expected })
 const EnvKey = z.string().max(200).regex(KEY_RE)
 const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
 
@@ -42,7 +47,7 @@ export const VaultLocation = z.discriminatedUnion('kind', [
 
 export const LayoutReq = z.discriminatedUnion('layout', [
   z.strictObject({ layout: z.literal('full') }),
-  z.strictObject({ layout: z.literal('mini'), repoName: RepoName, reviewing: z.boolean() })
+  z.strictObject({ layout: z.literal('mini'), ...File, reviewing: z.boolean() })
 ])
 
 export const requestSchemas = {
@@ -78,25 +83,26 @@ export const requestSchemas = {
   }),
   [CH.lock]: NoArgs,
   [CH.showSetupCode]: z.strictObject({ password: Password }),
-  [CH.listRepos]: NoArgs,
-  [CH.previewPush]: z.strictObject({ repoName: RepoName }),
+  [CH.listRepos]: z.strictObject({ rescan: z.boolean() }),
+  [CH.previewPush]: z.strictObject(File),
   [CH.push]: z.strictObject({
-    repoName: RepoName,
+    ...File,
     overwriteConfirmed: z.boolean(),
     expected: Expected
   }),
-  [CH.previewPull]: z.strictObject({ repoName: RepoName }),
+  [CH.previewPull]: z.strictObject(File),
   [CH.pull]: PullReq,
   [CH.pullRawDiff]: PullReq.extend({ values: z.boolean() }),
-  [CH.openEditor]: z.strictObject({ repoName: RepoName }),
+  [CH.openEditor]: z.strictObject(File),
   [CH.saveEdit]: z.strictObject({
-    repoName: RepoName,
+    ...File,
     expectedVaultHash: Hash.nullable(),
     set: z.array(EnvChange).max(1000),
     add: z.array(EnvChange).max(1000),
     remove: z.array(EnvKey).max(1000)
   }),
-  [CH.addGitignore]: z.strictObject({ repoName: RepoName }),
+  [CH.removeFromVault]: z.strictObject({ ...File, expectedVaultHash: Hash }),
+  [CH.addGitignore]: z.strictObject(File),
   [CH.skillStatus]: NoArgs,
   [CH.installSkill]: z.strictObject({ replace: z.boolean() }),
   [CH.removeSkill]: NoArgs,

@@ -24,6 +24,7 @@ export const CH = {
   pullRawDiff: 'repo:pullRawDiff',
   openEditor: 'repo:openEditor',
   saveEdit: 'repo:saveEdit',
+  removeFromVault: 'repo:removeFromVault',
   addGitignore: 'repo:addGitignore',
   skillStatus: 'skill:status',
   installSkill: 'skill:install',
@@ -40,6 +41,6 @@ export const EV = {
   autoPulled: 'repos:autoPulled',
   /** The row (metadata only) the envvault command just pushed. */
   cliPushed: 'repos:cliPushed',
-  /** Mini mode's repo (metadata only), rechecked in the background. */
+  /** Mini mode's env file (metadata only), rechecked in the background. */
   repoStatus: 'repos:status'
 } as const

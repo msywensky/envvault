@@ -5,9 +5,12 @@ import {
   MetaInvalidError,
   VaultTamperError,
   decodeEnv,
+  decryptFilePayload,
   decryptPayload,
   deriveKey,
+  encryptFilePayload,
   encryptPayload,
+  fileTagger,
   makeKeyCheck,
   makePayload,
   parseMeta,
@@ -20,6 +23,7 @@ import {
   vaultKey,
   verifyKeyCheck,
   zero,
+  type FilePayload,
   type KdfParams
 } from '../src/core/crypto'
 
@@ -153,6 +157,90 @@ describe('encryptPayload / decryptPayload', () => {
     const payload = { ...makePayload(sample(), 1, 'm'), version: 0 }
     const bytes = await encryptPayload(k, 'r', payload)
     await expect(decryptPayload(k, 'r', bytes)).rejects.toThrow('malformed')
+  })
+
+  it('writes only the root fields, even when given a file payload', async () => {
+    const k = await key()
+    const payload = { ...makePayload(sample(), 1, 'm'), path: 'apps/web/.env' }
+    const out = await decryptPayload(k, 'r', await encryptPayload(k, 'r', payload))
+    expect(out).not.toHaveProperty('path')
+  })
+})
+
+describe('file entries', () => {
+  const TAG = '0123456789abcdef'
+  const filePayload = (path = 'apps/web/.env'): FilePayload => ({
+    ...makePayload(sample(), 1, 'm'),
+    path
+  })
+
+  it('round-trips a payload with its path', async () => {
+    const k = await key()
+    const payload = filePayload()
+    const bytes = await encryptFilePayload(k, 'platform', TAG, payload)
+    expect(await decryptFilePayload(k, 'platform', TAG, bytes)).toEqual(payload)
+    expect(Buffer.from(bytes).includes('apps/web')).toBe(false)
+  })
+
+  it('binds the repo and the tag', async () => {
+    const k = await key()
+    const bytes = await encryptFilePayload(k, 'platform', TAG, filePayload())
+    await expect(decryptFilePayload(k, 'other', TAG, bytes)).rejects.toBeInstanceOf(
+      VaultTamperError
+    )
+    await expect(
+      decryptFilePayload(k, 'platform', 'fedcba9876543210', bytes)
+    ).rejects.toBeInstanceOf(VaultTamperError)
+  })
+
+  it('never opens as a root entry, or the other way round', async () => {
+    const k = await key()
+    // A repo named like "<repo>.<tag>" must not alias a file entry.
+    const file = await encryptFilePayload(k, 'platform', TAG, filePayload())
+    await expect(decryptPayload(k, `platform.${TAG}`, file)).rejects.toBeInstanceOf(
+      VaultTamperError
+    )
+    await expect(decryptPayload(k, 'platform', file)).rejects.toBeInstanceOf(VaultTamperError)
+    const root = await encryptPayload(k, `platform.${TAG}`, makePayload(sample(), 1, 'm'))
+    await expect(decryptFilePayload(k, 'platform', TAG, root)).rejects.toBeInstanceOf(
+      VaultTamperError
+    )
+  })
+
+  it('keeps the schemas strict and separate', async () => {
+    const k = await key()
+    const root = makePayload(sample(), 1, 'm')
+    const noPath = await encryptFilePayload(k, 'platform', TAG, root as FilePayload)
+    await expect(decryptFilePayload(k, 'platform', TAG, noPath)).rejects.toThrow('malformed')
+    const extra = { ...filePayload(), extra: 1 } as FilePayload
+    const withExtra = await encryptFilePayload(k, 'platform', TAG, extra)
+    await expect(decryptFilePayload(k, 'platform', TAG, withExtra)).rejects.toThrow('malformed')
+  })
+})
+
+describe('fileTagger', () => {
+  // HKDF-SHA256 and HMAC-SHA256 of fixed inputs, checked against an
+  // independent implementation (Python's hmac and hashlib modules).
+  const VECTORS: [string, string, string][] = [
+    ['platform', 'apps/web/.env', 'fd9c7aed0e91e4e3'],
+    ['platform', '.env', '77d926784baad9a9'],
+    ['other', 'apps/web/.env', '09108e1a03ec4fe0']
+  ]
+
+  it('keeps a fixed derivation (test vectors)', () => {
+    const tagger = fileTagger(Uint8Array.from({ length: 32 }, (_, i) => i))
+    for (const [repo, path, tag] of VECTORS) expect(tagger.tag(repo, path)).toBe(tag)
+    tagger.wipe()
+  })
+
+  it('differs per vault key, and refuses to run once wiped', async () => {
+    const a = fileTagger(await key('a'))
+    const b = fileTagger(await key('b'))
+    expect(a.tag('platform', 'apps/web/.env')).toMatch(/^[0-9a-f]{16}$/)
+    expect(a.tag('platform', 'apps/web/.env')).not.toBe(b.tag('platform', 'apps/web/.env'))
+    a.wipe()
+    b.wipe()
+    expect(() => a.tag('platform', 'apps/web/.env')).toThrow('wiped')
   })
 })
 

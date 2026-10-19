@@ -1,12 +1,21 @@
 // The vault's policy (src/main/vault.ts) on an in-memory store: states,
 // create and open, and entries, with no filesystem involved.
 import { describe, expect, it, vi } from 'vitest'
-import { decodeEnv, encryptPayload, makePayload } from '../src/core/crypto'
+import { decodeEnv, encryptFilePayload, makePayload, type Payload } from '../src/core/crypto'
+import { ROOT_ENV } from '../src/core/envpath'
 import { AppError } from '../src/main/errors'
 import { MemorySecrets } from '../src/main/secrets'
 import { MemoryStore } from '../src/main/store/memory'
 import type { StoreSnapshot } from '../src/main/store/types'
-import { vaultOn } from '../src/main/vault'
+import {
+  entryFor,
+  entryName,
+  isVaultFile,
+  stateKey,
+  vaultOn,
+  withEntryKeys,
+  type EntryRef
+} from '../src/main/vault'
 
 const h = vi.hoisted(() => ({ derives: 0 }))
 
@@ -23,6 +32,10 @@ vi.mock('../src/main/kdf', async () => {
 
 const PASSWORD = 'correct horse battery staple'
 const THEIRS = Buffer.from('{"theirs":true}\n')
+const TAG = /^[0-9a-f]{16}$/
+
+const payload = (env: string): Payload => makePayload(Buffer.from(env), 1, 'test')
+const root = (repoId: string): EntryRef => ({ kind: 'root', repoId })
 
 const errorCode = async (p: Promise<unknown>): Promise<string> => {
   try {
@@ -141,45 +154,195 @@ describe('vault policy on a memory store', () => {
     const store = new MemoryStore()
     const vault = vaultOn(store)
     const { key } = await vault.create(PASSWORD)
-    const write = async (id: string, env: string): Promise<string> =>
-      vault.write(id, await encryptPayload(key, id, makePayload(Buffer.from(env), 1, 'test')), null)
-    const webVersion = await write('web', 'A=1\n')
-    await write('api', 'B=2\n')
-    await put(store, 'notes.txt', Buffer.from('not an entry'))
+    await withEntryKeys(key, async (keys) => {
+      const write = (repoName: string, env: string): Promise<string> =>
+        vault.write(keys, { repoName, path: ROOT_ENV }, payload(env), null)
+      const webVersion = await write('web', 'A=1\n')
+      await write('api', 'B=2\n')
+      await put(store, 'notes.txt', Buffer.from('not an entry'))
 
-    const snapshot = await vault.snapshot()
-    expect([...snapshot.ids].sort()).toEqual(['api', 'web'])
-    const web = await snapshot.read(key, 'web')
-    expect(web && decodeEnv(web.payload).toString('utf8')).toBe('A=1\n')
-    expect(web?.version).toBe(webVersion)
-    expect(await snapshot.read(key, 'missing')).toBeNull()
+      const snapshot = await vault.snapshot()
+      expect(snapshot.entries.map(entryName).sort()).toEqual(['api.env.enc', 'web.env.enc'])
+      const web = await snapshot.read(keys, root('web'))
+      expect(web && decodeEnv(web.payload).toString('utf8')).toBe('A=1\n')
+      expect(web?.version).toBe(webVersion)
+      expect(web?.path).toBe(ROOT_ENV)
+      expect(await snapshot.read(keys, root('missing'))).toBeNull()
 
-    // The entry name is bound into the encryption: a copy under another name fails.
-    await put(store, 'api.env.enc', await stored(store, 'web.env.enc'))
-    expect(await errorCode((await vault.snapshot()).read(key, 'api'))).toBe('VAULT_TAMPERED')
+      // The entry name is bound into the encryption: a copy under another name fails.
+      await put(store, 'api.env.enc', await stored(store, 'web.env.enc'))
+      expect(await errorCode((await vault.snapshot()).read(keys, root('api')))).toBe(
+        'VAULT_TAMPERED'
+      )
 
-    const bytes = await stored(store, 'web.env.enc')
-    bytes[bytes.length - 1] = (bytes[bytes.length - 1] ?? 0) ^ 1
-    await put(store, 'web.env.enc', bytes)
-    expect(await errorCode((await vault.snapshot()).read(key, 'web'))).toBe('VAULT_TAMPERED')
+      const bytes = await stored(store, 'web.env.enc')
+      bytes[bytes.length - 1] = (bytes[bytes.length - 1] ?? 0) ^ 1
+      await put(store, 'web.env.enc', bytes)
+      expect(await errorCode((await vault.snapshot()).read(keys, root('web')))).toBe(
+        'VAULT_TAMPERED'
+      )
+    })
   })
 
   it('refuses to write over an entry that changed since its snapshot', async () => {
     const store = new MemoryStore()
     const vault = vaultOn(store)
     const { key } = await vault.create(PASSWORD)
-    const encrypt = async (env: string): Promise<Uint8Array> =>
-      encryptPayload(key, 'web', makePayload(Buffer.from(env), 1, 'test'))
-    const v1 = await vault.write('web', await encrypt('A=1\n'), null)
-    const before = await vault.snapshot()
-    await vault.write('web', await encrypt('A=2\n'), v1)
+    await withEntryKeys(key, async (keys) => {
+      const web = { repoName: 'web', path: ROOT_ENV }
+      const v1 = await vault.write(keys, web, payload('A=1\n'), null)
+      const before = await vault.snapshot()
+      await vault.write(keys, web, payload('A=2\n'), v1)
 
-    const entry = await before.read(key, 'web')
-    expect(entry?.version).toBe(v1)
-    expect(await errorCode(vault.write('web', await encrypt('A=3\n'), v1))).toBe('VAULT_CHANGED')
-    expect(await errorCode(vault.write('web', await encrypt('A=3\n'), null))).toBe('VAULT_CHANGED')
-    const now = await (await vault.snapshot()).read(key, 'web')
-    expect(now && decodeEnv(now.payload).toString('utf8')).toBe('A=2\n')
+      const entry = await before.read(keys, root('web'))
+      expect(entry?.version).toBe(v1)
+      expect(await errorCode(vault.write(keys, web, payload('A=3\n'), v1))).toBe('VAULT_CHANGED')
+      expect(await errorCode(vault.write(keys, web, payload('A=3\n'), null))).toBe('VAULT_CHANGED')
+      const now = await (await vault.snapshot()).read(keys, root('web'))
+      expect(now && decodeEnv(now.payload).toString('utf8')).toBe('A=2\n')
+    })
+  })
+})
+
+describe('env files in subfolders', () => {
+  it('keeps them under names that hide their paths', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const web = { repoName: 'Platform', path: 'apps/Web/.env' }
+      const version = await vault.write(keys, web, payload('W=1\n'), null)
+      await vault.write(keys, { repoName: 'platform', path: ROOT_ENV }, payload('R=1\n'), null)
+      const ref = entryFor(keys, web)
+      expect(ref).toEqual({ kind: 'file', repoId: 'platform', tag: expect.stringMatching(TAG) })
+      // Case-insensitive, like the filesystems.
+      expect(entryFor(keys, { repoName: 'platform', path: 'apps/web/.env' })).toEqual(ref)
+      expect(entryFor(keys, { repoName: 'platform', path: 'apps/api/.env' })).not.toEqual(ref)
+
+      const names = (await store.snapshot()).names.sort()
+      expect(names).toEqual(['meta.json', 'platform.env.enc', entryName(ref)].sort())
+      expect(names.join(' ')).not.toContain('apps')
+      expect(names.every((name) => isVaultFile(name))).toBe(true)
+
+      const snapshot = await vault.snapshot()
+      expect(snapshot.entries).toContainEqual(ref)
+      const entry = await snapshot.read(keys, ref)
+      expect(entry).toMatchObject({ path: 'apps/Web/.env', version })
+      expect(entry?.payload).not.toHaveProperty('path')
+      expect(entry && decodeEnv(entry.payload).toString('utf8')).toBe('W=1\n')
+      // The root entry is written as before, without a path.
+      const rootEntry = await snapshot.read(keys, root('platform'))
+      expect(rootEntry?.path).toBe(ROOT_ENV)
+      expect(stateKey(ref)).toBe(`platform/${ref.kind === 'file' ? ref.tag : ''}`)
+      expect(stateKey(root('platform'))).toBe('platform')
+    })
+  })
+
+  it('tells root and file entries apart, even for a repo named like a file entry', async () => {
+    const store = new MemoryStore()
+    const bytes = new Uint8Array([1])
+    for (const name of [
+      'web.0123456789abcdef.env.enc',
+      'web.0123456789abcdef.file.enc',
+      'web.0123456789abcde.file.enc',
+      'web.0123456789abcdeg.file.enc',
+      'web.file.enc',
+      'con.0123456789abcdef.file.enc',
+      'con.env.enc'
+    ]) {
+      await put(store, name, bytes)
+    }
+    const { entries } = await vaultOn(store).snapshot()
+    expect(entries).toHaveLength(2)
+    expect(entries).toContainEqual({ kind: 'root', repoId: 'web.0123456789abcdef' })
+    expect(entries).toContainEqual({ kind: 'file', repoId: 'web', tag: '0123456789abcdef' })
+    expect(isVaultFile('web.0123456789abcdef.file.enc')).toBe(true)
+    expect(isVaultFile('web.0123456789abcde.file.enc')).toBe(false)
+    expect(isVaultFile('web.file.enc')).toBe(false)
+  })
+
+  it('catches swapped and mislabelled file entries', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const web = { repoName: 'platform', path: 'apps/web/.env' }
+      const api = { repoName: 'platform', path: 'apps/api/.env' }
+      await vault.write(keys, web, payload('W=1\n'), null)
+      await vault.write(keys, api, payload('A=1\n'), null)
+      await vault.write(keys, { repoName: 'platform', path: ROOT_ENV }, payload('R=1\n'), null)
+      const [webRef, apiRef] = [entryFor(keys, web), entryFor(keys, api)]
+      const read = async (ref: EntryRef): Promise<string> =>
+        errorCode((await vault.snapshot()).read(keys, ref))
+
+      // Copied over another file, or over the root entry.
+      await put(store, entryName(apiRef), await stored(store, entryName(webRef)))
+      expect(await read(apiRef)).toBe('VAULT_TAMPERED')
+      await put(store, 'platform.env.enc', await stored(store, entryName(webRef)))
+      expect(await read(root('platform'))).toBe('VAULT_TAMPERED')
+
+      // Encrypted for its name, but with a path that hashes to another name.
+      if (apiRef.kind !== 'file') throw new Error('expected a file entry')
+      const lying = { ...payload('A=2\n'), path: 'apps/web/.env' }
+      await put(
+        store,
+        entryName(apiRef),
+        await encryptFilePayload(key, 'platform', apiRef.tag, lying)
+      )
+      expect(await read(apiRef)).toBe('VAULT_TAMPERED')
+      expect(
+        await (await vault.snapshot()).read(keys, apiRef).catch((e: Error) => e.message)
+      ).toMatch(/an env file in "platform" \(platform\.[0-9a-f]{16}\.file\.enc\)/)
+
+      // A file entry claiming to be the root .env.
+      const rootTag = keys.tagger.tag('platform', ROOT_ENV)
+      const asRoot: EntryRef = { kind: 'file', repoId: 'platform', tag: rootTag }
+      const claim = { ...payload('R=2\n'), path: ROOT_ENV }
+      await put(store, entryName(asRoot), await encryptFilePayload(key, 'platform', rootTag, claim))
+      expect(await read(asRoot)).toBe('VAULT_TAMPERED')
+
+      expect(await read(webRef)).toBe('no error')
+    })
+  })
+
+  it('removes an entry only at the version it was read at', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const web = { repoName: 'platform', path: 'apps/web/.env' }
+      const v1 = await vault.write(keys, web, payload('W=1\n'), null)
+      const v2 = await vault.write(keys, web, payload('W=2\n'), v1)
+      const ref = entryFor(keys, web)
+      expect(await errorCode(vault.remove(ref, v1))).toBe('VAULT_CHANGED')
+      await vault.remove(ref, v2)
+      expect((await vault.snapshot()).entries).toEqual([])
+      expect(await errorCode(vault.remove(ref, v2))).toBe('VAULT_CHANGED')
+      expect((await store.snapshot()).names).toEqual(['meta.json'])
+
+      const rootVersion = await vault.write(
+        keys,
+        { repoName: 'web', path: ROOT_ENV },
+        payload('A=1\n'),
+        null
+      )
+      await vault.remove(root('web'), rootVersion)
+      expect((await store.snapshot()).names).toEqual(['meta.json'])
+    })
+  })
+
+  it('refuses an env file that is not one', async () => {
+    const vault = vaultOn(new MemoryStore())
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      for (const file of [
+        { repoName: 'platform', path: '../.env' },
+        { repoName: 'platform', path: 'apps/web/.env.local' },
+        { repoName: '../x', path: ROOT_ENV }
+      ]) {
+        expect(() => entryFor(keys, file)).toThrow('Not an env file.')
+      }
+    })
   })
 })
 

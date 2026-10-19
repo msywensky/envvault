@@ -6,11 +6,12 @@
 // closes or the app locks. Only changed values go back, via repo:saveEdit.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { RepoRow } from '../../../shared/types'
-import { envKeyProblem } from '../status'
+import { envKeyProblem, fileOf, fileTitle } from '../status'
 import { call, store, toast } from '../store'
 
 const props = defineProps<{ repo: RepoRow }>()
-const emit = defineEmits<{ close: []; done: [] }>()
+// `remove`: the user wants to delete the vault copy instead (see RemoveDialog).
+const emit = defineEmits<{ close: []; done: []; remove: [] }>()
 
 interface Row {
   /** Stable v-for key. */
@@ -79,7 +80,7 @@ async function load(): Promise<void> {
   conflict.value = false
   confirmDiscard.value = false
   rows.value = []
-  const res = await call(() => window.envvault.openEditor(props.repo.name))
+  const res = await call(() => window.envvault.openEditor(fileOf(props.repo)))
   if (!res.ok) {
     error.value = res.error.message
     phase.value = 'failed'
@@ -131,7 +132,7 @@ async function save(): Promise<void> {
   error.value = null
   // Plain objects only: a reactive proxy can't be cloned across contextBridge.
   const request = {
-    repoName: props.repo.name,
+    ...fileOf(props.repo),
     expectedVaultHash,
     set: changed.value.map((r) => ({ key: r.key, value: r.value })),
     add: added.value.map((r) => ({ key: r.key, value: r.value })),
@@ -140,12 +141,13 @@ async function save(): Promise<void> {
   const res = await call(() => window.envvault.saveEdit(request))
   if (res.ok) {
     const { vault, changed: wrote } = res.data
-    if (!wrote) toast('success', `Nothing changed in ${props.repo.name}.`)
+    const name = fileTitle(props.repo)
+    if (!wrote) toast('success', `Nothing changed in ${name}.`)
     else {
       // With automatic pull on, its own toast follows when the local .env updates.
       const pull =
         props.repo.hasEnv && !store.settings?.autoPull ? ' Pull to update your local .env.' : ''
-      toast('success', `Saved ${props.repo.name} (v${vault?.version ?? '?'}).${pull}`)
+      toast('success', `Saved ${name} (v${vault?.version ?? '?'}).${pull}`)
     }
     emit('done')
     return
@@ -183,7 +185,7 @@ watch(
     @cancel.prevent="cancel"
   >
     <div class="dialog-header">
-      <h2 id="edit-title">Edit vault copy: {{ repo.name }}</h2>
+      <h2 id="edit-title">Edit vault copy: {{ fileTitle(repo) }}</h2>
       <p class="muted small">
         Values are hidden until you show them. Comments and formatting in the file are kept.
       </p>
@@ -337,6 +339,16 @@ watch(
         </button>
       </template>
       <template v-else>
+        <button
+          v-if="repo.vault && phase === 'edit' && !dirty"
+          type="button"
+          class="btn"
+          title="Delete the vault copy, after asking. No local file is touched."
+          @click="emit('remove')"
+        >
+          Remove from vault…
+        </button>
+        <span class="grow" />
         <button type="button" class="btn" @click="cancel">
           {{ phase === 'failed' ? 'Close' : 'Cancel' }}
         </button>

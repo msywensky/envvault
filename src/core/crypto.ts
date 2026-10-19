@@ -4,7 +4,7 @@
 // Pure logic: no electron, fs or child_process imports. Used by the main
 // process, the KDF worker and the unit tests.
 import sodium from 'libsodium-wrappers-sumo'
-import { createHash, hkdfSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
 /** A vault file failed authentication or validation. Never retry or "repair". */
@@ -55,6 +55,9 @@ const KEYCHECK_PLAINTEXT = 'envvault-keycheck'
 const keyCheckAad = (vaultId: string): string => `envvault:keycheck:${vaultId}`
 // Repo names are ASCII-only (isValidRepoName), so no normalisation is needed.
 const entryAad = (repoName: string): string => `envvault:v1:${repoName}`
+// Its own prefix: a repo can be named like another repo's "<repo>.<tag>".
+const fileEntryAad = (repoId: string, tag: string): string => `envvault:file:v1:${repoId}/${tag}`
+const FILE_TAG_BYTES = 8
 
 async function lib(): Promise<typeof sodium> {
   await sodium.ready
@@ -131,6 +134,40 @@ export function secretMatches(meta: Meta, secret: Uint8Array): boolean {
   return timingSafeEqual(secretIdOf(secret, meta.vaultId), meta.secretId)
 }
 
+export interface FileTagger {
+  /** The 16-hex tag that names the entry for `pathId` (see envPathId) in `repoId`. */
+  tag(repoId: string, pathId: string): string
+  /** Wipe the derived key. The tagger can't be used afterwards. */
+  wipe(): void
+}
+
+/**
+ * Names env files' vault entries without giving their paths away: an
+ * HMAC-SHA256 of the repo id and path id, under a key derived from the vault
+ * key. Without the key, nobody can tell which tag is which path or check a
+ * guess. Take one per operation and wipe it afterwards.
+ */
+export function fileTagger(key: Uint8Array): FileTagger {
+  const tagKey = new Uint8Array(
+    hkdfSync('sha256', key, new Uint8Array(0), 'envvault:file-tag:v1', KEY_BYTES)
+  )
+  let wiped = false
+  return {
+    tag: (repoId, pathId) => {
+      if (wiped) throw new Error('This file tagger has been wiped.')
+      return createHmac('sha256', tagKey)
+        .update(`${repoId}/${pathId}`, 'utf8')
+        .digest()
+        .subarray(0, FILE_TAG_BYTES)
+        .toString('hex')
+    },
+    wipe: () => {
+      wiped = true
+      tagKey.fill(0)
+    }
+  }
+}
+
 /** Overwrite key material in place. */
 export async function zero(buf: Uint8Array): Promise<void> {
   ;(await lib()).memzero(buf)
@@ -180,6 +217,16 @@ const PayloadSchema = z.strictObject({
 
 export type Payload = z.infer<typeof PayloadSchema>
 
+// A file entry's payload: the same fields plus the file's path in its repo,
+// which its name only hashes. A separate schema, so a root entry never
+// carries `path` (0.1.0 rejects unknown fields) and a file entry always does.
+const FilePayloadSchema = z.strictObject({
+  ...PayloadSchema.shape,
+  path: z.string().min(1).max(255)
+})
+
+export type FilePayload = z.infer<typeof FilePayloadSchema>
+
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
@@ -208,28 +255,77 @@ export function makePayload(
  * Encrypt one repo's payload. The repo name is bound in as associated data,
  * so a file copied over another repo's file fails to decrypt.
  */
-export async function encryptPayload(
+export function encryptPayload(
   key: Uint8Array,
   repoName: string,
   payload: Payload
 ): Promise<Uint8Array> {
+  // Exactly these fields, even if handed a FilePayload: 0.1.0 reads root
+  // entries with a strict schema.
+  const { version, updatedAt, updatedBy, contentHash, envBase64 } = payload
+  return sealJson(key, entryAad(repoName), {
+    version,
+    updatedAt,
+    updatedBy,
+    contentHash,
+    envBase64
+  })
+}
+
+/** Decrypt and validate. Every failure is a VaultTamperError. */
+export function decryptPayload(
+  key: Uint8Array,
+  repoName: string,
+  bytes: Uint8Array
+): Promise<Payload> {
+  return openJson(key, entryAad(repoName), bytes, PayloadSchema)
+}
+
+/**
+ * Encrypt an env file's payload for the entry `<repoId>.<tag>` (see
+ * fileTagger). The repo id and tag are bound in as associated data, so a file
+ * entry copied over another, or over a repo's root entry, fails to decrypt.
+ */
+export function encryptFilePayload(
+  key: Uint8Array,
+  repoId: string,
+  tag: string,
+  payload: FilePayload
+): Promise<Uint8Array> {
+  return sealJson(key, fileEntryAad(repoId, tag), payload)
+}
+
+/**
+ * Decrypt and validate a file entry. Every failure is a VaultTamperError. The
+ * caller checks that `path` is valid and hashes to `tag`.
+ */
+export function decryptFilePayload(
+  key: Uint8Array,
+  repoId: string,
+  tag: string,
+  bytes: Uint8Array
+): Promise<FilePayload> {
+  return openJson(key, fileEntryAad(repoId, tag), bytes, FilePayloadSchema)
+}
+
+async function sealJson(key: Uint8Array, aad: string, payload: Payload): Promise<Uint8Array> {
   const s = await lib()
   const plaintext = s.from_string(JSON.stringify(payload))
   try {
-    return await seal(key, entryAad(repoName), plaintext)
+    return await seal(key, aad, plaintext)
   } finally {
     s.memzero(plaintext)
   }
 }
 
-/** Decrypt and validate. Every failure is a VaultTamperError. */
-export async function decryptPayload(
+async function openJson<T extends Payload>(
   key: Uint8Array,
-  repoName: string,
-  bytes: Uint8Array
-): Promise<Payload> {
+  aad: string,
+  bytes: Uint8Array,
+  schema: z.ZodType<T>
+): Promise<T> {
   const s = await lib()
-  const plaintext = await open(key, entryAad(repoName), bytes)
+  const plaintext = await open(key, aad, bytes)
   let json: unknown
   try {
     json = JSON.parse(s.to_string(plaintext))
@@ -238,7 +334,7 @@ export async function decryptPayload(
   } finally {
     s.memzero(plaintext)
   }
-  const parsed = PayloadSchema.safeParse(json)
+  const parsed = schema.safeParse(json)
   if (!parsed.success) throw new VaultTamperError('Vault file contents are malformed.')
   if (sha256Hex(decodeEnv(parsed.data)) !== parsed.data.contentHash) {
     throw new VaultTamperError('Vault file content hash does not match.')

@@ -1,5 +1,11 @@
 // Text output for the envvault command, and the --expect token.
+import { ROOT_ENV, envLabel } from '../shared/envfile'
 import type { Expected, PushPreview, RepoRow, SyncStatus, VaultInfo } from '../shared/types'
+
+/** A file as the command names it: "web" for a repo's root .env, else "platform/apps/web/.env". */
+export function fileLabel(name: string, path: string | null, storedName?: string | null): string {
+  return path === ROOT_ENV ? name : `${name}/${path ?? storedName ?? 'an unreadable vault copy'}`
+}
 
 const STATUS: Record<SyncStatus, string> = {
   'in-sync': 'in sync',
@@ -7,7 +13,7 @@ const STATUS: Record<SyncStatus, string> = {
   'local-only': 'local only: push to add it to the vault',
   'vault-newer': 'vault newer: another machine pushed',
   conflict: 'conflict: resolve it in EnvVault',
-  'vault-only': 'vault only: the repo is not in your projects folder',
+  'vault-only': 'vault only: its repo or folder is not in your projects folder',
   'no-env': 'no .env here or in the vault'
 }
 
@@ -38,13 +44,14 @@ const vaultLine = (v: VaultInfo): string =>
   `vault v${v.version}, by ${v.updatedBy}, ${when(v.updatedAt)}`
 
 export function formatRows(rows: RepoRow[]): string {
-  const width = Math.max(0, ...rows.map((r) => r.name.length))
+  const labels = rows.map((r) => fileLabel(r.name, r.path, r.storedName))
+  const width = Math.max(0, ...labels.map((label) => label.length))
   return rows
-    .map((r) => {
+    .map((r, i) => {
       const status =
         r.status === 'error' ? `error: ${r.error?.message ?? 'unknown'}` : STATUS[r.status]
       const vault = r.vault ? ` (${vaultLine(r.vault)})` : ''
-      return `${r.name.padEnd(width)}  ${status}${vault}\n`
+      return `${(labels[i] ?? r.name).padEnd(width)}  ${status}${vault}\n`
     })
     .join('')
 }
@@ -96,6 +103,6 @@ export function formatPreview(repo: string, p: PushPreview): string {
 export function formatPushed(row: RepoRow, unchanged: boolean): string {
   const version = row.vault ? ` (v${row.vault.version})` : ''
   return unchanged
-    ? `${row.name} is already in sync${version}.\n`
-    : `Pushed ${row.name}'s .env to the vault${version}.\n`
+    ? `${fileLabel(row.name, row.path, row.storedName)} is already in sync${version}.\n`
+    : `Pushed ${envLabel(row)} to the vault${version}.\n`
 }

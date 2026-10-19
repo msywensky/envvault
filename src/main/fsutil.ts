@@ -19,14 +19,14 @@ export function isErrno(err: unknown, ...codes: string[]): boolean {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /**
- * Windows refuses to replace a file another process has open (Drive's sync
- * client, an editor, antivirus). Those locks are brief, so retry.
+ * Windows refuses to replace or delete a file another process has open
+ * (Drive's sync client, an editor, antivirus). Those locks are brief, so retry.
  */
-async function renameWithRetry(from: string, to: string): Promise<void> {
+async function retryWhileLocked(op: () => Promise<void>): Promise<void> {
   const delays = process.platform === 'win32' ? [50, 100, 200, 400, 800] : []
   for (let attempt = 0; ; attempt++) {
     try {
-      await rename(from, to)
+      await op()
       return
     } catch (err) {
       const delay = delays[attempt]
@@ -34,6 +34,14 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
       await sleep(delay)
     }
   }
+}
+
+const renameWithRetry = (from: string, to: string): Promise<void> =>
+  retryWhileLocked(() => rename(from, to))
+
+/** Delete the file `dir/name`, retrying while another process has it open (Windows). */
+export function removeFile(dir: string, name: string): Promise<void> {
+  return retryWhileLocked(() => rm(join(dir, name)))
 }
 
 /** Create `dir/name` and write `data`, failing with EEXIST if it exists. */

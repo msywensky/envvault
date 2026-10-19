@@ -6,11 +6,11 @@
 // Only the branch's top-level files count; README.md, directories and other
 // files are ignored, and kept untouched by writes.
 //
-// A snapshot is one commit, the branch's head when it was taken. A write
-// commits one changed file on top of a head and pushes it with a lease on
-// that head, so it lands only if nobody pushed in between. If somebody did,
-// it fetches and tries again on top of their commit, which conflicts only
-// if they changed the same file.
+// A snapshot is one commit, the branch's head when it was taken. A write or
+// delete commits one changed file on top of a head and pushes it with a lease
+// on that head, so it lands only if nobody pushed in between. If somebody
+// did, it fetches and tries again on top of their commit, which conflicts
+// only if they changed the same file.
 import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { GitRemoteError, isBranchName, parseGitRemote } from '../../core/gitremote'
@@ -167,29 +167,52 @@ export class GitStore implements VaultStore {
     // Copied now: the caller may wipe its buffer once this resolves, or reuse it.
     const data = Buffer.from(bytes)
     return this.serial(async () => {
-      let head = await this.headLocked(this.cacheMs)
-      for (let attempt = 1; ; attempt++) {
-        const tree = head ? await this.readTree(head) : new Map<string, TreeRecord>()
-        const current = tree.get(name)
-        if ((current && isFile(current) ? current.oid : null) !== expected) {
-          throw new StoreConflictError()
-        }
-        const blob = (
-          await this.local(['hash-object', '-w', '--no-filters', '--stdin'], { input: data })
-        )
-          .toString('utf8')
-          .trim()
-        const commit = await this.commit(tree, name, blob, head)
-        if (await this.push(commit, head)) {
-          await this.track(commit)
-          this.learned(commit)
-          return blob
-        }
-        // Someone pushed first: build on their commit instead.
-        if (attempt === WRITE_ATTEMPTS) throw new StoreConflictError()
-        head = await this.headLocked(0)
-      }
+      // First: it sets up the mirror the blob goes into.
+      const head = await this.headLocked(this.cacheMs)
+      const blob = (
+        await this.local(['hash-object', '-w', '--no-filters', '--stdin'], { input: data })
+      )
+        .toString('utf8')
+        .trim()
+      await this.change(name, blob, expected, head)
+      return blob
     })
+  }
+
+  async delete(name: string, expected: string): Promise<void> {
+    checkName(name)
+    await this.serial(async () => {
+      await this.change(name, null, expected, await this.headLocked(this.cacheMs))
+    })
+  }
+
+  /**
+   * Commit `name` as `blob` (null: without it) on top of `head` and push it,
+   * if the branch still has `name` at `expected`. Only inside serial().
+   */
+  private async change(
+    name: string,
+    blob: string | null,
+    expected: string | null,
+    from: string | null
+  ): Promise<void> {
+    let head = from
+    for (let attempt = 1; ; attempt++) {
+      const tree = head ? await this.readTree(head) : new Map<string, TreeRecord>()
+      const current = tree.get(name)
+      if ((current && isFile(current) ? current.oid : null) !== expected) {
+        throw new StoreConflictError()
+      }
+      const commit = await this.commit(tree, name, blob, head)
+      if (await this.push(commit, head)) {
+        await this.track(commit)
+        this.learned(commit)
+        return
+      }
+      // Someone pushed first: build on their commit instead.
+      if (attempt === WRITE_ATTEMPTS) throw new StoreConflictError()
+      head = await this.headLocked(0)
+    }
   }
 
   async cleanUp(): Promise<void> {
@@ -294,15 +317,15 @@ export class GitStore implements VaultStore {
     return tree
   }
 
-  /** A commit of `tree` with `name` set to `blob`, everything else as it was. */
+  /** A commit of `tree` with `name` set to `blob` (null: removed), everything else as it was. */
   private async commit(
     tree: Map<string, TreeRecord>,
     name: string,
-    blob: string,
+    blob: string | null,
     parent: string | null
   ): Promise<string> {
     const records = [...tree].filter(([n]) => n !== name).map(([, r]) => r.raw)
-    records.push(Buffer.from(`100644 blob ${blob}\t${name}`, 'utf8'))
+    if (blob !== null) records.push(Buffer.from(`100644 blob ${blob}\t${name}`, 'utf8'))
     const input = Buffer.concat(records.flatMap((r) => [r, Buffer.from([0])]))
     const newTree = (await this.local(['mktree', '-z'], { input })).toString('utf8').trim()
     const args = ['commit-tree', '--no-gpg-sign', '-m', 'EnvVault update']

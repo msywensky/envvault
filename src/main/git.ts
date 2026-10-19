@@ -1,6 +1,7 @@
 import { lstat, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ENV_FILE_NAMES, envPathId, isEnvPath } from '../core/envpath'
 import { parseGitVersion } from '../core/gitremote'
 import type { GitignoreResult } from '../shared/types'
 import { AppError } from './errors'
@@ -56,57 +57,115 @@ export async function requireGitVersion(): Promise<void> {
 }
 
 /**
- * Run git in a repo and return its exit code (0 or 1). Anything else is an
- * error. `core.fsmonitor=false` stops a repo's own .git/config from making
- * git run an arbitrary command (fsmonitor hooks run on index reads).
+ * Run git in `cwd`, a repo or a folder inside one. `core.fsmonitor=false`
+ * stops a repo's own .git/config from making git run an arbitrary command
+ * (fsmonitor hooks run on index reads).
  */
-async function git(cwd: string, args: string[]): Promise<0 | 1> {
+function inRepo(cwd: string, args: string[]): Promise<RunResult> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
-  const { code, stderr, failure } = await runGit(['-c', 'core.fsmonitor=false', ...args], {
-    cwd,
-    env,
-    timeoutMs: 15_000
-  })
+  return runGit(['-c', 'core.fsmonitor=false', ...args], { cwd, env, timeoutMs: 15_000 })
+}
+
+/** Run git in `cwd` (see inRepo) and return its exit code (0 or 1). Anything else is an error. */
+async function git(cwd: string, args: string[]): Promise<0 | 1> {
+  const { code, stderr, failure } = await inRepo(cwd, args)
   if (code === 0 || code === 1) return code
   const first = failure === 'timeout' ? 'timed out' : firstLine(stderr)
   throw new AppError('GIT_ERROR', `git ${args[0]} failed${first ? `: ${first}` : '.'}`)
 }
 
-/** True if `relPath` (relative to the repo root) is ignored by git. */
-export async function checkIgnored(repoDir: string, relPath: string): Promise<boolean> {
-  return (await git(repoDir, ['check-ignore', '-q', '--', relPath])) === 0
+// The checks below run git in `dir`, the folder an env file is in, with paths
+// relative to it: git finds the repo by walking up, as it would in a shell.
+
+/** True if `relPath` (relative to `dir`) is ignored by git. */
+export async function checkIgnored(dir: string, relPath: string): Promise<boolean> {
+  return (await git(dir, ['check-ignore', '-q', '--', relPath])) === 0
 }
 
 /**
- * True if `relPath` is tracked. check-ignore never reports tracked files as
- * ignored, so a committed .env must be detected separately.
+ * True if `relPath` (relative to `dir`) is tracked. check-ignore never
+ * reports tracked files as ignored, so a committed .env must be detected
+ * separately.
  */
-export async function isTracked(repoDir: string, relPath: string): Promise<boolean> {
-  return (await git(repoDir, ['ls-files', '--error-unmatch', '--', relPath])) === 0
+export async function isTracked(dir: string, relPath: string): Promise<boolean> {
+  return (await git(dir, ['ls-files', '--error-unmatch', '--', relPath])) === 0
 }
 
 // Representative names for the files a pull creates next to .env: the
 // backup (.env.bak.<timestamp>) and the plaintext temp file (.env.bak.tmp-<hex>).
 const BACKUP_SAMPLES = ['.env.bak.20000101T000000Z', '.env.bak.tmp-0000000000000000']
 
-/** True if git would ignore the backup and temp files a pull creates. */
-export async function backupsIgnored(repoDir: string): Promise<boolean> {
-  const results = await Promise.all(BACKUP_SAMPLES.map((name) => checkIgnored(repoDir, name)))
+/** True if git would ignore the backup and temp files a pull creates in `dir`. */
+export async function backupsIgnored(dir: string): Promise<boolean> {
+  const results = await Promise.all(BACKUP_SAMPLES.map((name) => checkIgnored(dir, name)))
   return results.every(Boolean)
 }
 
-/** The three checks a pull depends on. */
-export async function ignoreStatus(repoDir: string): Promise<GitignoreResult> {
+/** The three checks a pull of the .env in `dir` depends on. */
+export async function ignoreStatus(dir: string): Promise<GitignoreResult> {
   const [ignored, backupIgnored, tracked] = await Promise.all([
-    checkIgnored(repoDir, '.env'),
-    backupsIgnored(repoDir),
-    isTracked(repoDir, '.env')
+    checkIgnored(dir, '.env'),
+    backupsIgnored(dir),
+    isTracked(dir, '.env')
   ])
   return { ignored, backupIgnored, tracked }
 }
 
-/** Append the .env ignore lines that are missing, then re-check. */
-export async function addToGitignore(repoDir: string): Promise<GitignoreResult> {
+// Every file named like an env file, in any folder.
+const ENV_PATHSPECS = ENV_FILE_NAMES.map((name) => `:(glob)**/${name}`)
+
+/**
+ * The env files git knows of in the repo at `repoDir`, as sorted paths from
+ * its root: ignored ones (what a pull writes), and tracked ones and untracked
+ * ones git would commit, so that their pulls are refused with a reason.
+ * Ignored folders (node_modules, build output) are listed as folders and
+ * never read, so nothing inside one is found. ls-files reads the index but,
+ * unlike `git status`, never refreshes it, so it runs no clean filters.
+ * Null if git can't answer: not installed, a repo it refuses, a timeout.
+ */
+export async function findEnvFiles(repoDir: string): Promise<string[] | null> {
+  let results: RunResult[]
+  try {
+    results = await Promise.all([
+      inRepo(repoDir, [
+        'ls-files',
+        '-z',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--directory',
+        '--',
+        ...ENV_PATHSPECS
+      ]),
+      inRepo(repoDir, [
+        'ls-files',
+        '-z',
+        '--cached',
+        '--others',
+        '--exclude-standard',
+        '--',
+        ...ENV_PATHSPECS
+      ])
+    ])
+  } catch (err) {
+    if (err instanceof AppError) return null
+    throw err
+  }
+  if (results.some((r) => r.code !== 0)) return null
+  const byId = new Map<string, string>()
+  for (const path of results.flatMap((r) => r.stdout.toString('utf8').split('\0'))) {
+    // Drops the folders --directory lists, and anything EnvVault wouldn't sync.
+    if (isEnvPath(path) && !byId.has(envPathId(path))) byId.set(envPathId(path), path)
+  }
+  return [...byId.values()].sort()
+}
+
+/**
+ * Append the .env ignore lines that are missing to the repo root's
+ * .gitignore, then re-check the .env in `envDir` (the root or a folder in
+ * it). The lines have no "/", so they match in every folder.
+ */
+export async function addToGitignore(repoDir: string, envDir: string): Promise<GitignoreResult> {
   const file = join(repoDir, '.gitignore')
   let existing = ''
   try {
@@ -124,5 +183,5 @@ export async function addToGitignore(repoDir: string): Promise<GitignoreResult> 
     const sep = existing === '' || existing.endsWith('\n') ? '' : eol
     await writeFile(file, existing + sep + missing.join(eol) + eol)
   }
-  return ignoreStatus(repoDir)
+  return ignoreStatus(envDir)
 }

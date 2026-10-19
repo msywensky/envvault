@@ -3,11 +3,19 @@
 // value, only key names, statuses and hashes.
 import { parseArgs } from 'node:util'
 import { cliEndpoint } from '../core/cliendpoint'
+import { isEnvPath } from '../core/envpath'
 import { PROFILE_RE, type RepoTarget } from '../shared/cli'
 import type { AppErrorInfo, ErrorCode, Result } from '../shared/result'
 import type { Expected, RepoRow } from '../shared/types'
 import { appUserData, client, type Machine } from './client'
-import { decodeExpect, encodeExpect, formatPreview, formatPushed, formatRows } from './format'
+import {
+  decodeExpect,
+  encodeExpect,
+  fileLabel,
+  formatPreview,
+  formatPushed,
+  formatRows
+} from './format'
 
 export interface Io extends Machine {
   argv: string[]
@@ -20,14 +28,18 @@ export interface Io extends Machine {
 }
 
 export const USAGE = `Usage:
-  envvault status [--all]          this repo's sync status, or every repo's
-  envvault push                    show what would change, ask, then push this repo's .env
+  envvault status [--all]          the sync status of this repo's .env files, or every repo's
+  envvault push                    show what would change, ask, then push the nearest .env
   envvault push --dry-run          only show what would change, with a token for --expect
   envvault push --expect <token>   push, if nothing changed since that dry run
   envvault push --yes              push without asking
 
+push uses the .env in the current folder or the nearest one above it in the repo
+(in a monorepo, run it in the package's folder), or else the repo's root .env.
+
 Options:
   --repo <name>      a repo in your projects folder, instead of the current folder
+  --path <path>      with push --repo: a .env in a folder of that repo, like apps/web/.env
   --json             print the result as JSON
   --profile <name>   use a dev profile's EnvVault (npm run dev:profile)
 
@@ -42,6 +54,7 @@ interface Options {
   json: boolean
   all: boolean
   repo: string | null
+  path: string | null
   profile: string | null
   dryRun: boolean
   expect: Expected | null
@@ -58,6 +71,7 @@ function parseOptions(argv: string[], isTTY: boolean): Options {
         json: { type: 'boolean' },
         all: { type: 'boolean' },
         repo: { type: 'string' },
+        path: { type: 'string' },
         profile: { type: 'string' },
         'dry-run': { type: 'boolean' },
         expect: { type: 'string' },
@@ -80,6 +94,14 @@ function parseOptions(argv: string[], isTTY: boolean): Options {
   }
   if (v.all && command !== 'status') throw new UsageError('--all works only with status.')
   if (v.all && v.repo !== undefined) throw new UsageError('Use --all or --repo, not both.')
+  if (v.path !== undefined) {
+    if (command !== 'push' || v.repo === undefined) {
+      throw new UsageError('--path works only with push --repo.')
+    }
+    if (!isEnvPath(v.path)) {
+      throw new UsageError("That isn't a .env in the repo. Use its path, like apps/web/.env.")
+    }
+  }
   const modes = [v['dry-run'], v.expect !== undefined, v.yes].filter(Boolean).length
   if (modes && command !== 'push') {
     throw new UsageError('--dry-run, --expect and --yes work only with push.')
@@ -98,6 +120,7 @@ function parseOptions(argv: string[], isTTY: boolean): Options {
     json: Boolean(v.json),
     all: Boolean(v.all),
     repo: v.repo ?? null,
+    path: v.path ?? null,
     profile: v.profile ?? null,
     dryRun: Boolean(v['dry-run']),
     expect,
@@ -132,7 +155,10 @@ export async function main(io: Io): Promise<number> {
   }
 
   const send = client(cliEndpoint(appUserData(io, opts.profile), io.platform))
-  const target: RepoTarget = opts.repo !== null ? { repo: opts.repo } : { dir: io.cwd }
+  const target: RepoTarget =
+    opts.repo === null
+      ? { dir: io.cwd }
+      : { repo: opts.repo, ...(opts.path !== null ? { path: opts.path } : {}) }
   const fail = (error: AppErrorInfo): number => {
     if (opts.json) io.out(json({ ok: false, error }))
     else io.err(`envvault: ${error.message}\n`)
@@ -158,20 +184,23 @@ export async function main(io: Io): Promise<number> {
   }
   const preview = await send('previewPush', target)
   if (!preview.ok) return fail(preview.error)
-  const { repo, preview: p } = preview.data
+  const { repo, path, preview: p } = preview.data
+  const label = fileLabel(repo, path)
   // Nothing to push is answered like a dry run.
   if (opts.dryRun || p.sameContent) {
     const expect = encodeExpect(p.expected)
     if (opts.json) {
-      io.out(json({ ok: true, data: { repo, preview: p, expect } }))
+      io.out(json({ ok: true, data: { repo, path, preview: p, expect } }))
     } else {
-      io.out(formatPreview(repo, p))
+      io.out(formatPreview(label, p))
       if (!p.sameContent && !p.needsOverwrite) {
+        // Run from the same folder, this finds the same file.
         const command = [
           'envvault',
           ...(opts.profile ? ['--profile', opts.profile] : []),
           'push',
           ...(opts.repo !== null ? ['--repo', opts.repo] : []),
+          ...(opts.path !== null ? ['--path', opts.path] : []),
           '--expect',
           expect
         ]
@@ -180,7 +209,7 @@ export async function main(io: Io): Promise<number> {
     }
     return 0
   }
-  if (!opts.json) io.out(formatPreview(repo, p))
+  if (!opts.json) io.out(formatPreview(label, p))
   if (p.needsOverwrite) {
     // formatPreview has said why.
     if (opts.json) {
@@ -198,5 +227,6 @@ export async function main(io: Io): Promise<number> {
       return 1
     }
   }
-  return pushed(await send('push', { repo, expected: p.expected }), p.expected)
+  // Exactly the file that was previewed, wherever it was found.
+  return pushed(await send('push', { repo, path, expected: p.expected }), p.expected)
 }

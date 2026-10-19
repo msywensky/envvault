@@ -27,6 +27,12 @@ export interface VaultStore {
    * `expected`, exactly one wins. Returns the new version.
    */
   write(name: string, bytes: Uint8Array, expected: string | null): Promise<string>
+  /**
+   * Remove an object if it is still at `expected` (a version from a
+   * snapshot), otherwise StoreConflictError, also when there is none. Of a
+   * delete and a write racing from the same version, exactly one wins.
+   */
+  delete(name: string, expected: string): Promise<void>
   /** Remove leftovers of interrupted writes. Called after unlock; failures are ignored. */
   cleanUp(): Promise<void>
 }

@@ -109,29 +109,28 @@ export function registerIpc(): void {
   // renderer supplies validated repo names and flags. Writes take the key
   // *inside* exclusive(), so an operation queued behind a lock or a vault
   // switch fails with LOCKED instead of running with a stale key.
-  handle(CH.listRepos, () => session.withKey((key, id) => sync.listRepos(key, id)))
-  handle(CH.previewPush, ({ repoName }) =>
-    session.withKey((key, id) => sync.previewPush(key, id, repoName))
+  handle(CH.listRepos, ({ rescan }) =>
+    session.withKey((key, id) => sync.listRepos(key, id, { find: rescan }))
   )
+  handle(CH.previewPush, (file) => session.withKey((key, id) => sync.previewPush(key, id, file)))
   handle(CH.push, (req) => exclusive(() => session.withKey((key, id) => sync.push(key, id, req))))
-  handle(CH.previewPull, ({ repoName }) =>
-    session.withKey((key, id) => sync.previewPull(key, id, repoName))
-  )
+  handle(CH.previewPull, (file) => session.withKey((key, id) => sync.previewPull(key, id, file)))
   handle(CH.pull, (req) => exclusive(() => session.withKey((key, id) => sync.pull(key, id, req))))
   // Read-only like the previews. Returns env values when asked (see sync.pullRawDiff).
   handle(CH.pullRawDiff, (req) => session.withKey((key) => sync.pullRawDiff(key, req)))
   // The editor: open returns env values (read-only, like the previews); save
   // writes the vault copy (like push).
-  handle(CH.openEditor, ({ repoName }) => session.withKey((key) => sync.openEditor(key, repoName)))
+  handle(CH.openEditor, (file) => session.withKey((key) => sync.openEditor(key, file)))
   handle(CH.saveEdit, async (req) => {
     const result = await exclusive(() => session.withKey((key, id) => sync.saveEdit(key, id, req)))
     // Bring the edit into the local .env right away rather than within a minute.
     if (result.changed) kickAutoPull()
     return result
   })
-  handle(CH.addGitignore, ({ repoName }) =>
-    exclusive(() => session.withKey(() => sync.addGitignore(repoName)))
+  handle(CH.removeFromVault, (req) =>
+    exclusive(() => session.withKey((key, id) => sync.removeFromVault(key, id, req)))
   )
+  handle(CH.addGitignore, (file) => exclusive(() => session.withKey(() => sync.addGitignore(file))))
 
   // The Claude Code skill holds no secrets, so these work while locked.
   handle(CH.skillStatus, () => skill.skillStatus())

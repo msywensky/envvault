@@ -1,6 +1,34 @@
-import type { RepoRow } from '../../shared/types'
+import { ROOT_ENV } from '../../shared/envfile'
+import type { EnvFile, RepoRow } from '../../shared/types'
 
 export type RowStatus = RepoRow['status']
+
+/**
+ * The env file a row is about, as a plain object IPC can clone. Only rows
+ * with actions get here, and those always have a path: a row without one is
+ * a vault entry that couldn't be read.
+ */
+export function fileOf(row: Pick<RepoRow, 'name' | 'path'>): EnvFile {
+  if (row.path === null) throw new Error('This row has no env file.')
+  return { repoName: row.name, path: row.path }
+}
+
+/** A key for v-for and :key, unique per env file (see sameFile). */
+export const rowKey = (row: RepoRow): string =>
+  `${row.name.toLowerCase()}\n${row.path?.toLowerCase() ?? row.storedName ?? ''}`
+
+/** How a file is named in titles and toasts: "webapp", or "platform/apps/web/.env". */
+export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
+  return row.path === null || row.path === ROOT_ENV ? row.name : `${row.name}/${row.path}`
+}
+
+/**
+ * An env file found in a folder of a repo that nobody has pushed yet: listed
+ * quietly, apart from the files that sync, and never counted as needing
+ * attention. A repo's root .env is never quiet.
+ */
+export const isQuiet = (row: RepoRow): boolean =>
+  row.path !== null && row.path !== ROOT_ENV && row.status === 'local-only'
 export type RowAction = 'push' | 'pull' | 'keep-local' | 'keep-vault'
 
 export const STATUS_LABEL: Record<RowStatus, string> = {
