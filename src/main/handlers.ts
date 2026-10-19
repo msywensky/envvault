@@ -5,7 +5,7 @@ import { CH } from '../shared/channels'
 import type { Settings, VaultLocation } from '../shared/types'
 import { kickAutoPull } from './autopull'
 import { setCliAccess } from './cliserver'
-import { getConfig, updateConfig } from './config'
+import { autoLockAfter, getConfig, updateConfig } from './config'
 import { AppError } from './errors'
 import { handle } from './ipc'
 import { exclusive } from './mutex'
@@ -39,7 +39,7 @@ export function registerIpc(): void {
   handle(CH.getSettings, () => getConfig())
   handle(CH.saveSettings, async (patch) => {
     const next = await updateConfig(patch)
-    session.setAutoLockMinutes(next.autoLockMinutes)
+    session.setAutoLockMinutes(autoLockAfter(next))
     if (next.autoPull) kickAutoPull()
     if (!(await setCliAccess(next.cliAccess))) {
       throw new AppError(
@@ -74,7 +74,7 @@ export function registerIpc(): void {
     const created = await exclusive(async () => {
       const cfg = await getConfig()
       const vault = await (await requireVault()).create(password, { setupCode })
-      session.unlock(vault.key, vault.vaultId, cfg.autoLockMinutes)
+      session.unlock(vault.key, vault.vaultId, autoLockAfter(cfg))
       return vault
     })
     kickAutoPull()
@@ -85,7 +85,7 @@ export function registerIpc(): void {
     await exclusive(async () => {
       const cfg = await getConfig()
       const { key, vaultId } = await (await requireVault()).open(password, setupCode)
-      session.unlock(key, vaultId, cfg.autoLockMinutes)
+      session.unlock(key, vaultId, autoLockAfter(cfg))
     })
     kickAutoPull()
     return null

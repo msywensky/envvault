@@ -33,6 +33,7 @@ async function done(): Promise<void> {
   if (!store.settings) return
   busy.value = true
   const patch = {
+    autoLock: store.settings.autoLock,
     autoLockMinutes: store.settings.autoLockMinutes,
     machineName: machineName.value,
     checkExample: store.settings.checkExample,

@@ -89,6 +89,11 @@ export type VaultLocation =
 export interface Settings {
   projectsPath: string | null
   vault: VaultLocation | null
+  /**
+   * Lock after `autoLockMinutes` without activity. When off, only Lock, sleep, a screen lock
+   * or closing the window locks.
+   */
+  autoLock: boolean
   autoLockMinutes: number
   machineName: string
   /** Compare .env with .env.example in the push and pull dialogs. */

@@ -15,6 +15,7 @@ const serial = createSerial()
 const ConfigSchema = z.strictObject({
   projectsPath: z.string().min(1).nullable(),
   vault: VaultLocation.nullable(),
+  autoLock: z.boolean(),
   autoLockMinutes: AutoLockMinutes,
   machineName: MachineName,
   checkExample: z.boolean(),
@@ -26,6 +27,7 @@ const ConfigSchema = z.strictObject({
 const LoadSchema = z.object({
   projectsPath: ConfigSchema.shape.projectsPath.catch(null),
   vault: ConfigSchema.shape.vault.catch(null),
+  autoLock: z.boolean().catch(true),
   autoLockMinutes: AutoLockMinutes.catch(5),
   machineName: MachineName.catch(() => defaultMachineName()),
   checkExample: z.boolean().catch(true),
@@ -43,6 +45,11 @@ function migrate(raw: object): object {
   return typeof vaultPath === 'string'
     ? { ...rest, vault: { kind: 'folder', path: vaultPath } }
     : rest
+}
+
+/** The session's idle limit: minutes, or null when auto-lock is off. */
+export function autoLockAfter(settings: Settings): number | null {
+  return settings.autoLock ? settings.autoLockMinutes : null
 }
 
 function defaultMachineName(): string {

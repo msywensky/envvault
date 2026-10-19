@@ -58,4 +58,21 @@ describe('config.json', () => {
     expect(cfg.vault).toBeNull()
     expect(cfg.projectsPath).toBeNull()
   })
+
+  it('has auto-lock on unless turned off', async () => {
+    const config = await load()
+    const cfg = await config.getConfig()
+    expect(cfg.autoLock).toBe(true)
+    expect(config.autoLockAfter(cfg)).toBe(5)
+
+    vi.resetModules()
+    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ autoLock: 'no' }))
+    expect((await (await load()).getConfig()).autoLock).toBe(true)
+
+    vi.resetModules()
+    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ autoLock: false }))
+    const off = await (await load()).getConfig()
+    expect(off.autoLock).toBe(false)
+    expect((await load()).autoLockAfter(off)).toBeNull()
+  })
 })

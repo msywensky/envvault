@@ -66,7 +66,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 - A vault's secret (for setup codes) is kept on each machine in `vault-secrets.json` in EnvVault's settings folder, sealed with the OS's secure storage (the Keychain on macOS, DPAPI on Windows). It never goes into the vault. The setup code itself is shown when you create the vault and, after you re-enter the password, in Settings; it's never logged, and the app forgets it once it's off the screen. A setup code typed on a new machine is kept only once the password proves right.
 
-- The derived key lives only in the main process. Each operation gets its own copy, which is wiped when it finishes. The key is wiped on lock, on idle timeout (default 5 minutes), when the window closes, and when the computer sleeps or its screen locks.
+- The derived key lives only in the main process. Each operation gets its own copy, which is wiped when it finishes. The key is wiped on lock, on idle timeout (default 5 minutes), when the window closes, and when the computer sleeps or its screen locks. Auto-lock can be turned off in Settings, after a warning; the other three always apply.
 - Repo names are restricted (ASCII, no `..`, no Windows device names). Every path is resolved and checked to stay inside its root after following symlinks, and a symlinked `.env` is refused.
 - `.env.example` is read with the same checks as `.env` (no symlinks, at most 1 MiB), only to compare it. Only key names leave the main process.
 - Values of machine-specific keys (`# envvault:local`) are never uploaded: the vault copy holds only their key names and markers, encrypted like everything else.
@@ -198,7 +198,7 @@ envvault push --expect <token>   # ...that pushes exactly what you saw, if nothi
   - 2: usage;
   - 3: locked;
   - 4: EnvVault isn't running, or command-line access is off.
-- It doesn't count as activity, so EnvVault still auto-locks; unlock it in the app.
+- It doesn't count as activity, so EnvVault still auto-locks (if auto-lock is on); unlock it in the app.
 - There's no pull command: automatic pull covers it.
 
 **Claude Code skill:** with command-line access on, click **Install** next to _Claude Code skill_ in Settings. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env`, or type `/envvault`.
@@ -230,7 +230,7 @@ In a git vault, the same files sit at the top of the repository's default branch
 | Vault               | —         | A synced folder or a private git repository. Changing it locks EnvVault |
 | Setup code          | —         | Shows this machine's setup code for the vault, after the password       |
 | Machine name        | hostname  | Shown to other machines as "updated by"                                 |
-| Auto-lock           | 5 minutes | 1–120 minutes of inactivity                                             |
+| Auto-lock           | On, 5 min | 1–120 minutes of inactivity. Turning it off asks you to confirm first   |
 | .env.example checks | On        | Warnings in the push and pull dialogs                                   |
 | Automatic pull      | On        | Every minute while unlocked; one-sided changes only                     |
 | Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
