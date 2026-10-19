@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/msywensky/envvault/actions/workflows/ci.yml/badge.svg)](https://github.com/msywensky/envvault/actions/workflows/ci.yml)
 
-A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps each project's `.env` file in sync between your machines, through an **encrypted** vault: a folder synced between them (such as a Google Drive folder), or a private git repository. The sync folder or the git host never sees values or key names, only ciphertext and a little metadata. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
+A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your projects' `.env` files in sync between your machines (in a monorepo, the one in each package too), through an **encrypted** vault: a folder synced between them (such as a Google Drive folder), or a private git repository. The sync folder or the git host never sees values or key names, only ciphertext and a little metadata. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
 
 ![Repositories view](docs/repos.png)
 
@@ -15,7 +15,9 @@ A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps each
 - [Using it](#using-it)
   - [Machine-specific keys](#machine-specific-keys)
   - [`.env.example` checks](#envexample-checks)
+  - [Monorepos](#monorepos)
   - [Editing the vault copy](#editing-the-vault-copy)
+  - [Removing a vault copy](#removing-a-vault-copy)
   - [Automatic pull](#automatic-pull)
   - [Mini mode](#mini-mode)
   - [Command line](#command-line)
@@ -29,10 +31,11 @@ A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps each
 ## How it works
 
 ```
-Projects folder (each machine)          Vault folder (synced by Google Drive etc.)
-  api/.env      ── push ──▶ encrypt ──▶   api.env.enc
-  web/.env      ◀── pull ── decrypt ◀──   web.env.enc
-                                          meta.json   (KDF params, salt, key check)
+Projects folder (each machine)                  Vault folder (synced by Google Drive etc.)
+  api/.env               ── push ──▶ encrypt ──▶  api.env.enc
+  web/.env               ◀── pull ── decrypt ◀──  web.env.enc
+  platform/apps/web/.env ── push ──▶ encrypt ──▶  platform.<tag>.file.enc
+                                                  meta.json   (KDF params, salt, key check)
 ```
 
 The vault can also be a **private git repository** instead of a synced folder: the same files, on one branch, which EnvVault fetches and pushes itself (see [Git vaults](docs/security.md#git-vaults)).
@@ -46,10 +49,10 @@ The vault can also be a **private git repository** instead of a synced folder: t
 | Local newer | Only you changed it since the last sync                                                      | Push                    |
 | Vault newer | Only another machine changed it                                                              | Pull                    |
 | Conflict    | Both changed, or they differ and this machine never synced them, or the vault went backwards | Keep local / Keep vault |
-| Vault only  | In the vault, but the repo isn't in your projects folder                                     | —                       |
+| Vault only  | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it   | Remove…                 |
 | No .env     | Nothing on either side                                                                       | —                       |
 
-Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per repo, deleting older ones (change the number or turn backups off in Settings). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
+Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in Settings). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
 
 To see exactly what a pull would change, click **Show raw diff** in the pull dialog. It shows a line-by-line diff from your `.env` to the vault copy with every value masked (`KEY=••••••••`); comments are shown as they are. Click **Show values** to see the values; they are hidden again after a minute (see [Env values](docs/security.md#env-values)).
 
@@ -57,7 +60,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 ## Security
 
-EnvVault encrypts each `.env` with XChaCha20-Poly1305, under a key derived with Argon2id from your master password and a setup code that each of your machines keeps (on by default, always for a git vault). The sync folder or git host sees only ciphertext, your repo names, file sizes and when they changed. The key never leaves EnvVault's main process and is wiped when it locks, and env values reach the app's window only when you ask to see them. EnvVault doesn't protect against malware running as you while it's unlocked, a weak password without a setup code, or the plaintext `.env` files in your repos. [Security design and threat model](docs/security.md) has the details, including the vault's file format.
+EnvVault encrypts each `.env` with XChaCha20-Poly1305, under a key derived with Argon2id from your master password and a setup code that each of your machines keeps (on by default, always for a git vault). The sync folder or git host sees only ciphertext, your repo names, how many `.env` files each has (not their paths), file sizes and when they changed. The key never leaves EnvVault's main process and is wiped when it locks, and env values reach the app's window only when you ask to see them. EnvVault doesn't protect against malware running as you while it's unlocked, a weak password without a setup code, or the plaintext `.env` files in your repos. [Security design and threat model](docs/security.md) has the details, including the vault's file format.
 
 ## Install
 
@@ -115,9 +118,21 @@ If a repo has a `.env.example`, the push and pull dialogs compare it with the `.
 
 You can turn the checks off in Settings.
 
+### Monorepos
+
+Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders: `apps/web/.env`, `packages/db/.env`, `supabase/functions/.env`. Only files named exactly `.env` for now.
+
+- **Found with git.** EnvVault asks git (`git ls-files`) for every `.env` it knows of in each repo: ignored ones, and also ones git would commit or has committed, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh**; automatic pull and mini mode use what it found then.
+- **Listed under their repo.** A repo with only a root `.env` is one row, as before. Otherwise its name is followed by a row per file. Files found in folders that nobody has pushed yet are listed apart, under _N .env files found in folders, not in the vault yet_, collapsed, each with a **Push** button; they don't count as needing attention.
+- **On your other machines,** a pushed file appears as Vault newer and is pulled like any other. A pull never creates a folder: if `apps/web` isn't in that machine's copy of the repo (another branch, a renamed package), the file shows as Vault only.
+- **Next to the file.** A file's backups, its `.env.example` check and its git checks are all in its own folder. **Add to .gitignore** adds the lines to the repo's root `.gitignore`, where they cover every folder.
+- **Symlinks:** a `.env` under a symlinked folder is refused. A symlinked `.env` that isn't in the vault (a shared root `.env` linked into a package, say) is skipped.
+- **In the vault,** such a file is `<repo>.<tag>.file.enc`. The tag is a keyed hash of its path, so the sync folder or git host can see how many `.env` files a repo has, but not their paths. Hover over a row to see the name its vault copy has, for finding it in Drive's version history or the repository's.
+- EnvVault 0.1.0 ignores these files and keeps syncing root `.env` files with newer versions.
+
 ### Editing the vault copy
 
-Click **Edit** on a repo to change its vault copy in a table of keys and values, without a local `.env`. On a repo with no `.env` and no vault copy, this creates one.
+Click **Edit** on a `.env` to change its vault copy in a table of keys and values, without a local `.env`. On a repo with no `.env` and no vault copy, this creates one.
 
 - Values are masked until you click **Show**. You can type or paste a new value into a masked field without displaying it. Multi-line values (such as a PEM key) need **Show** to edit.
 - You can add, change and remove keys. Machine-specific keys are listed but have no value to edit, since the vault doesn't store one.
@@ -125,11 +140,20 @@ Click **Edit** on a repo to change its vault copy in a table of keys and values,
 - **Review changes** lists the key names that change. **Save to vault** writes a new version, unless the vault copy changed since you opened the editor; then reload and edit again.
 - Saving never touches your local `.env` directly. A repo that has one shows "Vault newer" afterwards; automatic pull brings the edit in right away (or click **Pull** if it's off), keeping machine-specific values.
 
+### Removing a vault copy
+
+Click **Remove…** on a Vault only row (a repo or package that's gone), or **Remove from vault…** in the editor, to delete a file's vault copy.
+
+- It asks first, and deletes only the copy it showed you: if another machine changed it meanwhile, nothing is removed.
+- No `.env` is changed or deleted, on this machine or any other. A machine that still has the file shows it as never pushed and can push it again, which continues its version numbers.
+- A git vault keeps old copies in its history, and Drive keeps deleted files in its trash for a while.
+- A vault copy that can't be read is listed as _Unreadable vault copy_, with its name in the vault. It can't be removed from the app; delete that file from the vault folder or repository by hand.
+
 ### Automatic pull
 
-Off by default; turn it on in Settings. While EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for repos whose vault copy changed on another machine while your `.env` didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
+Off by default; turn it on in Settings. While EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for `.env` files whose vault copy changed on another machine while your file didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
 
-- It never pulls a conflict, a rollback, or a repo whose `.env` isn't git-ignored or is tracked; those keep their **Pull** button.
+- It never pulls a conflict, a rollback, or a `.env` that isn't git-ignored or is tracked; those keep their **Pull** button. Nor one whose folder isn't there.
 - It creates a missing `.env` when the vault has a copy, including one you deleted.
 - It saves a backup first if backups are on, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
 - It stops when EnvVault locks; it doesn't keep the vault unlocked.
@@ -137,11 +161,11 @@ Off by default; turn it on in Settings. While EnvVault is unlocked, it checks ev
 
 ### Mini mode
 
-Click **Mini** next to a repo to shrink EnvVault to a small window, two rows tall, kept above your other windows: that repo's **Push** (or **Pull**) button next to the window's controls, and its status below. Hover over the status for the vault copy's version. Click **Full view** to go back.
+Click **Mini** next to a `.env` to shrink EnvVault to a small window, two rows tall, kept above your other windows: that file's **Push** (or **Pull**) button next to the window's controls, and its status below. Hover over the status for the vault copy's version. Click **Full view** to go back.
 
 <img src="docs/mini.png" width="422" alt="Mini mode: one repo's Push button and status">
 
-- The status updates when the repo's `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
+- The status updates when that `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
 - A conflict shows **Resolve…**, which goes back to the full window to choose which copy to keep.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
@@ -152,17 +176,19 @@ Click **Mini** next to a repo to shrink EnvVault to a small window, two rows tal
 Turn on **Allow command-line access** in Settings. Then, while EnvVault is running and unlocked, run `envvault` inside a repo in your projects folder:
 
 ```sh
-envvault status                  # this repo's status (--all for every repo)
+envvault status                  # the status of this repo's .env files (--all for every repo)
 envvault push                    # shows the key changes, asks, then pushes
 envvault push --dry-run          # only shows them, with a token...
 envvault push --expect <token>   # ...that pushes exactly what you saw, if nothing changed since
 ```
 
+- `push` uses the `.env` in the current folder, or the nearest one above it in the repo, or else the repo's root `.env`. In a monorepo, run it in the package's folder.
 - Run `npm link` in this repo once to put `envvault` on your PATH, or run `node out/cli/envvault.mjs`. `npm run build` builds it. In a packaged app it's in `app.asar.unpacked/out/cli/`, and needs Node 22 or newer.
 - It shows key names only, never values.
 - It pushes only one-sided changes. If the vault copy changed on another machine, it tells you to resolve it in the app.
 - Options:
   - `--repo <name>` picks a repo by name instead of the current folder;
+  - `--path <path>`, with `push --repo`, picks a `.env` in one of its folders, such as `apps/web/.env`;
   - `--json` prints JSON;
   - `--yes` pushes without asking.
 - Exit codes:
@@ -176,7 +202,7 @@ envvault push --expect <token>   # ...that pushes exactly what you saw, if nothi
 
 ### Claude Code skill
 
-With command-line access on, click **Install** next to _Claude Code skill_ in Settings. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env`, or type `/envvault`.
+With command-line access on, click **Install** next to _Claude Code skill_ in Settings. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env` files, or type `/envvault`.
 
 - Claude runs `status` and `push --dry-run` on its own, shows you the key changes and warnings, and asks before the real push. Claude Code also asks you to approve that command.
 - The skill points at this copy of EnvVault's command. If you move or update EnvVault, Settings shows it as out of date: click **Update**.
@@ -198,7 +224,7 @@ There is no backdoor. If you lose the master password, or the setup code and eve
 | Auto-lock           | On, 5 min | 1–120 minutes of inactivity. Turning it off asks you to confirm first   |
 | .env.example checks | On        | Warnings in the push and pull dialogs                                   |
 | Automatic pull      | Off       | Every minute while unlocked; one-sided changes only                     |
-| Backups             | On, 3     | `.env.bak.<timestamp>` before a pull; keeps the newest 1–50 per repo    |
+| Backups             | On, 3     | `.env.bak.<timestamp>` before a pull; keeps the newest 1–50 per file    |
 | Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
 | Mini window on top  | On        | Keeps the mini window above other windows                               |
 
@@ -223,6 +249,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 
 ## Roadmap
 
+- Other env files, such as `.env.local`, chosen per repo (they're often machine-specific).
 - Unlock with the Bitwarden CLI.
 - Run a command with the vault copy's values in its environment, without a `.env`.
 - Change the master password.
