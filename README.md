@@ -176,6 +176,13 @@ You can turn the checks off in Settings.
 - It saves a backup first, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
 - It stops when EnvVault locks; it doesn't keep the vault unlocked. Turn it off in Settings.
 
+**Mini mode:** click **Mini** next to a repo to shrink EnvVault to a small window with just that repo's status and its **Push** (or **Pull**) button, kept above your other windows. Click **Full view** to go back.
+
+- The status updates when the repo's `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
+- **Push** still shows the review first: the window grows for it, then shrinks back.
+- When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
+- **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in Settings.
+
 **Command line:** turn on **Allow command-line access** in Settings. Then, while EnvVault is running and unlocked, run `envvault` inside a repo in your projects folder:
 
 ```sh
@@ -234,6 +241,7 @@ In a git vault, the same files sit at the top of the repository's default branch
 | .env.example checks | On        | Warnings in the push and pull dialogs                                   |
 | Automatic pull      | On        | Every minute while unlocked; one-sided changes only                     |
 | Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
+| Mini window on top  | On        | Keeps the mini window above other windows                               |
 
 Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
 
