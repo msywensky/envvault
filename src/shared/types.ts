@@ -82,9 +82,14 @@ export interface RawDiff {
   lines: RawDiffLine[]
 }
 
-/** Where the vault is kept: a synced folder, or a branch of a private git repository. */
+/**
+ * Where the vault is kept: a synced folder, or a branch of a private git repository.
+ * `privateConfirmed`: the host gave no clear answer to the anonymous privacy
+ * check (an SSH-only server, say) and the user confirmed the repository is private.
+ */
 export type VaultLocation =
-  { kind: 'folder'; path: string } | { kind: 'git'; url: string; branch: string }
+  | { kind: 'folder'; path: string }
+  | { kind: 'git'; url: string; branch: string; privateConfirmed?: true }
 
 export interface Settings {
   projectsPath: string | null

@@ -11,10 +11,17 @@ import type { VaultStore } from './types'
 
 const stores = new Map<string, VaultStore>()
 
+// The privacy confirmation is part of a store's key but not of its mirror's:
+// the same repository, confirmed or not, shares one mirror.
+const keyOf = (location: VaultLocation): string =>
+  location.kind === 'git' && location.privateConfirmed
+    ? `${idOf(location)}\nconfirmed`
+    : idOf(location)
+
 export function storeFor(location: VaultLocation): VaultStore {
-  const id = idOf(location)
-  let store = stores.get(id)
-  if (!store) stores.set(id, (store = create(location, id)))
+  const key = keyOf(location)
+  let store = stores.get(key)
+  if (!store) stores.set(key, (store = create(location, idOf(location))))
   return store
 }
 
@@ -23,6 +30,7 @@ export async function discardStore(location: VaultLocation): Promise<void> {
   if (location.kind !== 'git') return
   const id = idOf(location)
   stores.delete(id)
+  stores.delete(`${id}\nconfirmed`)
   await rm(mirrorDir(id), { recursive: true, force: true })
 }
 
@@ -41,5 +49,10 @@ const mirrorDir = (id: string): string =>
 
 function create(location: VaultLocation, id: string): VaultStore {
   if (location.kind === 'folder') return new FolderStore(location.path)
-  return new GitStore({ url: location.url, branch: location.branch, dir: mirrorDir(id) })
+  return new GitStore({
+    url: location.url,
+    branch: location.branch,
+    dir: mirrorDir(id),
+    privateConfirmed: location.privateConfirmed === true
+  })
 }

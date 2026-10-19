@@ -446,6 +446,24 @@ describe('git store only', () => {
     }
   })
 
+  it('skips the privacy check for a repository the user confirmed as private', async () => {
+    const remote = bareRemote()
+    const asked: string[] = []
+    const store = new GitStore({
+      url: remote,
+      branch: 'main',
+      dir: join(root, `mirror${n++}.git`),
+      allowLocal: true,
+      privateConfirmed: true,
+      checkPrivacy: async (url) => {
+        asked.push(url)
+        throw new AppError('GIT_VAULT_UNVERIFIED', 'no')
+      }
+    })
+    await expect(store.check()).resolves.toBeUndefined()
+    expect(asked).toEqual([])
+  })
+
   it('reports an unreachable remote', async () => {
     const store = gitStore(join(root, 'no-such-remote.git'))
     await expect(store.snapshot()).rejects.toMatchObject({ code: 'GIT_VAULT_UNREACHABLE' })

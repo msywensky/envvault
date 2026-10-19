@@ -56,8 +56,8 @@ export function registerIpc(): void {
   handle(CH.setLayout, (layout) => setLayout(layout))
   // Like the folder picker: the checks (network) run outside the queue, the
   // save inside it.
-  handle(CH.setGitVault, async ({ url }) => {
-    const location = await prepareGitVault(url)
+  handle(CH.setGitVault, async ({ url, confirmPrivate }) => {
+    const location = await prepareGitVault(url, confirmPrivate)
     return exclusive(() => saveVault(location))
   })
   handle(CH.ghStatus, () => gh.ghStatus())
@@ -188,7 +188,9 @@ const folderOf = (location: VaultLocation | null): string | null =>
 
 function sameLocation(a: VaultLocation | null, b: VaultLocation): boolean {
   if (a?.kind === 'folder' && b.kind === 'folder') return a.path === b.path
-  if (a?.kind === 'git' && b.kind === 'git') return a.url === b.url && a.branch === b.branch
+  if (a?.kind === 'git' && b.kind === 'git') {
+    return a.url === b.url && a.branch === b.branch && a.privateConfirmed === b.privateConfirmed
+  }
   return false
 }
 

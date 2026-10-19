@@ -41,6 +41,11 @@ export interface GitStoreOptions {
    * anonymous https check (gitprivacy.ts), or none with `allowLocal`.
    */
   checkPrivacy?: (url: string) => Promise<void>
+  /**
+   * The user confirmed the repository is private after the check gave no
+   * clear answer (GIT_VAULT_UNVERIFIED). check() then skips the privacy check.
+   */
+  privateConfirmed?: boolean
 }
 
 const LS_REMOTE_MS = 10_000
@@ -87,8 +92,10 @@ export class GitStore implements VaultStore {
   private tracked: string | null = null
   private sshCommand: Promise<boolean> | null = null
   private readonly checkPrivacy: ((url: string) => Promise<void>) | null
+  private readonly privateConfirmed: boolean
 
   constructor(opts: GitStoreOptions) {
+    this.privateConfirmed = opts.privateConfirmed ?? false
     this.url = opts.url
     this.branch = opts.branch
     this.dir = opts.dir
@@ -125,7 +132,9 @@ export class GitStore implements VaultStore {
         `The vault repository has no "${this.branch}" branch. Choose the repository again in Setup.`
       )
     }
-    await this.checkPrivacy?.(this.url)
+    // Confirmed by the user when the check gave no clear answer: probing again
+    // would only wait for the same timeout on every unlock.
+    if (!this.privateConfirmed) await this.checkPrivacy?.(this.url)
   }
 
   /** Everything at the top of the branch, for checking what a repository holds. */
