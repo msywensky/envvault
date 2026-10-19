@@ -17,6 +17,7 @@ const confirmingAutoLockOff = ref(false)
 const checkExample = ref(store.settings?.checkExample ?? true)
 const autoPull = ref(store.settings?.autoPull ?? true)
 const cliAccess = ref(store.settings?.cliAccess ?? false)
+const miniOnTop = ref(store.settings?.miniOnTop ?? true)
 
 async function pick(which: 'projects'): Promise<void> {
   busy.value = true
@@ -53,7 +54,8 @@ async function save(): Promise<void> {
       machineName: machineName.value,
       checkExample: checkExample.value,
       autoPull: autoPull.value,
-      cliAccess: cliAccess.value
+      cliAccess: cliAccess.value,
+      miniOnTop: miniOnTop.value
     })
   )
   busy.value = false
@@ -161,6 +163,16 @@ async function save(): Promise<void> {
           <p class="muted small">
             While EnvVault is unlocked. Only when your local .env hasn't changed since the last
             sync; conflicts are left for you. Creates a missing .env, and saves a backup first.
+          </p>
+        </div>
+        <div class="field">
+          <label class="checkbox">
+            <input v-model="miniOnTop" type="checkbox" />
+            <span>Keep the mini window on top</span>
+          </label>
+          <p class="muted small">
+            Click Mini next to a repo to show just that repo, with its Push button, in a small
+            window above your other windows.
           </p>
         </div>
         <div class="field">

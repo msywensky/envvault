@@ -42,6 +42,7 @@ const api: EnvVaultApi = {
   skillStatus: () => invoke(CH.skillStatus),
   installSkill: (replace) => invoke(CH.installSkill, { replace }),
   removeSkill: () => invoke(CH.removeSkill),
+  setLayout: (layout) => invoke(CH.setLayout, layout),
   onLocked: (callback) => {
     // Never hand the IPC event to the page: event.sender is ipcRenderer.
     const listener = (): void => callback()
@@ -62,6 +63,13 @@ const api: EnvVaultApi = {
     ipcRenderer.on(EV.cliPushed, listener)
     return () => {
       ipcRenderer.removeListener(EV.cliPushed, listener)
+    }
+  },
+  onRepoStatus: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, row: RepoRow): void => callback(row)
+    ipcRenderer.on(EV.repoStatus, listener)
+    return () => {
+      ipcRenderer.removeListener(EV.repoStatus, listener)
     }
   }
 }

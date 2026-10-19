@@ -5,6 +5,7 @@ import type {
   GhStatus,
   GitignoreResult,
   GitRepoChoice,
+  Layout,
   PullPreview,
   PullRequest,
   PullResult,
@@ -48,6 +49,7 @@ export interface Responses {
   'skill:status': SkillInfo
   'skill:install': SkillInfo
   'skill:remove': SkillInfo
+  'window:setLayout': null
 }
 
 type R<C extends keyof Responses> = Promise<Result<Responses[C]>>
@@ -65,6 +67,7 @@ export interface EnvVaultApi {
     checkExample: boolean
     autoPull: boolean
     cliAccess: boolean
+    miniOnTop: boolean
   }): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
@@ -104,6 +107,8 @@ export interface EnvVaultApi {
   /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
   installSkill(replace: boolean): R<'skill:install'>
   removeSkill(): R<'skill:remove'>
+  /** Switch between the full window and mini mode on one repo. */
+  setLayout(layout: Layout): R<'window:setLayout'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
   /**
@@ -113,4 +118,6 @@ export interface EnvVaultApi {
   onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
   /** Called with the row the envvault command just pushed. Must not trigger IPC either. */
   onCliPushed(callback: (row: RepoRow) => void): () => void
+  /** Called with mini mode's repo when main rechecks it. Must not trigger IPC either. */
+  onRepoStatus(callback: (row: RepoRow) => void): () => void
 }

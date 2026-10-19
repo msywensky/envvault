@@ -20,7 +20,8 @@ const ConfigSchema = z.strictObject({
   machineName: MachineName,
   checkExample: z.boolean(),
   autoPull: z.boolean(),
-  cliAccess: z.boolean()
+  cliAccess: z.boolean(),
+  miniOnTop: z.boolean()
 })
 
 // Loading is forgiving: a bad or missing field falls back to its default.
@@ -32,7 +33,8 @@ const LoadSchema = z.object({
   machineName: MachineName.catch(() => defaultMachineName()),
   checkExample: z.boolean().catch(true),
   autoPull: z.boolean().catch(true),
-  cliAccess: z.boolean().catch(false)
+  cliAccess: z.boolean().catch(false),
+  miniOnTop: z.boolean().catch(true)
 })
 
 /**

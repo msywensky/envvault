@@ -102,7 +102,15 @@ export interface Settings {
   autoPull: boolean
   /** Let the envvault command check status and push (see src/main/cliserver.ts). */
   cliAccess: boolean
+  /** Keep the mini window above other windows. */
+  miniOnTop: boolean
 }
+
+/**
+ * The window's layout: the full app, or mini mode on one repo (src/main/mini.ts).
+ * `reviewing` makes the mini window big enough for the push or pull dialog.
+ */
+export type Layout = { layout: 'full' } | { layout: 'mini'; repoName: string; reviewing: boolean }
 
 /** The GitHub CLI, as Setup sees it (see src/main/gh.ts). */
 export interface GhStatus {

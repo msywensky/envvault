@@ -11,7 +11,11 @@ import {
 import StatusBadge from './StatusBadge.vue'
 
 defineProps<{ rows: RepoRow[] }>()
-defineEmits<{ action: [row: RepoRow, action: RowAction]; edit: [row: RepoRow] }>()
+defineEmits<{
+  action: [row: RepoRow, action: RowAction]
+  edit: [row: RepoRow]
+  mini: [row: RepoRow]
+}>()
 </script>
 
 <template>
@@ -59,6 +63,15 @@ defineEmits<{ action: [row: RepoRow, action: RowAction]; edit: [row: RepoRow] }>
               @click="$emit('edit', row)"
             >
               Edit
+            </button>
+            <button
+              v-if="row.status !== 'vault-only'"
+              type="button"
+              class="btn btn-sm"
+              title="Show only this repo, in a small window"
+              @click="$emit('mini', row)"
+            >
+              Mini
             </button>
           </div>
         </td>

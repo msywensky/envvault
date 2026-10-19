@@ -13,6 +13,7 @@ import * as session from './session'
 import * as skill from './skill'
 import * as gh from './gh'
 import { prepareGitVault } from './gitvault'
+import { applyMiniOnTop, setLayout } from './mini'
 import * as sync from './sync'
 import { configuredVault, requireVault } from './vault'
 import { getMainWindow } from './window'
@@ -40,6 +41,7 @@ export function registerIpc(): void {
   handle(CH.saveSettings, async (patch) => {
     const next = await updateConfig(patch)
     session.setAutoLockMinutes(autoLockAfter(next))
+    applyMiniOnTop(next.miniOnTop)
     if (next.autoPull) kickAutoPull()
     if (!(await setCliAccess(next.cliAccess))) {
       throw new AppError(
@@ -50,6 +52,8 @@ export function registerIpc(): void {
     return next
   })
   handle(CH.pickFolder, ({ which }) => pickFolder(which))
+  // Works while locked: mini mode shows a compact lock screen.
+  handle(CH.setLayout, (layout) => setLayout(layout))
   // Like the folder picker: the checks (network) run outside the queue, the
   // save inside it.
   handle(CH.setGitVault, async ({ url }) => {
