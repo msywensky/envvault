@@ -10,7 +10,10 @@ import { vaultKindLabel, vaultLabel } from '../vault'
 const busy = ref(false)
 const machineName = ref(store.settings?.machineName ?? '')
 const nameProblem = computed(() => machineNameProblem(machineName.value))
+const autoLock = ref(store.settings?.autoLock ?? true)
 const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
+// Turning auto-lock off waits for the warning to be confirmed; turning it on doesn't.
+const confirmingAutoLockOff = ref(false)
 const checkExample = ref(store.settings?.checkExample ?? true)
 const autoPull = ref(store.settings?.autoPull ?? true)
 const cliAccess = ref(store.settings?.cliAccess ?? false)
@@ -25,10 +28,27 @@ async function pick(which: 'projects'): Promise<void> {
   }
 }
 
+function changeAutoLock(event: Event): void {
+  const input = event.target as HTMLInputElement
+  if (input.checked) {
+    autoLock.value = true
+    confirmingAutoLockOff.value = false
+    return
+  }
+  input.checked = true
+  confirmingAutoLockOff.value = true
+}
+
+function turnOffAutoLock(): void {
+  autoLock.value = false
+  confirmingAutoLockOff.value = false
+}
+
 async function save(): Promise<void> {
   busy.value = true
   const saved = await run(() =>
     window.envvault.saveSettings({
+      autoLock: autoLock.value,
       autoLockMinutes: Number(autoLockMinutes.value),
       machineName: machineName.value,
       checkExample: checkExample.value,
@@ -86,6 +106,32 @@ async function save(): Promise<void> {
           <p v-if="nameProblem" class="muted small">{{ nameProblem }}</p>
         </div>
         <div class="field">
+          <label class="checkbox">
+            <input :checked="autoLock" type="checkbox" @change="changeAutoLock" />
+            <span>Lock automatically when idle</span>
+          </label>
+          <div v-if="confirmingAutoLockOff" class="notice notice-warn stack" role="alert">
+            <p>
+              <strong>Turn off auto-lock?</strong> EnvVault will stay unlocked until you click Lock,
+              close its window, or the computer sleeps or locks its screen. Meanwhile anyone at this
+              computer can push, pull and show .env values without the password.
+            </p>
+            <div class="row">
+              <span class="grow" />
+              <button type="button" class="btn btn-sm" @click="confirmingAutoLockOff = false">
+                Keep it on
+              </button>
+              <button type="button" class="btn btn-sm btn-danger" @click="turnOffAutoLock">
+                Turn off
+              </button>
+            </div>
+          </div>
+          <p v-else-if="!autoLock" class="muted small">
+            EnvVault stays unlocked until you click Lock, close its window, or the computer sleeps
+            or locks its screen.
+          </p>
+        </div>
+        <div v-if="autoLock" class="field">
           <label for="settings-autolock">Auto-lock after (minutes idle)</label>
           <input
             id="settings-autolock"

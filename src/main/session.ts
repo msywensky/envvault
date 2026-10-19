@@ -4,7 +4,8 @@ import { AppError } from './errors'
 let key: Uint8Array | null = null
 let vaultId: string | null = null
 let timer: NodeJS.Timeout | null = null
-let idleMs = 5 * 60_000
+/** null: auto-lock is off, so only Lock, sleep, a screen lock or closing the window locks. */
+let idleMs: number | null = 5 * 60_000
 const listeners = new Set<() => void>()
 
 export function onLocked(fn: () => void): void {
@@ -15,11 +16,15 @@ export function isUnlocked(): boolean {
   return key !== null
 }
 
-export function unlock(newKey: Uint8Array, newVaultId: string, autoLockMinutes: number): void {
+export function unlock(
+  newKey: Uint8Array,
+  newVaultId: string,
+  autoLockMinutes: number | null
+): void {
   if (key) key.fill(0)
   key = newKey
   vaultId = newVaultId
-  idleMs = autoLockMinutes * 60_000
+  idleMs = autoLockMinutes === null ? null : autoLockMinutes * 60_000
   touch()
 }
 
@@ -45,11 +50,12 @@ export function notifyLocked(): void {
 export function touch(): void {
   if (!key) return
   if (timer) clearTimeout(timer)
-  timer = setTimeout(() => lock(), idleMs)
+  timer = idleMs === null ? null : setTimeout(() => lock(), idleMs)
 }
 
-export function setAutoLockMinutes(minutes: number): void {
-  idleMs = minutes * 60_000
+/** Minutes idle before locking, or null for never. */
+export function setAutoLockMinutes(minutes: number | null): void {
+  idleMs = minutes === null ? null : minutes * 60_000
   touch()
 }
 

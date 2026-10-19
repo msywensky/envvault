@@ -59,6 +59,7 @@ export interface EnvVaultApi {
   activity(): R<'app:activity'>
   getSettings(): R<'settings:get'>
   saveSettings(patch: {
+    autoLock: boolean
     autoLockMinutes: number
     machineName: string
     checkExample: boolean

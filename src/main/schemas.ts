@@ -43,6 +43,7 @@ export const requestSchemas = {
   [CH.activity]: NoArgs,
   [CH.getSettings]: NoArgs,
   [CH.saveSettings]: z.strictObject({
+    autoLock: z.boolean(),
     autoLockMinutes: AutoLockMinutes,
     machineName: MachineName,
     checkExample: z.boolean(),
