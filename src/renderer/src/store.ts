@@ -24,7 +24,9 @@ export const store = reactive({
   /** Set if the first state load failed, so the loading screen can offer Retry. */
   startupError: null as string | null,
   /** Bumped whenever the session locks, so open dialogs close themselves. */
-  lockEpoch: 0
+  lockEpoch: 0,
+  /** Mini mode's repo (see MiniView), or null for the full window. */
+  mini: null as string | null
 })
 
 let nextToastId = 1
@@ -89,6 +91,8 @@ export async function refreshState(): Promise<void> {
 }
 
 function applyView(app: AppState): void {
+  // Setup needs the full window.
+  if (!app.configured && store.mini) void exitMini()
   if (!app.configured) store.view = 'setup'
   else if (app.locked) store.view = store.view === 'setup' ? 'setup' : 'lock'
   else if (store.view !== 'settings') store.view = 'repos'
@@ -123,6 +127,29 @@ export function applyAutoPulled(rows: RepoRow[]): void {
 export function applyCliPushed(row: RepoRow): void {
   patchRepos([row])
   toast('success', cliPushMessage(row))
+}
+
+/** Mini mode's repo, rechecked by main. No toast: the badge shows it. */
+export function applyRepoStatus(row: RepoRow): void {
+  patchRepos([row])
+}
+
+/** Shrink the window to one repo. The view switches first, so it never shows squeezed. */
+export async function enterMini(repoName: string): Promise<void> {
+  store.mini = repoName
+  const res = await call(() =>
+    window.envvault.setLayout({ layout: 'mini', repoName, reviewing: false })
+  )
+  if (!res.ok) {
+    store.mini = null
+    if (res.error.code !== 'LOCKED') toast('error', res.error.message)
+  }
+}
+
+/** Back to the full window. It grows first, then the full view replaces MiniView. */
+export async function exitMini(): Promise<void> {
+  await call(() => window.envvault.setLayout({ layout: 'full' }))
+  store.mini = null
 }
 
 export async function loadRepos(): Promise<void> {

@@ -226,6 +226,16 @@ describe('machine A: create vault and push', () => {
     expect(list.find((r) => r.name === 'app1')?.vault?.version).toBe(2)
   })
 
+  it("lists one repo's row by name, ignoring case (mini mode)", async () => {
+    const m = await machine('a')
+    const { key, vaultId } = await m.open()
+    const all = await m.sync.listRepos(key, vaultId)
+    expect(await m.sync.listRepos(key, vaultId, 'APP1')).toEqual(
+      all.filter((r) => r.name === 'app1')
+    )
+    expect(await m.sync.listRepos(key, vaultId, 'missing')).toEqual([])
+  })
+
   it('blocks pulls into a repo whose .env is not ignored, until fixed', async () => {
     const m = await machine('a')
     await pushRepo(m, 'app3')

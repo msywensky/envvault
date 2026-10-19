@@ -4,6 +4,7 @@ import ToastHost from './components/ToastHost.vue'
 import {
   applyAutoPulled,
   applyCliPushed,
+  applyRepoStatus,
   call,
   handleLocked,
   refreshState,
@@ -11,6 +12,7 @@ import {
   store
 } from './store'
 import LockScreen from './views/LockScreen.vue'
+import MiniView from './views/MiniView.vue'
 import ReposView from './views/ReposView.vue'
 import SettingsView from './views/SettingsView.vue'
 import SetupView from './views/SetupView.vue'
@@ -29,11 +31,13 @@ function onActivity(): void {
 let unsubscribe: (() => void) | null = null
 let unsubscribeAutoPulled: (() => void) | null = null
 let unsubscribeCliPushed: (() => void) | null = null
+let unsubscribeRepoStatus: (() => void) | null = null
 
 onMounted(async () => {
   unsubscribe = window.envvault.onLocked(() => void handleLocked())
   unsubscribeAutoPulled = window.envvault.onAutoPulled(applyAutoPulled)
   unsubscribeCliPushed = window.envvault.onCliPushed(applyCliPushed)
+  unsubscribeRepoStatus = window.envvault.onRepoStatus(applyRepoStatus)
   for (const e of ACTIVITY_EVENTS) window.addEventListener(e, onActivity, { passive: true })
   await refreshState()
 })
@@ -42,6 +46,7 @@ onBeforeUnmount(() => {
   unsubscribe?.()
   unsubscribeAutoPulled?.()
   unsubscribeCliPushed?.()
+  unsubscribeRepoStatus?.()
   for (const e of ACTIVITY_EVENTS) window.removeEventListener(e, onActivity)
 })
 
@@ -52,6 +57,10 @@ async function lockNow(): Promise<void> {
 
 <template>
   <SetupView v-if="store.view === 'setup'" />
+  <MiniView
+    v-else-if="store.mini && (store.view === 'lock' || store.view === 'repos')"
+    :key="store.mini"
+  />
   <LockScreen v-else-if="store.view === 'lock'" />
   <div v-else-if="store.view === 'repos' || store.view === 'settings'" class="shell">
     <header class="topbar">

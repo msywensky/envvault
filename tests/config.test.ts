@@ -59,6 +59,13 @@ describe('config.json', () => {
     expect(cfg.projectsPath).toBeNull()
   })
 
+  it('keeps the mini window on top unless turned off', async () => {
+    expect((await (await load()).getConfig()).miniOnTop).toBe(true)
+    vi.resetModules()
+    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ miniOnTop: false }))
+    expect((await (await load()).getConfig()).miniOnTop).toBe(false)
+  })
+
   it('has auto-lock on unless turned off', async () => {
     const config = await load()
     const cfg = await config.getConfig()

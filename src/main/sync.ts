@@ -77,8 +77,14 @@ function parseAndWipe(bytes: Buffer | null): Map<string, string> {
 
 // ---------------------------------------------------------------------------
 
-export async function listRepos(key: Uint8Array, vaultId: string): Promise<RepoRow[]> {
+/** Every repo's row, or with `only`, just that repo's (an empty list if there is none). */
+export async function listRepos(
+  key: Uint8Array,
+  vaultId: string,
+  only?: string
+): Promise<RepoRow[]> {
   const cfg = await configured()
+  const onlyId = only === undefined ? null : entryId(only)
   // One snapshot for every row, so the list is one consistent view of the vault.
   const [scanned, snapshot] = await Promise.all([scanRepos(cfg.projectsPath), cfg.vault.snapshot()])
   const ids = new Set(snapshot.ids)
@@ -126,9 +132,11 @@ export async function listRepos(key: Uint8Array, vaultId: string): Promise<RepoR
     const id = entryId(repo.name)
     if (seen.has(id)) continue
     seen.add(id)
-    jobs.push(row(repo.name, repo, id))
+    if (onlyId === null || id === onlyId) jobs.push(row(repo.name, repo, id))
   }
-  for (const id of ids) if (!seen.has(id)) jobs.push(row(id, null, id))
+  for (const id of ids) {
+    if (!seen.has(id) && (onlyId === null || id === onlyId)) jobs.push(row(id, null, id))
+  }
   const rows = await Promise.all(jobs)
   return rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 }

@@ -38,6 +38,11 @@ export const VaultLocation = z.discriminatedUnion('kind', [
   })
 ])
 
+export const LayoutReq = z.discriminatedUnion('layout', [
+  z.strictObject({ layout: z.literal('full') }),
+  z.strictObject({ layout: z.literal('mini'), repoName: RepoName, reviewing: z.boolean() })
+])
+
 export const requestSchemas = {
   [CH.getState]: NoArgs,
   [CH.activity]: NoArgs,
@@ -48,7 +53,8 @@ export const requestSchemas = {
     machineName: MachineName,
     checkExample: z.boolean(),
     autoPull: z.boolean(),
-    cliAccess: z.boolean()
+    cliAccess: z.boolean(),
+    miniOnTop: z.boolean()
   }),
   [CH.pickFolder]: z.strictObject({ which: z.enum(['projects', 'vault']) }),
   // Only bounded here: prepareGitVault parses it before git sees it.
@@ -86,5 +92,6 @@ export const requestSchemas = {
   [CH.addGitignore]: z.strictObject({ repoName: RepoName }),
   [CH.skillStatus]: NoArgs,
   [CH.installSkill]: z.strictObject({ replace: z.boolean() }),
-  [CH.removeSkill]: NoArgs
+  [CH.removeSkill]: NoArgs,
+  [CH.setLayout]: LayoutReq
 } as const

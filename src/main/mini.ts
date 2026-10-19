@@ -1,0 +1,214 @@
+// Mini mode: the window shrinks to one repo (the renderer's MiniView), kept
+// above other windows unless the miniOnTop setting is off, so its Push button
+// is at hand while you work on that repo.
+//
+// Main keeps that repo's row fresh: when its .env changes, when the window
+// gains focus, and once a minute. Like automatic pull, it takes the key
+// through session.withKey, which doesn't count as activity, and the row goes
+// to the renderer as EV.repoStatus, which patches it in without calling IPC.
+// So mini mode never keeps the vault unlocked.
+import { BrowserWindow, screen } from 'electron'
+import { watch, type FSWatcher } from 'node:fs'
+import { placeWithin, type Rect, type Size } from '../core/layout'
+import { EV } from '../shared/channels'
+import type { Layout } from '../shared/types'
+import { getConfig } from './config'
+import { resolveRepo } from './repos'
+import * as session from './session'
+import { listRepos } from './sync'
+import { getMainWindow } from './window'
+
+/** Content sizes. Reviewing fits the push or pull dialog. */
+const MINI: Size = { width: 380, height: 196 }
+const REVIEW: Size = { width: 600, height: 640 }
+const MINI_MIN: Size = { width: 320, height: 160 }
+/** The full window's minimum, as in createMainWindow. */
+const FULL_MIN: Size = { width: 720, height: 480 }
+const RECHECK_MS = 60_000
+const FULL_SCREEN_EXIT_MS = 1500
+const DEBOUNCE_MS = 300
+
+interface Mini {
+  win: BrowserWindow
+  repoName: string
+  /** Where the full window was, to go back to. */
+  fullBounds: Rect
+  wasMaximized: boolean
+  watcher: FSWatcher | null
+  timer: NodeJS.Timeout
+  onFocus: () => void
+  onClosed: () => void
+}
+
+let mini: Mini | null = null
+let debounce: NodeJS.Timeout | null = null
+let checking = false
+let again = false
+
+export async function setLayout(layout: Layout): Promise<null> {
+  const win = getMainWindow()
+  if (!win || win.isDestroyed()) return null
+  if (layout.layout === 'full') {
+    leave()
+    return null
+  }
+  const current = mini
+  if (current?.win !== win) await enter(win, layout.repoName)
+  else if (current.repoName !== layout.repoName) {
+    current.repoName = layout.repoName
+    await watchRepo(current)
+  }
+  resize(win, layout.reviewing ? REVIEW : MINI)
+  win.setAlwaysOnTop((await getConfig()).miniOnTop, 'floating')
+  recheck()
+  return null
+}
+
+/** Apply the miniOnTop setting now, if the window is in mini mode. */
+export function applyMiniOnTop(onTop: boolean): void {
+  if (mini && !mini.win.isDestroyed()) mini.win.setAlwaysOnTop(onTop, 'floating')
+}
+
+async function enter(win: BrowserWindow, repoName: string): Promise<void> {
+  leave()
+  if (win.isFullScreen()) {
+    // macOS animates out of full screen; resizing before it ends is ignored.
+    const left = new Promise<void>((resolve) => {
+      win.once('leave-full-screen', () => resolve())
+      setTimeout(resolve, FULL_SCREEN_EXIT_MS)
+    })
+    win.setFullScreen(false)
+    await left
+  }
+  const wasMaximized = win.isMaximized()
+  const fullBounds = win.getNormalBounds()
+  if (wasMaximized) win.unmaximize()
+  win.setMinimumSize(MINI_MIN.width, MINI_MIN.height)
+  const onFocus = (): void => recheck()
+  const onClosed = (): void => stop()
+  win.on('focus', onFocus)
+  win.once('closed', onClosed)
+  mini = {
+    win,
+    repoName,
+    fullBounds,
+    wasMaximized,
+    watcher: null,
+    timer: setInterval(recheck, RECHECK_MS),
+    onFocus,
+    onClosed
+  }
+  mini.timer.unref()
+  await watchRepo(mini)
+}
+
+/** Back to the full window, where it was. */
+function leave(): void {
+  const current = mini
+  if (!current) return
+  stop()
+  const { win } = current
+  if (win.isDestroyed()) return
+  win.removeListener('focus', current.onFocus)
+  win.removeListener('closed', current.onClosed)
+  win.setAlwaysOnTop(false)
+  win.setMinimumSize(FULL_MIN.width, FULL_MIN.height)
+  win.setBounds(current.fullBounds)
+  if (current.wasMaximized) win.maximize()
+}
+
+function stop(): void {
+  if (!mini) return
+  clearInterval(mini.timer)
+  mini.watcher?.close()
+  if (debounce) clearTimeout(debounce)
+  debounce = null
+  mini = null
+}
+
+/** Resize the content to `size`, inside the display the window is on. */
+function resize(win: BrowserWindow, size: Size): void {
+  const bounds = win.getBounds()
+  const content = win.getContentBounds()
+  const frame = { width: bounds.width - content.width, height: bounds.height - content.height }
+  const area = screen.getDisplayMatching(bounds).workArea
+  win.setBounds(
+    placeWithin(
+      bounds,
+      { width: size.width + frame.width, height: size.height + frame.height },
+      area
+    )
+  )
+}
+
+/**
+ * Watch the repo folder for its .env (editors save by renaming over it, and
+ * it may not exist yet). Without a watcher, focus and the timer still recheck.
+ */
+async function watchRepo(current: Mini): Promise<void> {
+  current.watcher?.close()
+  current.watcher = null
+  const name = current.repoName
+  let dir: string
+  try {
+    const { projectsPath } = await getConfig()
+    if (!projectsPath) return
+    dir = await resolveRepo(projectsPath, name)
+  } catch {
+    return
+  }
+  // Left mini mode or switched repo while resolving.
+  if (mini !== current || current.repoName !== name) return
+  try {
+    current.watcher = watch(dir, { persistent: false }, (_event, file) => {
+      if (file === null || file === '.env') schedule()
+    })
+    current.watcher.on('error', () => {
+      current.watcher?.close()
+      current.watcher = null
+    })
+  } catch {
+    current.watcher = null
+  }
+}
+
+function schedule(): void {
+  if (debounce) clearTimeout(debounce)
+  debounce = setTimeout(() => {
+    debounce = null
+    recheck()
+  }, DEBOUNCE_MS)
+}
+
+/** Recompute the repo's row and send it; one at a time, rerun if asked meanwhile. */
+function recheck(): void {
+  if (checking) {
+    again = true
+    return
+  }
+  checking = true
+  void (async () => {
+    try {
+      do {
+        again = false
+        await sendRow()
+      } while (again)
+    } finally {
+      checking = false
+    }
+  })()
+}
+
+async function sendRow(): Promise<void> {
+  const current = mini
+  if (!current || !session.isUnlocked()) return
+  const name = current.repoName
+  try {
+    const [row] = await session.withKey((key, id) => listRepos(key, id, name))
+    if (row && mini === current && current.repoName === name && !current.win.isDestroyed()) {
+      current.win.webContents.send(EV.repoStatus, row)
+    }
+  } catch {
+    // Locked, not configured or unreadable: the next recheck tries again.
+  }
+}

@@ -4,7 +4,7 @@ import type { RepoRow } from '../../../shared/types'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
 import SyncDialog from '../components/SyncDialog.vue'
-import { loadRepos, store } from '../store'
+import { enterMini, loadRepos, store } from '../store'
 import { actionsFor, folderName, type RowAction } from '../status'
 
 const loading = ref(false)
@@ -66,7 +66,13 @@ onMounted(refresh)
       <div v-else-if="store.repos.length === 0" class="empty">
         No git repositories found in the projects folder.
       </div>
-      <RepoTable v-else :rows="store.repos" @action="onAction" @edit="editing = $event" />
+      <RepoTable
+        v-else
+        :rows="store.repos"
+        @action="onAction"
+        @edit="editing = $event"
+        @mini="enterMini($event.name)"
+      />
     </div>
 
     <SyncDialog

@@ -27,7 +27,8 @@ export const CH = {
   addGitignore: 'repo:addGitignore',
   skillStatus: 'skill:status',
   installSkill: 'skill:install',
-  removeSkill: 'skill:remove'
+  removeSkill: 'skill:remove',
+  setLayout: 'window:setLayout'
 } as const
 
 export type Channel = (typeof CH)[keyof typeof CH]
@@ -38,5 +39,7 @@ export const EV = {
   /** Rows (metadata only) that automatic pull just pulled. */
   autoPulled: 'repos:autoPulled',
   /** The row (metadata only) the envvault command just pushed. */
-  cliPushed: 'repos:cliPushed'
+  cliPushed: 'repos:cliPushed',
+  /** Mini mode's repo (metadata only), rechecked in the background. */
+  repoStatus: 'repos:status'
 } as const
