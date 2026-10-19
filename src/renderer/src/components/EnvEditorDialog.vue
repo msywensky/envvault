@@ -10,7 +10,8 @@ import { envKeyProblem, fileOf, fileTitle } from '../status'
 import { call, store, toast } from '../store'
 
 const props = defineProps<{ repo: RepoRow }>()
-const emit = defineEmits<{ close: []; done: [] }>()
+// `remove`: the user wants to delete the vault copy instead (see RemoveDialog).
+const emit = defineEmits<{ close: []; done: []; remove: [] }>()
 
 interface Row {
   /** Stable v-for key. */
@@ -338,6 +339,16 @@ watch(
         </button>
       </template>
       <template v-else>
+        <button
+          v-if="repo.vault && phase === 'edit' && !dirty"
+          type="button"
+          class="btn"
+          title="Delete the vault copy, after asking. No local file is touched."
+          @click="emit('remove')"
+        >
+          Remove from vault…
+        </button>
+        <span class="grow" />
         <button type="button" class="btn" @click="cancel">
           {{ phase === 'failed' ? 'Close' : 'Cancel' }}
         </button>

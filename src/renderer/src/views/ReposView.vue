@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { RepoRow } from '../../../shared/types'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
+import RemoveDialog from '../components/RemoveDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
 import SyncDialog from '../components/SyncDialog.vue'
 import { enterMini, loadRepos, store } from '../store'
@@ -10,6 +11,7 @@ import { actionsFor, folderName, isQuiet, rowKey, type RowAction } from '../stat
 const loading = ref(false)
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
 const editing = ref<RepoRow | null>(null)
+const removing = ref<RepoRow | null>(null)
 
 const counts = computed(() => {
   // Files found but never pushed are only suggestions.
@@ -31,9 +33,16 @@ function onAction(repo: RepoRow, action: RowAction): void {
   open.value = { repo, mode, conflict: action === 'keep-local' || action === 'keep-vault' }
 }
 
+/** From the editor: delete the vault copy instead. */
+function removeInstead(): void {
+  removing.value = editing.value
+  editing.value = null
+}
+
 async function onDone(): Promise<void> {
   open.value = null
   editing.value = null
+  removing.value = null
   await refresh(false)
 }
 
@@ -74,6 +83,7 @@ onMounted(() => refresh(true))
         @action="onAction"
         @edit="editing = $event"
         @mini="enterMini"
+        @remove="removing = $event"
       />
     </div>
 
@@ -92,6 +102,15 @@ onMounted(() => refresh(true))
       :key="rowKey(editing)"
       :repo="editing"
       @close="editing = null"
+      @done="onDone"
+      @remove="removeInstead"
+    />
+
+    <RemoveDialog
+      v-if="removing"
+      :key="rowKey(removing)"
+      :repo="removing"
+      @close="removing = null"
       @done="onDone"
     />
   </div>

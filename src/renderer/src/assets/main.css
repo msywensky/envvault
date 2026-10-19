@@ -419,7 +419,8 @@ code,
   vertical-align: middle;
 }
 
-.table tr:last-child td {
+/* The repo table has a tbody per repo: only the very last row has no border. */
+.table tbody:last-of-type tr:last-child td {
   border-bottom: 0;
 }
 
@@ -441,6 +442,31 @@ code,
   margin-top: 2px;
   color: var(--danger-text);
   font-size: 12.5px;
+}
+
+/* A repo with .env files in folders: its name on a row of its own, then a row per file. */
+.repo-group td {
+  padding-bottom: 2px;
+  border-bottom: 0;
+}
+
+.file-row td:first-child {
+  padding-left: 32px;
+}
+
+.file-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+/* Found in a folder, never pushed: listed apart, and quieter. */
+.quiet-toggle td {
+  padding-top: 4px;
+  padding-bottom: 10px;
+}
+
+.row-quiet td {
+  color: var(--muted);
 }
 
 .empty {
