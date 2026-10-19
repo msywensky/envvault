@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { Settings } from '../shared/types'
 import { atomicWrite, isErrno } from './fsutil'
 import { createSerial } from './mutex'
-import { AutoLockMinutes, MachineName, VaultLocation } from './schemas'
+import { AutoLockMinutes, BackupCount, MachineName, VaultLocation } from './schemas'
 
 const FILE = 'config.json'
 // Updates are read-modify-write on the cache, so they must not interleave.
@@ -20,11 +20,15 @@ const ConfigSchema = z.strictObject({
   machineName: MachineName,
   checkExample: z.boolean(),
   autoPull: z.boolean(),
+  backups: z.boolean(),
+  backupCount: BackupCount,
   cliAccess: z.boolean(),
   miniOnTop: z.boolean()
 })
 
 // Loading is forgiving: a bad or missing field falls back to its default.
+// Automatic pull is off by default: with it on, a push from any of your
+// machines reaches this one's .env files without review.
 const LoadSchema = z.object({
   projectsPath: ConfigSchema.shape.projectsPath.catch(null),
   vault: ConfigSchema.shape.vault.catch(null),
@@ -32,7 +36,9 @@ const LoadSchema = z.object({
   autoLockMinutes: AutoLockMinutes.catch(5),
   machineName: MachineName.catch(() => defaultMachineName()),
   checkExample: z.boolean().catch(true),
-  autoPull: z.boolean().catch(true),
+  autoPull: z.boolean().catch(false),
+  backups: z.boolean().catch(true),
+  backupCount: BackupCount.catch(3),
   cliAccess: z.boolean().catch(false),
   miniOnTop: z.boolean().catch(true)
 })

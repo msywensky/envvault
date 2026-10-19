@@ -26,7 +26,7 @@ npm run format                               # prettier
 - CI (`.github/workflows/ci.yml`) runs `npm ci --ignore-scripts`, lint, test and build on macOS and Windows. `--ignore-scripts` skips our `postinstall` (Electron binary download, electron-builder native deps), which lint, tests and build don't need; Electron 44 no longer honours `ELECTRON_SKIP_BINARY_DOWNLOAD`.
 - A Husky pre-commit hook (`.husky/pre-commit`) runs `lint-staged`: ESLint with `--max-warnings 0` on staged `.ts/.vue/.js` files. Husky installs via `prepare`, so `npm ci --ignore-scripts` in CI skips it. CI runs lint, tests and the build on every push to main and every pull request.
 - `ENVVAULT_PROFILE=<name>` (unpackaged runs only, i.e. `npm run dev` / `npm start`) gives the run its own `userData` folder (`<appData>/envvault-<name>`), so two "machines" can share one vault folder. `src/main/profile.ts` silently ignores names that don't match `PROFILE_RE` (`src/shared/cli.ts`, also used by the CLI's `--profile`) and falls back to the real settings, so use `npm run dev:profile` (`scripts/dev-profile.mjs`), which validates the name and refuses instead. Its regex must stay in sync with `PROFILE_RE`.
-- To inspect the running app, start it with `npx electron-vite dev --remoteDebuggingPort 9222` (or `npx electron . --remote-debugging-port=9223` after a build) and drive `window.envvault` over CDP. When testing that CSP blocks `eval`, pass `allowUnsafeEvalBlockedByCSP: false` to `Runtime.evaluate`; it defaults to true.
+- To inspect the running app, start it with `npx electron-vite dev --remoteDebuggingPort 9222` (or `npx electron . --remote-debugging-port=9223` after a build) and drive `window.envvault` over CDP. The packaged app refuses those switches and has DevTools off (`src/main/index.ts`, `window.ts`), so CDP works only unpackaged. When testing that CSP blocks `eval`, pass `allowUnsafeEvalBlockedByCSP: false` to `Runtime.evaluate`; it defaults to true.
 - Commit messages use conventional-commit style with a scope: `feat(core): ...`, `feat(main): ...`, `feat(ui): ...`, `chore: ...`.
 
 ## Architecture
@@ -65,6 +65,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
 - `src/main/session.ts` holds the derived key. Use `session.withKey(fn)`, which hands `fn` a private copy that is wiped afterwards; never hold the session key directly. The key is wiped on lock, idle timeout, window close, sleep/screen lock, and a change of vault. The idle timeout is the `autoLock` setting (default on, `autoLockMinutes`); `autoLockAfter()` (`config.ts`) gives the session `null` when it's off. Settings asks to confirm a warning before turning it off. Sleep, screen lock and window close always lock.
 - `exclusive()` (`src/main/mutex.ts`) serializes every write or session change. It is **not re-entrant**: never call it from inside another `exclusive()` callback, and don't add it inside `src/main/sync.ts` (the handlers already wrap those calls). Write handlers take the key _inside_ `exclusive()`, so a queued operation fails with `LOCKED` rather than using a stale key. `state.ts` and `config.ts` serialize their own read-modify-write with separate `createSerial()` queues.
 - Argon2id key derivation runs in a worker (`kdf.ts` + `kdf.worker.ts`, imported via electron-vite's `?modulePath`) so the main thread doesn't freeze.
+- A new vault's password needs 12 characters and a zxcvbn-ts score of 3 (`core/password.ts`, `PASSWORD_WEAK`), with the machine's, folders' and repository's names as context. `vault.ts` checks it before deriving the key. The dictionaries load on first use, and Levenshtein matching stays off: it made one check take up to a second on the main thread.
 
 ### Push/pull flow (`src/main/sync.ts`)
 
@@ -125,7 +126,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - A save refuses with `VAULT_CHANGED` if the copy changed since it opened (`expectedVaultHash`), and runs `syncedBytes` like a push.
   - It never touches the local `.env` or `state.json`'s last sync, so a local `.env` shows vault-newer and is pulled as usual.
   - `src/core/envlines.ts` is the line-level scanner shared with `localkeys.ts`.
-- **Automatic pull** (`src/main/autopull.ts`, `autoPull` in `src/main/sync.ts`, setting `autoPull`, default on).
+- **Automatic pull** (`src/main/autopull.ts`, `autoPull` in `src/main/sync.ts`, setting `autoPull`, default off: with it on, any push reaches this machine's `.env` files without review).
   - `runAutoPull` lists repos and pulls each `vault-newer` one through `exclusive(() => session.withKey(...))`, one repo per `exclusive()`.
   - `autoPull` re-checks inside it: `computeStatus` must say `vault-newer` and `ignoreStatus` must pass. It then shares `applyPull` with `pull`.
   - It runs on a 60 s interval and on `kickAutoPull()` after unlock, a Settings save with it on, and a changed editor save. `kickAutoPull` is always called after `exclusive()` has resolved, never inside it.
@@ -150,7 +151,7 @@ Renderer side (`src/renderer/src/store.ts`, a plain reactive store, no Pinia):
   - Entering it saves the full window's normal bounds (and maximized/full screen state) and restores them on `full`. It works while locked: a compact unlock form replaces the lock screen, and a machine that needs the setup code goes back to the full window.
   - Main rechecks the repo's row (`listRepos(key, id, only)`) when its `.env` changes (`fs.watch` on the repo folder, debounced), on window focus and every 60 s, through `session.withKey`, and sends it as `EV.repoStatus`. Like `EV.autoPulled`, the renderer patches it in without calling IPC.
   - Pushes and pulls still go through `SyncDialog`, never a one-click path. A conflict's two choices don't fit the header, so it shows **Resolve…**, which goes back to the full window.
-- **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`.
+- **Pull safety.** Pulls require `.env` and `.env.bak.*` to be git-ignored and `.env` to be untracked. The backup is written from the bytes already read, and the temp file is named `.env.bak.tmp-<hex>` so the same ignore rule covers it. Writes are atomic via `src/main/fsutil.ts`. Backups follow the `backups` (default on) and `backupCount` (default 3, 1–50) settings: once `.env` is written, `pruneBackups` deletes all but the newest `backupCount` files matching `BACKUP_RE` (only `writeBackup`'s names, never the temp file or other `.env.bak.*` files), best effort. Turning backups off only stops new ones.
 
 ### Invariants to preserve
 
@@ -183,6 +184,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 - macOS (dmg) and Windows (nsis) only. `build:linux` has no config and isn't supported.
 - Only `out/` is shipped. electron-builder adds `package.json` and the production dependencies itself.
 - `out/cli/**` is `asarUnpack`ed, because the envvault command runs under plain Node, which can't read `app.asar`.
+- Electron fuses (`electronFuses`) turn off run-as-node, `NODE_OPTIONS` and `--inspect`, and load only an integrity-checked `app.asar`. `grantFileProtocolExtraPrivileges` stays on: the renderer loads over `file://`, and without it the window is blank.
 - No auto-update (`publish: null`), unsigned, not notarized. Unsigned also means macOS system notifications fail (see automatic pull above).
 - The macOS entitlements allow only V8's JIT (needed for libsodium's WebAssembly).
 - `npm run build:unpack` produces `dist/win-unpacked/`. The packaged app ignores `ENVVAULT_PROFILE` and keeps its data in `%APPDATA%\envvault`.
@@ -191,7 +193,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 
 ## Tests
 
-- `tests/{cliendpoint,crypto,envdiff,envedit,example,gitremote,layout,linediff,localkeys,paths,setupcode,status}.test.ts` unit-test `src/core/`. `crypto.test.ts` and `setupcode.test.ts` pin format 2's HKDF outputs and a setup code's encoding with vectors checked against independent implementations. `gitremote.test.ts` covers URL parsing (accepted and refused forms), branch names, the https mapping and `classifyAnonymous` against real git stderr. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
+- `tests/{cliendpoint,crypto,envdiff,envedit,example,gitremote,layout,linediff,localkeys,password,paths,setupcode,status}.test.ts` unit-test `src/core/`. `crypto.test.ts` and `setupcode.test.ts` pin format 2's HKDF outputs and a setup code's encoding with vectors checked against independent implementations. `gitremote.test.ts` covers URL parsing (accepted and refused forms), branch names, the https mapping and `classifyAnonymous` against real git stderr. Most crypto tests use small Argon2 params; two deliberately use the real `KDF_DEFAULTS` and `KDF_MAX` (a few seconds) to prove the WASM build can allocate them.
 - `tests/sync.test.ts` is an integration test of the main-process flows with real temp folders, real `git` and real crypto:
   - It mocks only `electron` (`app.getPath` returns a per-machine `userData`), `../src/main/kdf` (fast KDF params) and `../src/main/store/git` (`GitStore` with `allowLocal` and `cacheMs: 0`).
   - Two machines are simulated by `vi.resetModules()` and re-importing the main modules with a different `userData` (`machine(name, { projects, vault })` for a git vault).

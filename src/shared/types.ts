@@ -103,8 +103,12 @@ export interface Settings {
   machineName: string
   /** Compare .env with .env.example in the push and pull dialogs. */
   checkExample: boolean
-  /** Pull one-sided vault changes in the background while unlocked. */
+  /** Pull one-sided vault changes in the background while unlocked. Off by default. */
   autoPull: boolean
+  /** Save the local .env as .env.bak.<timestamp> before a pull replaces it. */
+  backups: boolean
+  /** How many of those backups to keep per repo; older ones are deleted on the next backup. */
+  backupCount: number
   /** Let the envvault command check status and push (see src/main/cliserver.ts). */
   cliAccess: boolean
   /** Keep the mini window above other windows. */

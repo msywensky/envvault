@@ -52,7 +52,7 @@ if ($Release) {
   $tag = "v$version"
   Step "Upload to GitHub release $tag" {
     gh release view $tag *> $null
-    if ($LASTEXITCODE -ne 0) { gh release create $tag --title $tag --notes "EnvVault $version" --draft }
+    if ($LASTEXITCODE -ne 0) { gh release create $tag --title $tag --notes-file docs/release-notes.md --draft }
     gh release upload $tag $installer "$installer.sha256" --clobber
   }
 }

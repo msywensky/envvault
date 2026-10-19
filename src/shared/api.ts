@@ -66,6 +66,8 @@ export interface EnvVaultApi {
     machineName: string
     checkExample: boolean
     autoPull: boolean
+    backups: boolean
+    backupCount: number
     cliAccess: boolean
     miniOnTop: boolean
   }): R<'settings:save'>

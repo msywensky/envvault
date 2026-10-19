@@ -54,6 +54,6 @@ echo "Unsigned, not notarized: Gatekeeper will block first launch (right-click >
 if [ "$release" = 1 ]; then
   tag="v$version"
   step "Upload to GitHub release $tag"
-  gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "EnvVault $version" --draft
+  gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes-file docs/release-notes.md --draft
   gh release upload "$tag" "$dmg" "$dmg.sha256" --clobber
 fi

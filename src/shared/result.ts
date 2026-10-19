@@ -16,6 +16,7 @@ export type ErrorCode =
   | 'VAULT_META_MISSING'
   | 'META_INVALID'
   | 'PASSWORD_TOO_SHORT'
+  | 'PASSWORD_WEAK'
   | 'WRONG_PASSWORD'
   | 'KDF_FAILED'
   | 'VAULT_TAMPERED'

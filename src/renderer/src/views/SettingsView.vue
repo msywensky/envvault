@@ -15,7 +15,9 @@ const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
 // Turning auto-lock off waits for the warning to be confirmed; turning it on doesn't.
 const confirmingAutoLockOff = ref(false)
 const checkExample = ref(store.settings?.checkExample ?? true)
-const autoPull = ref(store.settings?.autoPull ?? true)
+const autoPull = ref(store.settings?.autoPull ?? false)
+const backups = ref(store.settings?.backups ?? true)
+const backupCount = ref(store.settings?.backupCount ?? 3)
 const cliAccess = ref(store.settings?.cliAccess ?? false)
 const miniOnTop = ref(store.settings?.miniOnTop ?? true)
 
@@ -54,6 +56,8 @@ async function save(): Promise<void> {
       machineName: machineName.value,
       checkExample: checkExample.value,
       autoPull: autoPull.value,
+      backups: backups.value,
+      backupCount: Number(backupCount.value),
       cliAccess: cliAccess.value,
       miniOnTop: miniOnTop.value
     })
@@ -162,8 +166,33 @@ async function save(): Promise<void> {
           </label>
           <p class="muted small">
             While EnvVault is unlocked. Only when your local .env hasn't changed since the last
-            sync; conflicts are left for you. Creates a missing .env, and saves a backup first.
+            sync; conflicts are left for you. Creates a missing .env, and saves a backup first if
+            backups are on. Off by default: a push from any of your machines then reaches this one
+            without review.
           </p>
+        </div>
+        <div class="field">
+          <label class="checkbox">
+            <input v-model="backups" type="checkbox" />
+            <span>Back up .env before a pull replaces it</span>
+          </label>
+          <p class="muted small">
+            Saved next to it as .env.bak.&lt;timestamp&gt;, in plaintext like .env. Git ignores
+            them, but other tools may not: add .env.bak.* to a .dockerignore too.
+          </p>
+        </div>
+        <div v-if="backups" class="field">
+          <label for="settings-backups">Backups to keep per repo</label>
+          <input
+            id="settings-backups"
+            v-model.number="backupCount"
+            class="input input-narrow"
+            type="number"
+            min="1"
+            max="50"
+            required
+          />
+          <p class="muted small">Older ones are deleted when a pull saves a new one.</p>
         </div>
         <div class="field">
           <label class="checkbox">

@@ -924,13 +924,13 @@ describe('automatic pull', () => {
     expect(readFileSync(envB('ap2'), 'utf8')).toBe('X=1\n')
   })
 
-  it('runs a pass only while unlocked and with the setting on (the default)', async () => {
+  it('runs a pass only while unlocked and with the setting on (off by default)', async () => {
     const a = await machine('a')
     writeFileSync(envA('ap2'), 'X=2\n')
     await pushRepo(a, 'ap2')
 
     const b = await machine('b')
-    expect((await b.config.getConfig()).autoPull).toBe(true)
+    expect((await b.config.getConfig()).autoPull).toBe(false)
     expect(await b.autopull.runAutoPull()).toEqual([])
 
     const { key, vaultId } = await b.open()
@@ -949,6 +949,63 @@ describe('automatic pull', () => {
       b.session.lock()
     }
     expect(await b.autopull.runAutoPull()).toEqual([])
+  })
+})
+
+describe('backups', () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const repoB = (): string => join(projB, 'bk1')
+  const files = (): string[] =>
+    readdirSync(repoB())
+      .filter((f) => f.startsWith('.env.bak.'))
+      .sort()
+
+  afterAll(async () => {
+    const b = await machine('b')
+    await b.config.updateConfig({ backups: true, backupCount: 3 })
+  })
+
+  it('are on by default and keep the newest few, leaving files that are not backups', async () => {
+    const a = await machine('a')
+    makeRepo(projA, 'bk1', { '.gitignore': IGNORE, '.env': 'K=1\n' })
+    await pushRepo(a, 'bk1')
+    const b = await machine('b')
+    expect(await b.config.getConfig()).toMatchObject({ backups: true, backupCount: 3 })
+    makeRepo(projB, 'bk1', {
+      '.gitignore': IGNORE,
+      '.env': 'K=local\n',
+      '.env.bak.20200101T000000Z': 'old 1',
+      '.env.bak.20200102T000000Z': 'old 2',
+      '.env.bak.20200102T000000Z-ab12': 'old 3',
+      '.env.bak.mine': 'not a backup',
+      '.env.bak.tmp-0000000000000000': 'a pull in progress'
+    })
+    await b.config.updateConfig({ backupCount: 2 })
+
+    const backup = (await pullRepo(b, 'bk1')) ?? ''
+    expect(backup).toMatch(/^\.env\.bak\.\d{8}T\d{6}Z$/)
+    expect(readFileSync(join(repoB(), backup), 'utf8')).toBe('K=local\n')
+    expect(files()).toEqual(
+      [
+        backup,
+        '.env.bak.20200102T000000Z-ab12',
+        '.env.bak.mine',
+        '.env.bak.tmp-0000000000000000'
+      ].sort()
+    )
+  })
+
+  it('are not written when turned off', async () => {
+    const a = await machine('a')
+    writeFileSync(join(projA, 'bk1', '.env'), 'K=2\n')
+    await pushRepo(a, 'bk1')
+    const b = await machine('b')
+    await b.config.updateConfig({ backups: false })
+    const before = files()
+
+    expect(await pullRepo(b, 'bk1')).toBeNull()
+    expect(readFileSync(join(repoB(), '.env'), 'utf8')).toBe('K=2\n')
+    expect(files()).toEqual(before)
   })
 })
 
@@ -1183,6 +1240,7 @@ describe('git vault', { timeout: 30_000 }, () => {
     })
 
     const a2 = await on('a')
+    await a2.config.updateConfig({ autoPull: true })
     const opened = await a2.open()
     a2.session.unlock(opened.key, opened.vaultId, 5)
     try {

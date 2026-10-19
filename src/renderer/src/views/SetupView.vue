@@ -38,6 +38,8 @@ async function done(): Promise<void> {
     machineName: machineName.value,
     checkExample: store.settings.checkExample,
     autoPull: store.settings.autoPull,
+    backups: store.settings.backups,
+    backupCount: store.settings.backupCount,
     cliAccess: store.settings.cliAccess,
     miniOnTop: store.settings.miniOnTop
   }

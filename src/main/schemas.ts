@@ -26,6 +26,7 @@ export const MachineName = z
   .regex(/^[^\p{Cc}]+$/u)
 
 export const AutoLockMinutes = z.int().min(1).max(120)
+export const BackupCount = z.int().min(1).max(50)
 
 /** Where the vault is kept (config.json only: the renderer never sends one). */
 // A git URL is only bounded here; GitStore parses it before git sees it.
@@ -54,6 +55,8 @@ export const requestSchemas = {
     machineName: MachineName,
     checkExample: z.boolean(),
     autoPull: z.boolean(),
+    backups: z.boolean(),
+    backupCount: BackupCount,
     cliAccess: z.boolean(),
     miniOnTop: z.boolean()
   }),

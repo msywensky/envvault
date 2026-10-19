@@ -82,4 +82,27 @@ describe('config.json', () => {
     expect(off.autoLock).toBe(false)
     expect((await load()).autoLockAfter(off)).toBeNull()
   })
+
+  it('has automatic pull off, and keeps 3 backups, unless changed', async () => {
+    expect(await (await load()).getConfig()).toMatchObject({
+      autoPull: false,
+      backups: true,
+      backupCount: 3
+    })
+
+    vi.resetModules()
+    writeFileSync(
+      join(h.userData, 'config.json'),
+      JSON.stringify({ autoPull: true, backups: false, backupCount: 10 })
+    )
+    expect(await (await load()).getConfig()).toMatchObject({
+      autoPull: true,
+      backups: false,
+      backupCount: 10
+    })
+
+    vi.resetModules()
+    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ backupCount: 0 }))
+    expect((await (await load()).getConfig()).backupCount).toBe(3)
+  })
 })
