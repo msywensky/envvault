@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-EnvVault is an Electron + Vue 3 + TypeScript desktop app (macOS and Windows) that syncs each repo's `.env` between machines through an encrypted vault: a synced folder (e.g. a Google Drive folder) or a private git repository. README.md holds the full security design, threat model and vault file format; read it before changing anything in crypto, IPC or file handling.
+EnvVault is an Electron + Vue 3 + TypeScript desktop app (macOS and Windows) that syncs each repo's `.env` between machines through an encrypted vault: a synced folder (e.g. a Google Drive folder) or a private git repository. `docs/security.md` holds the full security design, threat model and vault file format; read it before changing anything in crypto, IPC or file handling. README.md is the user guide, with a one-paragraph security summary that links to it.
 
 Requirements: Node 22+ (`engines`), and `git` on PATH (the integration tests and the app both shell out to it).
 
@@ -176,7 +176,7 @@ Setup codes don't yet cover: upgrading a format 1 vault (re-key every entry, and
 
 Git vaults don't yet cover: S3-compatible stores, choosing a branch, pruning history, `cat-file --batch` for many repos, or unlocking without network (`check()` needs the remote).
 
-v1 is manual-password unlock only. The `envvault` command does `status` and `push` only: no pull, no unlock. Bitwarden CLI unlock and a run mode (`envvault run`, starting a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a README threat-model update first.
+v1 is manual-password unlock only. The `envvault` command does `status` and `push` only: no pull, no unlock. Bitwarden CLI unlock and a run mode (`envvault run`, starting a command with the vault copy's values in its environment) are planned follow-ups. Run mode would send values to another process, a new path beyond the raw diff and the editor, so it needs an explicit design and a threat-model update in `docs/security.md` first.
 
 Packaging (`electron-builder.yml`) is deliberately minimal:
 
