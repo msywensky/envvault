@@ -11,11 +11,13 @@ export class PathEscapeError extends Error {
 // name that could collide with our ".<name>.tmp" temp files), then up to 99
 // of [A-Za-z0-9._-]. Must not end in "." (Windows strips trailing dots).
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
-// Device names Windows refuses as file names, with or without an extension.
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
 
+/** A device name Windows refuses as a file or folder name, with or without an extension. */
+export const isWindowsReserved = (name: string): boolean => WINDOWS_RESERVED.test(name)
+
 export function isValidRepoName(name: string): boolean {
-  return NAME_RE.test(name) && !name.endsWith('.') && !WINDOWS_RESERVED.test(name)
+  return NAME_RE.test(name) && !name.endsWith('.') && !isWindowsReserved(name)
 }
 
 /**
