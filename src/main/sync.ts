@@ -6,8 +6,9 @@
 // and status hashes, and kept from the local file by a pull.
 import { lstat, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { decodeEnv, encryptPayload, makePayload, sha256Hex, type Payload } from '../core/crypto'
+import { decodeEnv, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
+import { ROOT_ENV } from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
@@ -15,6 +16,7 @@ import { markedKeys, unmarkedKeys } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import type {
   EditorData,
+  EnvFile,
   ExampleCheck,
   Expected,
   GitignoreResult,
@@ -45,7 +47,16 @@ import {
   type ScannedRepo
 } from './repos'
 import { getLast, setLast } from './state'
-import { entryId, vaultFor, type Vault } from './vault'
+import {
+  entryFor,
+  entryId,
+  stateKey,
+  vaultFor,
+  withEntryKeys,
+  type EntryKeys,
+  type EntryRef,
+  type Vault
+} from './vault'
 
 // The vault is reached only through `vault` (see vault.ts), never by location.
 type Configured = Omit<Settings, 'vault'> & { projectsPath: string; vault: Vault }
@@ -89,65 +100,70 @@ export async function listRepos(
   const onlyId = only === undefined ? null : entryId(only)
   // One snapshot for every row, so the list is one consistent view of the vault.
   const [scanned, snapshot] = await Promise.all([scanRepos(cfg.projectsPath), cfg.vault.snapshot()])
-  const ids = new Set(snapshot.ids)
-
-  const row = async (name: string, repo: ScannedRepo | null, id: string): Promise<RepoRow> => {
-    const hasEnv = repo !== null && (repo.localHash !== null || repo.envError !== null)
-    try {
-      if (repo?.envError) throw repo.envError
-      const entry = ids.has(id) ? await snapshot.read(key, id) : null
-      const vault = entry ? toInfo(entry.payload) : null
-      const last = await getLast(vaultId, id)
-      const status = computeStatus({
-        repoExists: repo !== null,
-        localHash: repo?.localHash ?? null,
-        vault,
-        last
-      })
-      // Identical content synced some other way (copied by hand, pushed from
-      // an identical file elsewhere): adopt it, so the next push needs no
-      // overwrite confirmation. (setLast serialises its own writes.)
-      if (
-        status === 'in-sync' &&
-        vault &&
-        (last?.version !== vault.version || last.contentHash !== vault.contentHash)
-      ) {
-        await setLast(vaultId, id, { version: vault.version, contentHash: vault.contentHash })
-      }
-      return { name, status, hasEnv, vault, error: null }
-    } catch (err) {
-      if (!(err instanceof AppError)) throw err
-      return {
-        name,
-        status: 'error',
-        hasEnv,
-        vault: null,
-        error: { code: err.code, message: err.message }
+  const ids = new Set(snapshot.entries.flatMap((ref) => (ref.kind === 'root' ? [ref.repoId] : [])))
+  return withEntryKeys(key, async (keys) => {
+    const row = async (name: string, repo: ScannedRepo | null, id: string): Promise<RepoRow> => {
+      const hasEnv = repo !== null && (repo.localHash !== null || repo.envError !== null)
+      try {
+        if (repo?.envError) throw repo.envError
+        const ref: EntryRef = { kind: 'root', repoId: id }
+        const entry = ids.has(id) ? await snapshot.read(keys, ref) : null
+        const vault = entry ? toInfo(entry.payload) : null
+        const last = await getLast(vaultId, stateKey(ref))
+        const status = computeStatus({
+          repoExists: repo !== null,
+          localHash: repo?.localHash ?? null,
+          vault,
+          last
+        })
+        // Identical content synced some other way (copied by hand, pushed from
+        // an identical file elsewhere): adopt it, so the next push needs no
+        // overwrite confirmation. (setLast serialises its own writes.)
+        if (
+          status === 'in-sync' &&
+          vault &&
+          (last?.version !== vault.version || last.contentHash !== vault.contentHash)
+        ) {
+          await setLast(vaultId, id, { version: vault.version, contentHash: vault.contentHash })
+        }
+        return { name, status, hasEnv, vault, error: null }
+      } catch (err) {
+        if (!(err instanceof AppError)) throw err
+        return {
+          name,
+          status: 'error',
+          hasEnv,
+          vault: null,
+          error: { code: err.code, message: err.message }
+        }
       }
     }
-  }
 
-  // Two folders differing only by case map to one entry; keep the first.
-  const seen = new Set<string>()
-  const jobs: Promise<RepoRow>[] = []
-  for (const repo of scanned) {
-    const id = entryId(repo.name)
-    if (seen.has(id)) continue
-    seen.add(id)
-    if (onlyId === null || id === onlyId) jobs.push(row(repo.name, repo, id))
-  }
-  for (const id of ids) {
-    if (!seen.has(id) && (onlyId === null || id === onlyId)) jobs.push(row(id, null, id))
-  }
-  const rows = await Promise.all(jobs)
-  return rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    // Two folders differing only by case map to one entry; keep the first.
+    const seen = new Set<string>()
+    const jobs: Promise<RepoRow>[] = []
+    for (const repo of scanned) {
+      const id = entryId(repo.name)
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (onlyId === null || id === onlyId) jobs.push(row(repo.name, repo, id))
+    }
+    for (const id of ids) {
+      if (!seen.has(id) && (onlyId === null || id === onlyId)) jobs.push(row(id, null, id))
+    }
+    const rows = await Promise.all(jobs)
+    return rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  })
 }
 
 // ---------------------------------------------------------------------------
 
 interface Snapshot {
   cfg: Configured
+  keys: EntryKeys
+  file: EnvFile
   repoDir: string
+  /** The entry's key in state.json. */
   id: string
   /** Plaintext local .env. The caller must wipe it (see withSnapshot). */
   local: Buffer | null
@@ -171,29 +187,34 @@ async function withSnapshot<T>(
 ): Promise<T> {
   const cfg = await configured()
   const repoDir = await resolveRepo(cfg.projectsPath, repoName)
-  const id = entryId(repoName)
-  const local = await readLocalEnv(repoDir)
-  let synced: Buffer | null = null
-  try {
-    synced = local ? syncedBytes(local) : null
-    const entry = await (await cfg.vault.snapshot()).read(key, id)
-    const payload = entry?.payload ?? null
-    return await fn({
-      cfg,
-      repoDir,
-      id,
-      local,
-      localHash: local ? sha256Hex(local) : null,
-      synced,
-      syncedHash: synced ? sha256Hex(synced) : null,
-      payload,
-      vault: payload ? toInfo(payload) : null,
-      vaultVersion: entry?.version ?? null
-    })
-  } finally {
-    if (synced !== local) synced?.fill(0)
-    local?.fill(0)
-  }
+  const file = { repoName, path: ROOT_ENV }
+  return withEntryKeys(key, async (keys) => {
+    const ref = entryFor(keys, file)
+    const local = await readLocalEnv(repoDir)
+    let synced: Buffer | null = null
+    try {
+      synced = local ? syncedBytes(local) : null
+      const entry = await (await cfg.vault.snapshot()).read(keys, ref)
+      const payload = entry?.payload ?? null
+      return await fn({
+        cfg,
+        keys,
+        file,
+        repoDir,
+        id: stateKey(ref),
+        local,
+        localHash: local ? sha256Hex(local) : null,
+        synced,
+        syncedHash: synced ? sha256Hex(synced) : null,
+        payload,
+        vault: payload ? toInfo(payload) : null,
+        vaultVersion: entry?.version ?? null
+      })
+    } finally {
+      if (synced !== local) synced?.fill(0)
+      local?.fill(0)
+    }
+  })
 }
 
 function checkExpected(s: Snapshot, expected: Expected): void {
@@ -290,7 +311,7 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
       const payload = makePayload(s.synced, nextVersion(vault, last), s.cfg.machineName)
       // `expected` above is what the user reviewed; the version makes the
       // write itself fail if the vault copy changed after this snapshot.
-      await s.cfg.vault.write(s.id, await encryptPayload(key, s.id, payload), s.vaultVersion)
+      await s.cfg.vault.write(s.keys, s.file, payload, s.vaultVersion)
       vault = toInfo(payload)
     }
     await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
@@ -543,7 +564,10 @@ const editorStale = (): AppError =>
 export async function openEditor(key: Uint8Array, repoName: string): Promise<EditorData> {
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, repoName)
-  const entry = await (await cfg.vault.snapshot()).read(key, entryId(repoName))
+  const file = { repoName, path: ROOT_ENV }
+  const entry = await withEntryKeys(key, async (keys) =>
+    (await cfg.vault.snapshot()).read(keys, entryFor(keys, file))
+  )
   const payload = entry?.payload ?? null
   const entries = editing(() => editorEntries(editableText(payload)))
   return {
@@ -565,40 +589,43 @@ export async function saveEdit(
 ): Promise<SaveEditResult> {
   const cfg = await configured()
   await resolveRepo(cfg.projectsPath, req.repoName)
-  const id = entryId(req.repoName)
-  const entry = await (await cfg.vault.snapshot()).read(key, id)
-  const payload = entry?.payload ?? null
-  const vault = payload ? toInfo(payload) : null
-  if ((vault?.contentHash ?? null) !== req.expectedVaultHash) throw editorStale()
-  const edited = Buffer.from(
-    editing(() => applyEdits(editableText(payload), req)),
-    'utf8'
-  )
-  let synced: Buffer | null = null
-  try {
-    if (edited.length > MAX_ENV_BYTES) {
-      throw new AppError('ENV_TOO_LARGE', 'The edited .env would be larger than 1 MiB.')
-    }
-    // Keeps machine-specific keys canonical, as a push would.
-    synced = syncedBytes(edited)
-    const unchanged = vault ? sha256Hex(synced) === vault.contentHash : synced.length === 0
-    if (unchanged) return { vault, changed: false }
-    const next = makePayload(
-      synced,
-      nextVersion(vault, await getLast(vaultId, id)),
-      cfg.machineName
+  const file = { repoName: req.repoName, path: ROOT_ENV }
+  return withEntryKeys(key, async (keys) => {
+    const ref = entryFor(keys, file)
+    const entry = await (await cfg.vault.snapshot()).read(keys, ref)
+    const payload = entry?.payload ?? null
+    const vault = payload ? toInfo(payload) : null
+    if ((vault?.contentHash ?? null) !== req.expectedVaultHash) throw editorStale()
+    const edited = Buffer.from(
+      editing(() => applyEdits(editableText(payload), req)),
+      'utf8'
     )
+    let synced: Buffer | null = null
     try {
-      await cfg.vault.write(id, await encryptPayload(key, id, next), entry?.version ?? null)
-    } catch (err) {
-      if (err instanceof AppError && err.code === 'VAULT_CHANGED') throw editorStale()
-      throw err
+      if (edited.length > MAX_ENV_BYTES) {
+        throw new AppError('ENV_TOO_LARGE', 'The edited .env would be larger than 1 MiB.')
+      }
+      // Keeps machine-specific keys canonical, as a push would.
+      synced = syncedBytes(edited)
+      const unchanged = vault ? sha256Hex(synced) === vault.contentHash : synced.length === 0
+      if (unchanged) return { vault, changed: false }
+      const next = makePayload(
+        synced,
+        nextVersion(vault, await getLast(vaultId, stateKey(ref))),
+        cfg.machineName
+      )
+      try {
+        await cfg.vault.write(keys, file, next, entry?.version ?? null)
+      } catch (err) {
+        if (err instanceof AppError && err.code === 'VAULT_CHANGED') throw editorStale()
+        throw err
+      }
+      return { vault: toInfo(next), changed: true }
+    } finally {
+      if (synced !== edited) synced?.fill(0)
+      edited.fill(0)
     }
-    return { vault: toInfo(next), changed: true }
-  } finally {
-    if (synced !== edited) synced?.fill(0)
-    edited.fill(0)
-  }
+  })
 }
 
 // ---------------------------------------------------------------------------

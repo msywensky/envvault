@@ -147,6 +147,18 @@ const errorCode = async (p: Promise<unknown>): Promise<string> => {
   return 'no error'
 }
 
+/** An env file's vault copy as text ('' if there is none), read straight from the folder vault. */
+async function storedEnv(m: Machine, repoName: string, path = '.env'): Promise<string> {
+  const { key } = await m.open()
+  const entry = await m.vault.withEntryKeys(key, async (keys) =>
+    (await m.vault.vaultAt(vaultDir).snapshot()).read(
+      keys,
+      m.vault.entryFor(keys, { repoName, path })
+    )
+  )
+  return Buffer.from(entry?.payload.envBase64 ?? '', 'base64').toString('utf8')
+}
+
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), 'envvault-it-'))
   vaultDir = join(root, 'vault')
@@ -516,11 +528,7 @@ describe('machine-specific keys', () => {
   const envA = (): string => join(projA, 'local1', '.env')
   const envB = (): string => join(projB, 'local1', '.env')
 
-  async function stored(m: Machine): Promise<string> {
-    const { key } = await m.open()
-    const entry = await (await m.vault.vaultAt(vaultDir).snapshot()).read(key, 'local1')
-    return Buffer.from(entry?.payload.envBase64 ?? '', 'base64').toString('utf8')
-  }
+  const stored = (m: Machine): Promise<string> => storedEnv(m, 'local1')
 
   it('pushes marked keys blanked, and ignores local edits to them', async () => {
     const a = await machine('a')
@@ -711,11 +719,7 @@ describe('editing the vault copy', () => {
     '# shared\r\nexport API_URL=https://api.example.com\r\nSECRET="s3cret value" # rotate\r\n' +
     '# envvault:local\r\nDB_PATH=/a/data\r\nOLD=1\r\n'
 
-  async function stored(m: Machine, id: string): Promise<string> {
-    const { key } = await m.open()
-    const entry = await (await m.vault.vaultAt(vaultDir).snapshot()).read(key, id)
-    return Buffer.from(entry?.payload.envBase64 ?? '', 'base64').toString('utf8')
-  }
+  const stored = (m: Machine, repoName: string): Promise<string> => storedEnv(m, repoName)
 
   it('opens the vault copy as rows, with machine-specific values empty', async () => {
     const a = await machine('a')

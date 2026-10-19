@@ -1,7 +1,8 @@
 // A vault in a folder, usually one synced between machines by Google Drive
 // or similar:
 //   meta.json            plaintext: format version, vaultId, KDF params, salt, keyCheck
-//   <id>.env.enc         one encrypted entry per repo
+//   <repo>.env.enc       encrypted entries (see vault.ts)
+//   <repo>.<tag>.file.enc
 //   .<name>.<hex>.tmp    in-flight atomic writes (ours; removed when stale)
 // Anything else (Drive conflict copies, user files) is ignored.
 //

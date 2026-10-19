@@ -1,7 +1,9 @@
 // The vault: its policy, over a store that only moves bytes (store/types.ts).
-//   meta.json      plaintext: format version, vaultId, KDF params, salt,
-//                  (format 2) secretId, keyCheck
-//   <id>.env.enc   one encrypted entry per repo; <id> is the lowercased repo name
+//   meta.json              plaintext: format version, vaultId, KDF params, salt,
+//                          (format 2) secretId, keyCheck
+//   <repo>.env.enc         a repo's own .env; <repo> is the lowercased repo name
+//   <repo>.<tag>.file.enc  an env file elsewhere in that repo; the tag names its
+//                          path (see fileTagger), which is kept in the ciphertext
 // Anything else in the store is ignored.
 //
 // A format 2 vault's key also needs its secret, which is never in the vault:
@@ -11,7 +13,11 @@ import {
   KDF_DEFAULTS,
   MetaInvalidError,
   VaultTamperError,
+  decryptFilePayload,
   decryptPayload,
+  encryptFilePayload,
+  encryptPayload,
+  fileTagger,
   makeKeyCheck,
   parseMeta,
   randomSalt,
@@ -21,13 +27,15 @@ import {
   serializeMeta,
   vaultKey,
   verifyKeyCheck,
+  type FileTagger,
   type Meta,
   type Payload
 } from '../core/crypto'
+import { ROOT_ENV, envPathId, isEnvPath } from '../core/envpath'
 import { passwordProblem } from '../core/password'
 import { isValidRepoName } from '../core/paths'
 import { formatSetupCode, parseSetupCode, SetupCodeError } from '../core/setupcode'
-import type { SetupCodeState, VaultFolderState, VaultLocation } from '../shared/types'
+import type { EnvFile, SetupCodeState, VaultFolderState, VaultLocation } from '../shared/types'
 import { getConfig } from './config'
 import { AppError } from './errors'
 import { deriveKeyInWorker } from './kdf'
@@ -36,16 +44,66 @@ import { storeFor } from './store'
 import { StoreConflictError, type StoreSnapshot, type VaultStore } from './store/types'
 
 const META = 'meta.json'
+// The suffixes never overlap, so a name is one kind or the other: a repo
+// called "web.0123456789abcdef" still has the root entry "….env.enc".
 const ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.env\.enc$/
+const FILE_ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.([0-9a-f]{16})\.file\.enc$/
 export const MIN_PASSWORD_CHARS = 12
 
 /** A file that belongs in a vault: meta.json or an entry. */
-export const isVaultFile = (name: string): boolean => name === META || ENTRY_RE.test(name)
+export const isVaultFile = (name: string): boolean =>
+  name === META || ENTRY_RE.test(name) || FILE_ENTRY_RE.test(name)
 
 /** The vault entry id for a repo: case-insensitive, like the filesystems. */
 export const entryId = (repoName: string): string => repoName.toLowerCase()
 
-const entryFile = (id: string): string => `${id}.env.enc`
+/**
+ * One entry: a repo's root .env, or an env file elsewhere in it, named by a
+ * tag of its path. A file entry's path is known only once it is decrypted.
+ */
+export type EntryRef =
+  { kind: 'root'; repoId: string } | { kind: 'file'; repoId: string; tag: string }
+
+/** The entry's name in the store, also shown to the user to find it there. */
+export const entryName = (ref: EntryRef): string =>
+  ref.kind === 'root' ? `${ref.repoId}.env.enc` : `${ref.repoId}.${ref.tag}.file.enc`
+
+/**
+ * The entry's key in state.json. A root entry's is its repo id, as before
+ * file entries existed; "/" can't appear in a repo id, so they never collide.
+ */
+export const stateKey = (ref: EntryRef): string =>
+  ref.kind === 'root' ? ref.repoId : `${ref.repoId}/${ref.tag}`
+
+/** What entries are read and named with: the vault key, and a tagger from it. */
+export interface EntryKeys {
+  readonly key: Uint8Array
+  readonly tagger: FileTagger
+}
+
+/** Run `fn` with `key` and a file tagger derived from it, which is wiped afterwards. */
+export async function withEntryKeys<T>(
+  key: Uint8Array,
+  fn: (keys: EntryKeys) => Promise<T>
+): Promise<T> {
+  const tagger = fileTagger(key)
+  try {
+    return await fn({ key, tagger })
+  } finally {
+    tagger.wipe()
+  }
+}
+
+/** The entry for an env file. */
+export function entryFor(keys: EntryKeys, file: EnvFile): EntryRef {
+  if (!isValidRepoName(file.repoName) || !isEnvPath(file.path)) {
+    throw new Error('Not an env file.')
+  }
+  const repoId = entryId(file.repoName)
+  return file.path === ROOT_ENV
+    ? { kind: 'root', repoId }
+    : { kind: 'file', repoId, tag: keys.tagger.tag(repoId, envPathId(file.path)) }
+}
 
 export interface OpenedVault {
   key: Uint8Array
@@ -77,22 +135,26 @@ export interface Vault {
   /** A read view of the entries: take one per operation. */
   snapshot(): Promise<VaultSnapshot>
   /**
-   * Replace one entry with already-encrypted bytes, if it is still at
-   * `expected` (a version from a snapshot, or null for none); otherwise
+   * Encrypt `payload` as `file`'s entry and write it, if the entry is still
+   * at `expected` (a version from a snapshot, or null for none); otherwise
    * VAULT_CHANGED. Returns the new version.
    */
-  write(id: string, bytes: Uint8Array, expected: string | null): Promise<string>
+  write(keys: EntryKeys, file: EnvFile, payload: Payload, expected: string | null): Promise<string>
+  /** Remove one entry if it is still at `expected`, otherwise VAULT_CHANGED. */
+  remove(ref: EntryRef, expected: string): Promise<void>
 }
 
 export interface VaultSnapshot {
-  /** Entry ids in the vault. */
-  readonly ids: string[]
+  /** The entries in the vault. */
+  readonly entries: EntryRef[]
   /** Decrypt one entry, with the version to write against, or null if there is none. */
-  read(key: Uint8Array, id: string): Promise<VaultEntry | null>
+  read(keys: EntryKeys, ref: EntryRef): Promise<VaultEntry | null>
 }
 
 export interface VaultEntry {
   payload: Payload
+  /** The env file's path in its repo: ROOT_ENV for a root entry. */
+  path: string
   version: string
 }
 
@@ -105,7 +167,8 @@ export function vaultOn(store: VaultStore, secrets: VaultSecrets = machineSecret
     setupCodeState: () => setupCodeState(store, secrets),
     showSetupCode: (password) => showSetupCode(store, secrets, password),
     snapshot: async () => entriesOf(await store.snapshot()),
-    write: (id, bytes, expected) => writeEntry(store, id, bytes, expected)
+    write: (keys, file, payload, expected) => writeEntry(store, keys, file, payload, expected),
+    remove: (ref, expected) => removeEntry(store, ref, expected)
   }
 }
 
@@ -138,16 +201,20 @@ async function vaultState(store: VaultStore): Promise<FolderState> {
   if (!(await store.reachable())) return 'folder-missing'
   const { names } = await store.snapshot()
   if (names.includes(META)) return 'ready'
-  return entryIds(names).length > 0 ? 'meta-missing' : 'empty'
+  return entryRefs(names).length > 0 ? 'meta-missing' : 'empty'
 }
 
-function entryIds(names: string[]): string[] {
-  const ids: string[] = []
+function entryRefs(names: string[]): EntryRef[] {
+  const refs: EntryRef[] = []
   for (const name of names) {
-    const id = ENTRY_RE.exec(name)?.[1]
-    if (id && isValidRepoName(id)) ids.push(id)
+    const root = ENTRY_RE.exec(name)
+    const file = FILE_ENTRY_RE.exec(name)
+    if (root?.[1] && isValidRepoName(root[1])) refs.push({ kind: 'root', repoId: root[1] })
+    else if (file?.[1] && file[2] && isValidRepoName(file[1])) {
+      refs.push({ kind: 'file', repoId: file[1], tag: file[2] })
+    }
   }
-  return ids
+  return refs
 }
 
 /** What the vault is in, for messages. */
@@ -382,25 +449,49 @@ async function derive(
 
 function entriesOf(snapshot: StoreSnapshot): VaultSnapshot {
   return {
-    ids: entryIds(snapshot.names),
-    read: (key, id) => readEntry(snapshot, key, id)
+    entries: entryRefs(snapshot.names),
+    read: (keys, ref) => readEntry(snapshot, keys, ref)
   }
 }
 
 async function readEntry(
   snapshot: StoreSnapshot,
-  key: Uint8Array,
-  id: string
+  keys: EntryKeys,
+  ref: EntryRef
 ): Promise<VaultEntry | null> {
-  const found = await snapshot.get(entryFile(id))
+  const found = await snapshot.get(entryName(ref))
   if (!found) return null
   try {
-    return { payload: await decryptPayload(key, id, found.bytes), version: found.version }
+    if (ref.kind === 'root') {
+      const payload = await decryptPayload(keys.key, ref.repoId, found.bytes)
+      return { payload, path: ROOT_ENV, version: found.version }
+    }
+    const { path, ...payload } = await decryptFilePayload(
+      keys.key,
+      ref.repoId,
+      ref.tag,
+      found.bytes
+    )
+    // Only someone with the key could write a mismatch, but the path decides
+    // where a pull writes: it must be what the name says, and never the root
+    // .env, which has its own entry.
+    if (
+      !isEnvPath(path) ||
+      path === ROOT_ENV ||
+      keys.tagger.tag(ref.repoId, envPathId(path)) !== ref.tag
+    ) {
+      throw new VaultTamperError("The file's path doesn't match its name.")
+    }
+    return { payload, path, version: found.version }
   } catch (err) {
     if (err instanceof VaultTamperError) {
+      const what =
+        ref.kind === 'root'
+          ? `"${ref.repoId}"`
+          : `an env file in "${ref.repoId}" (${entryName(ref)})`
       throw new AppError(
         'VAULT_TAMPERED',
-        `The vault copy of "${id}" failed verification (corrupted, tampered with, or from a different vault). ${err.message}`
+        `The vault copy of ${what} failed verification (corrupted, tampered with, or from a different vault). ${err.message}`
       )
     }
     throw err
@@ -409,19 +500,32 @@ async function readEntry(
 
 async function writeEntry(
   store: VaultStore,
-  id: string,
-  bytes: Uint8Array,
+  keys: EntryKeys,
+  file: EnvFile,
+  payload: Payload,
   expected: string | null
 ): Promise<string> {
+  const ref = entryFor(keys, file)
+  const bytes =
+    ref.kind === 'root'
+      ? await encryptPayload(keys.key, ref.repoId, payload)
+      : await encryptFilePayload(keys.key, ref.repoId, ref.tag, { ...payload, path: file.path })
   try {
-    return await store.write(entryFile(id), bytes, expected)
+    return await store.write(entryName(ref), bytes, expected)
   } catch (err) {
-    if (err instanceof StoreConflictError) {
-      throw new AppError(
-        'VAULT_CHANGED',
-        'The vault copy changed since you reviewed it. Review again.'
-      )
-    }
+    if (err instanceof StoreConflictError) throw vaultChanged()
     throw err
   }
 }
+
+async function removeEntry(store: VaultStore, ref: EntryRef, expected: string): Promise<void> {
+  try {
+    await store.delete(entryName(ref), expected)
+  } catch (err) {
+    if (err instanceof StoreConflictError) throw vaultChanged()
+    throw err
+  }
+}
+
+const vaultChanged = (): AppError =>
+  new AppError('VAULT_CHANGED', 'The vault copy changed since you reviewed it. Review again.')

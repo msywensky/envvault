@@ -7,6 +7,16 @@ import type { AppErrorInfo } from './result'
 export type SyncStatus =
   'vault-only' | 'no-env' | 'local-only' | 'vault-newer' | 'in-sync' | 'local-newer' | 'conflict'
 
+/**
+ * One env file: a repo in the projects folder by name, and the file's path in
+ * it from the repo root, with "/" separators: ".env" for the repo's own, or
+ * "apps/web/.env" (see src/core/envpath.ts).
+ */
+export interface EnvFile {
+  repoName: string
+  path: string
+}
+
 /** Metadata about the vault copy of one repo. No values. */
 export interface VaultInfo {
   version: number
