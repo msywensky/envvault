@@ -2204,6 +2204,31 @@ describe('resolving a conflict', { timeout: 30_000 }, () => {
     expect((await rows(a))['mix']).toBe('in-sync')
   })
 
+  it("keeps this machine's file as written when it wins every key", async () => {
+    makeRepo(mpA, 'mine', { '.gitignore': IGNORE, '.env': 'A=1\nB=1\nOLD=o\n' })
+    makeRepo(mpB, 'mine', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'mine')
+    await pullRepo(await on('b'), 'mine')
+    writeFileSync(envOf(mpA, 'mine'), '# from a\nA=2\nB=1\nOLD=o\n')
+    await pushRepo(await on('a'), 'mine')
+    const mine = '# mine\nB=3\nA=1\n\n# new\nNEW=n\n'
+    writeFileSync(envOf(mpB, 'mine'), mine)
+
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('mine'))
+    const result = await b.sync.merge(key, vaultId, {
+      ...envFile('mine'),
+      expected: preview.expected,
+      choices: preview.keys.map((k) => ({ key: k.key, take: 'local' as const }))
+    })
+    // Untouched (no backup), and the vault copy is the file as written.
+    expect(result.backupName).toBeNull()
+    expect(readFileSync(envOf(mpB, 'mine'), 'utf8')).toBe(mine)
+    expect(await stored(b, 'mine')).toBe(mine)
+    expect((await rows(b))['mine']).toBe('in-sync')
+  })
+
   it('refuses a stale review and incomplete choices, leaving both sides alone', async () => {
     makeRepo(mpA, 'stale', { '.gitignore': IGNORE, '.env': 'A=1\n' })
     makeRepo(mpB, 'stale', { '.gitignore': IGNORE, '.env': 'A=2\n' })

@@ -5,9 +5,11 @@
 // copy's layout, as a pull does) and writes the result to both sides. Key names
 // only, until Show values: the values arrive from repo:mergeValues, live only
 // in `values` (never the store), and are dropped after a minute, when the
-// window is hidden, on reload, and when the dialog closes or the app locks. A
-// rollback, or copies that differ only in formatting, get just the two Keep
-// buttons, which open the push or pull review instead.
+// window is hidden, on reload, and when the dialog closes or the app locks.
+// With this machine's copy chosen for every key, main keeps the .env as
+// written. A rollback, copies that differ only in formatting, or a file that
+// can't be compared get no table, only the two Keep buttons, which open the
+// push or pull review instead.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MergeKey, MergeKind, MergePreview, MergeTake, RepoRow } from '../../../shared/types'
 import { call, store, toast } from '../store'
@@ -63,6 +65,12 @@ const subtitle = computed(() => {
     ? 'This machine has never synced this file, and the two copies differ.'
     : 'Both copies changed since this machine last synced.'
 })
+// An interpolation, not a <template>, so the space before it isn't dropped.
+const sameInBoth = computed(() => {
+  const n = preview.value?.unchanged ?? 0
+  if (n === 0) return ''
+  return `${n} other key${n === 1 ? ' is' : 's are'} the same in both.`
+})
 // Merged here, or only kept whole with the Keep buttons.
 const mergeable = computed(
   () => preview.value !== null && !preview.value.rollback && !preview.value.formatOnly
@@ -83,6 +91,19 @@ const marking = computed(
 const allFromVault = computed(
   () => preview.value?.keys.every((k) => choices.value.get(k.key) === 'vault') ?? false
 )
+// This machine's copy wins every key: main keeps the .env as written (see keepLocal).
+const allFromThisMachine = computed(() => {
+  const keys = preview.value?.keys ?? []
+  return (
+    keys.length > 0 &&
+    keys.every((k) => choices.value.has(k.key) && choices.value.get(k.key) !== 'vault')
+  )
+})
+// Keeping the .env as written still adds these: markers, and the vault's machine-specific keys.
+const addsMarkers = computed(() => {
+  const p = preview.value
+  return marking.value.length > 0 || (p !== null && (p.unmarked.length > 0 || p.unset.length > 0))
+})
 // Set when the vault copy's extra keys started out as Add (see suggestsAdd).
 const suggested = ref(false)
 
@@ -268,10 +289,7 @@ watch(
                   purpose.
                 </template>
                 <template v-else>Choose which copy each key comes from.</template>
-                <template v-if="preview.unchanged > 0">
-                  {{ preview.unchanged }} other key{{ preview.unchanged === 1 ? ' is' : 's are' }}
-                  the same in both.
-                </template>
+                {{ sameInBoth }}
               </span>
               <button type="button" class="btn btn-sm" :disabled="busy" @click="chooseAll('local')">
                 Use this machine's for all
@@ -407,19 +425,30 @@ watch(
             @fixed="load(true)"
           />
           <p class="muted small">
-            <template v-if="allFromVault">
+            <template v-if="open.length">
+              Choose a copy for every key to see what saving does.
+            </template>
+            <template v-else-if="allFromVault">
               Saving puts the vault copy in your .env; the vault copy itself doesn't change.
             </template>
+            <template v-else-if="allFromThisMachine">
+              Saving keeps your .env as it is<template v-if="addsMarkers"
+                >, apart from <code class="marker"># envvault:local</code> markers,</template
+              >
+              and makes it the new version of the vault copy.
+            </template>
             <template v-else>
-              Saving writes the result to your .env and, if you keep anything of this machine's, as
-              a new version of the vault copy. Comments and layout come from the vault copy.
+              Saving writes the result to your .env and as a new version of the vault copy. Comments
+              and layout come from the vault copy.
             </template>
-            <template v-if="store.settings?.backups ?? true">
-              Your current .env is saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+            <template v-if="!open.length && (!allFromThisMachine || addsMarkers)">
+              <template v-if="store.settings?.backups ?? true">
+                Your current .env is saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+              </template>
+              <template v-else
+                >Backups are off in Settings, so your current .env isn't saved.</template
+              >
             </template>
-            <template v-else
-              >Backups are off in Settings, so your current .env isn't saved.</template
-            >
           </p>
         </template>
 
@@ -436,24 +465,27 @@ watch(
     </div>
 
     <div class="dialog-footer">
-      <button
-        type="button"
-        class="btn"
-        :disabled="busy"
-        title="Review pushing your local copy over the vault copy"
-        @click="emit('keep', 'push')"
-      >
-        Keep local copy…
-      </button>
-      <button
-        type="button"
-        class="btn"
-        :disabled="busy"
-        title="Review pulling the vault copy over your local copy"
-        @click="emit('keep', 'pull')"
-      >
-        Keep vault copy…
-      </button>
+      <!-- Only when there's no table to choose in: a rollback, formatting only, or an error. -->
+      <template v-if="!loading && !mergeable">
+        <button
+          type="button"
+          class="btn"
+          :disabled="busy"
+          title="Review pushing this machine's .env over the vault copy"
+          @click="emit('keep', 'push')"
+        >
+          Keep this machine's file…
+        </button>
+        <button
+          type="button"
+          class="btn"
+          :disabled="busy"
+          title="Review pulling the vault copy over this machine's .env"
+          @click="emit('keep', 'pull')"
+        >
+          Keep the vault's file…
+        </button>
+      </template>
       <span class="grow" />
       <!-- Focused first, so Enter never starts keeping one whole copy. -->
       <button type="button" class="btn" autofocus @click="emit('close')">Cancel</button>

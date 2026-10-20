@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DuplicateLocalKeyError,
+  keepLocal,
   LOCAL_MARKER,
   markedKeys,
   mergePull,
@@ -218,5 +219,31 @@ describe('mergePull with keys taken from the local file', () => {
 
   it('takes nothing without a local file', () => {
     expect(mergePull(text('A=1'), null, local('A'))).toEqual({ text: null, kept: [], unset: [] })
+  })
+})
+
+describe('keepLocal', () => {
+  it('returns the local file byte for byte when nothing needs a marker', () => {
+    const local = '\uFEFF# mine\r\nB=2\r\nexport A = "1" # note\r\nNEW=x'
+    expect(keepLocal(text('A=0', '# theirs', 'B=1', 'GONE=y'), local)).toBe(local)
+  })
+
+  it('marks keys made machine-specific and keys the vault marks, in place', () => {
+    expect(keepLocal(text('A=1', M, 'DB='), text('# db', 'DB=/b', 'PORT=4000'), ['PORT'])).toBe(
+      text('# db', M, 'DB=/b', M, 'PORT=4000')
+    )
+    // Already marked locally: left alone.
+    expect(keepLocal(text(M, 'DB='), text(M, 'DB=/b'), ['DB'])).toBe(text(M, 'DB=/b'))
+  })
+
+  it("appends the vault's machine-specific keys the local file lacks, empty", () => {
+    expect(keepLocal(text(M, 'HOME_DIR=', 'A=1'), 'A=2')).toBe(text('A=2', M, 'HOME_DIR='))
+    expect(keepLocal(`${M}\r\nHOME_DIR=\r\n`, 'A=2\r\n')).toBe(`A=2\r\n${M}\r\nHOME_DIR=\r\n`)
+  })
+
+  it('refuses a key to mark that is assigned more than once', () => {
+    expect(() => keepLocal(text('A=1'), text('PORT=1', 'PORT=2'), ['PORT'])).toThrow(
+      DuplicateLocalKeyError
+    )
   })
 })

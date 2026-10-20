@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { DuplicateKeyError } from '../src/core/envedit'
-import { compareEnv, differingValues, markTakes, MergeError, takesFor } from '../src/core/envmerge'
+import {
+  compareEnv,
+  differingValues,
+  markTakes,
+  MergeError,
+  takesFor,
+  winsEveryKey
+} from '../src/core/envmerge'
 import { LOCAL_MARKER, mergePull, projectEnv } from '../src/core/localkeys'
 
 const M = LOCAL_MARKER
@@ -119,6 +126,26 @@ describe('takesFor', () => {
     expect(() => takesFor(cmp, all.slice(1))).toThrow(MergeError)
     expect(() => takesFor(cmp, [...all, all[0]!])).toThrow(MergeError)
     expect(() => takesFor(cmp, [...all, { key: 'OTHER', take: 'local' }])).toThrow(MergeError)
+  })
+})
+
+describe('winsEveryKey', () => {
+  const cmp = compareEnv(text('A=1', 'NEW=x'), text('A=2', 'GONE=y'))
+  const takes = (
+    a: 'local' | 'vault' | 'machine',
+    gone: 'local' | 'vault'
+  ): ReturnType<typeof takesFor> =>
+    takesFor(cmp, [
+      { key: 'A', take: a },
+      { key: 'NEW', take: 'local' },
+      { key: 'GONE', take: gone }
+    ])
+
+  it("is true only when this machine's copy wins every key", () => {
+    expect(winsEveryKey(cmp, takes('local', 'local'))).toBe(true)
+    expect(winsEveryKey(cmp, takes('machine', 'local'))).toBe(true)
+    expect(winsEveryKey(cmp, takes('local', 'vault'))).toBe(false)
+    expect(winsEveryKey(compareEnv(text('A=1'), text('A=1')), new Map())).toBe(false)
   })
 })
 
