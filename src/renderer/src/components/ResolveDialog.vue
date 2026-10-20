@@ -11,7 +11,14 @@
 // can't be compared get no table, only the two Keep buttons, which open the
 // push or pull review instead.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { MergeKey, MergeKind, MergePreview, MergeTake, RepoRow } from '../../../shared/types'
+import type {
+  KeyChange,
+  MergeKey,
+  MergeKind,
+  MergePreview,
+  MergeTake,
+  RepoRow
+} from '../../../shared/types'
 import { call, store, toast } from '../store'
 import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
 import PullSafety from './PullSafety.vue'
@@ -44,6 +51,17 @@ const KIND_LABEL: Record<MergeKind, string> = {
   differs: 'Different values',
   'local-only': 'Only on this machine',
   'vault-only': 'Only in the vault copy'
+}
+// What happened since the last sync, when it's known (the preview has a base).
+const HERE_LABEL: Record<Exclude<KeyChange, 'same'>, string> = {
+  changed: 'Changed here',
+  added: 'Added here',
+  removed: 'Removed here'
+}
+const THERE_LABEL: Record<Exclude<KeyChange, 'same'>, string> = {
+  changed: 'Changed in the vault copy',
+  added: 'Added in the vault copy',
+  removed: 'Removed from the vault copy'
 }
 
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -104,6 +122,46 @@ const addsMarkers = computed(() => {
   const p = preview.value
   return marking.value.length > 0 || (p !== null && (p.unmarked.length > 0 || p.unset.length > 0))
 })
+// With a base, keys changed on both sides come first; the others start chosen.
+const groups = computed(() => {
+  const p = preview.value
+  if (!p) return []
+  if (!p.hasBase) return [{ title: null, keys: p.keys }]
+  const both = p.keys.filter((k) => k.suggested === null)
+  const chosen = p.keys.filter((k) => k.suggested !== null)
+  return [
+    { title: `Changed on both sides (${both.length})`, keys: both },
+    { title: `Chosen for you (${chosen.length})`, keys: chosen }
+  ].filter((g) => g.keys.length > 0)
+})
+const baseIntro = computed(() =>
+  preview.value?.keys.some((k) => k.suggested === null)
+    ? 'Choose a copy for the keys changed on both sides. Each of the others changed on one side only, so its copy is chosen for you.'
+    : 'Each key changed on one side only since the last sync, so its copy is chosen for you.'
+)
+// Whose comments and layout the result keeps: the rule main applies (MergePlan in sync.ts).
+const ownLayout = computed(() => {
+  const lc = preview.value?.layoutChanged
+  return allFromThisMachine.value || (lc != null && lc.local && !lc.vault)
+})
+const layoutNote = computed(() => {
+  const lc = preview.value?.layoutChanged
+  if (ownLayout.value) return 'Comments and layout come from your .env.'
+  if (lc?.local && lc.vault) {
+    return "Comments and layout come from the vault copy: both sides changed them since the last sync, and this machine's changes to them aren't kept."
+  }
+  return 'Comments and layout come from the vault copy.'
+})
+
+/** What happened to the key: since the last sync when that's known, else how the copies differ. */
+function changeLabel(k: MergeKey): string {
+  if (choices.value.get(k.key) === 'machine') return 'Machine-specific from now on'
+  if (k.here === null || k.there === null) return KIND_LABEL[k.kind]
+  if (k.here === 'same') return k.there === 'same' ? KIND_LABEL[k.kind] : THERE_LABEL[k.there]
+  if (k.there === 'same') return HERE_LABEL[k.here]
+  return 'Changed on both sides'
+}
+
 // Set when the vault copy's extra keys started out as Add (see suggestsAdd).
 const suggested = ref(false)
 
@@ -166,6 +224,10 @@ async function load(keepChoices = false): Promise<void> {
       const take = kept.get(k.key)
       if (take && before.get(k.key) === k.kind) choices.value.set(k.key, take)
     }
+  }
+  // Keys changed on one side only since the last sync start with that side.
+  for (const k of res.data.keys) {
+    if (k.suggested && !choices.value.has(k.key)) choices.value.set(k.key, k.suggested)
   }
   suggested.value = suggestsAdd(res.data)
   if (suggested.value) {
@@ -288,6 +350,7 @@ watch(
                   <strong>Add</strong>. Choose <strong>Leave out</strong> for any you removed on
                   purpose.
                 </template>
+                <template v-else-if="preview.hasBase">{{ baseIntro }}</template>
                 <template v-else>Choose which copy each key comes from.</template>
                 {{ sameInBoth }}
               </span>
@@ -308,21 +371,18 @@ watch(
                   <th class="col-actions"><span class="muted">Keep</span></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody v-for="g in groups" :key="g.title ?? 'all'">
+                <tr v-if="g.title" class="resolve-group">
+                  <th colspan="4">{{ g.title }}</th>
+                </tr>
                 <tr
-                  v-for="k in preview.keys"
+                  v-for="k in g.keys"
                   :key="k.key"
                   :class="{ 'resolve-open': !choices.has(k.key) }"
                 >
                   <td class="resolve-key">
                     <code>{{ k.key }}</code>
-                    <div class="muted small">
-                      {{
-                        choices.get(k.key) === 'machine'
-                          ? 'Machine-specific from now on'
-                          : KIND_LABEL[k.kind]
-                      }}
-                    </div>
+                    <div class="muted small">{{ changeLabel(k) }}</div>
                   </td>
                   <td
                     v-for="side in SIDES"
@@ -428,7 +488,7 @@ watch(
             <template v-if="open.length">
               Choose a copy for every key to see what saving does.
             </template>
-            <template v-else-if="allFromVault">
+            <template v-else-if="allFromVault && !ownLayout">
               Saving puts the vault copy in your .env; the vault copy itself doesn't change.
             </template>
             <template v-else-if="allFromThisMachine">
@@ -438,8 +498,8 @@ watch(
               and makes it the new version of the vault copy.
             </template>
             <template v-else>
-              Saving writes the result to your .env and as a new version of the vault copy. Comments
-              and layout come from the vault copy.
+              Saving writes the result to your .env and as a new version of the vault copy.
+              {{ layoutNote }}
             </template>
             <template v-if="!open.length && (!allFromThisMachine || addsMarkers)">
               <template v-if="store.settings?.backups ?? true">

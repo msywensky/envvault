@@ -840,6 +840,12 @@ code,
   font-size: 12.5px;
 }
 
+/* "Changed on both sides" / "Chosen for you" above their keys. */
+.resolve-table .resolve-group th {
+  padding-top: 14px;
+  text-transform: none;
+}
+
 /* A key still waiting for a choice. */
 .resolve-open td:first-child {
   box-shadow: inset 3px 0 var(--warn-text);
