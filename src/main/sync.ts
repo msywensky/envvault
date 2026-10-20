@@ -139,9 +139,8 @@ function vaultNameOf(cfg: Pick<Settings, 'repoNames'>, folder: string): string {
 /**
  * An entry's key in state.json for this machine's folder `folder` (null: a
  * repo only in the vault). A folder syncing under its own name uses the
- * entry's own key, as before folders could sync as another name; one syncing
- * as another gets its own, so two checkouts of one repo each keep their last
- * sync. A repo id can't contain "@".
+ * entry's own key; one syncing as another gets its own, so two checkouts of
+ * one repo each keep their last sync. A repo id can't contain "@".
  */
 function lastKey(ref: EntryRef, folder: string | null): string {
   const id = folder === null ? ref.repoId : entryId(folder)

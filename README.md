@@ -125,12 +125,11 @@ You can turn the checks off in Settings.
 Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders: `apps/web/.env`, `packages/db/.env`, `supabase/functions/.env`. Variants such as `.env.local` sync too in the repos whose [settings](#repo-settings) include them.
 
 - **Found with git.** EnvVault asks git (`git ls-files`) for every env file it knows of in each repo: ignored ones, and also ones git would commit, or a committed `.env`, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh**; automatic pull and mini mode use what it found then.
-- **Listed under their repo.** A repo with only a root `.env` is one row, as before. Otherwise its name is followed by a row per file. Files found in folders that nobody has pushed yet are listed apart, under _N .env files found in folders, not in the vault yet_, collapsed, each with a **Push** button; they don't count as needing attention.
+- **Listed under their repo.** A repo with only a root `.env` is one row. Otherwise its name is followed by a row per file. Files found in folders that nobody has pushed yet are listed apart, under _N .env files found in folders, not in the vault yet_, collapsed, each with a **Push** button; they don't count as needing attention.
 - **On your other machines,** a pushed file appears as Vault newer and is pulled like any other. A pull never creates a folder: if `apps/web` isn't in that machine's copy of the repo (another branch, a renamed package), the file shows as Vault only.
 - **Next to the file.** A file's backups, its `.env.example` check and its git checks are all in its own folder. **Add to .gitignore** adds the lines to the repo's root `.gitignore`, where they cover every folder.
 - **Symlinks:** a `.env` under a symlinked folder is refused. A symlinked `.env` that isn't in the vault (a shared root `.env` linked into a package, say) is skipped.
 - **In the vault,** such a file is `<repo>.<tag>.file.enc`. The tag is a keyed hash of its path, so the sync folder or git host can see how many `.env` files a repo has, but not their paths. Hover over a row to see the name its vault copy has, for finding it in Drive's version history or the repository's.
-- EnvVault 0.1.0 ignores these files and keeps syncing root `.env` files with newer versions.
 
 ### Repo settings
 
@@ -149,13 +148,13 @@ Click **Settings…** on a repo (on its row, or next to its name when it has sev
 
 Repos with no env files on either side are listed apart too, under **No env files**, with **Edit** (to start a vault copy), **Ignore** and **Settings…**.
 
-If the settings in the vault fail verification, EnvVault uses the built-in ones (every `.env` syncs, no repo is ignored) and offers **Reset settings…**. Settings saved by a newer EnvVault are left alone until you update this one. Update EnvVault on every machine: versions without repo settings ignore them, and show vault copies of variants as errors.
+If the settings in the vault fail verification, EnvVault uses the built-in ones (every `.env` syncs, no repo is ignored) and offers **Reset settings…**. Settings saved by a newer EnvVault are left alone until you update this one.
 
 ### Editing the vault copy
 
 Click **Edit** on a `.env` to change its vault copy in a table of keys and values, without a local `.env`. On a repo with no `.env` and no vault copy, this creates one.
 
-- Values are masked until you click **Show**. You can type or paste a new value into a masked field without displaying it. Multi-line values (such as a PEM key) need **Show** to edit.
+- Values are masked until you click **Show**, and masked again when the window is hidden or after a minute without input. You can type or paste a new value into a masked field without displaying it. Multi-line values (such as a PEM key) need **Show** to edit.
 - You can add, change and remove keys. Machine-specific keys are listed but have no value to edit, since the vault doesn't store one.
 - Comments, blank lines, `export`, spacing and line endings stay as they are. A changed value keeps its line's prefix and trailing comment, and is quoted only as much as dotenv needs to read it back exactly.
 - **Review changes** lists the key names that change. **Save to vault** writes a new version, unless the vault copy changed since you opened the editor; then reload and edit again.

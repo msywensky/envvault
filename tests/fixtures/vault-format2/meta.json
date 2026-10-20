@@ -1,0 +1,12 @@
+{
+  "formatVersion": 2,
+  "vaultId": "8d997f73-95f2-4d83-89ed-7e6f73b24a3d",
+  "kdf": {
+    "alg": "argon2id",
+    "opslimit": 3,
+    "memlimit": 268435456,
+    "salt": "ydquwiUm0bNxp0aJr0ri0Q=="
+  },
+  "secretId": "UcH6ZVVCf4hBjK99Dul0sA==",
+  "keyCheck": "RVZWMXerwyZ1GYSnvH793hTNCokgjc9sNPWeL2Uo4taGy+pqkakSrhU0F63Ss8rUE9GpUh913N3tO+O9fQ=="
+}

@@ -82,8 +82,8 @@ export const entryName = (ref: EntryRef): string =>
   ref.kind === 'root' ? `${ref.repoId}.env.enc` : `${ref.repoId}.${ref.tag}.file.enc`
 
 /**
- * The entry's key in state.json. A root entry's is its repo id, as before
- * file entries existed; "/" can't appear in a repo id, so they never collide.
+ * The entry's key in state.json. A root entry's is its repo id; "/" can't
+ * appear in a repo id, so it never collides with a file entry's.
  */
 export const stateKey = (ref: EntryRef): string =>
   ref.kind === 'root' ? ref.repoId : `${ref.repoId}/${ref.tag}`

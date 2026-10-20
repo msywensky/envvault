@@ -221,7 +221,7 @@ export type Payload = z.infer<typeof PayloadSchema>
 
 // A file entry's payload: the same fields plus the file's path in its repo,
 // which its name only hashes. A separate schema, so a root entry never
-// carries `path` (0.1.0 rejects unknown fields) and a file entry always does.
+// carries `path` and a file entry always does.
 const FilePayloadSchema = z.strictObject({
   ...PayloadSchema.shape,
   path: z.string().min(1).max(255)
@@ -262,8 +262,8 @@ export function encryptPayload(
   repoName: string,
   payload: Payload
 ): Promise<Uint8Array> {
-  // Exactly these fields, even if handed a FilePayload: 0.1.0 reads root
-  // entries with a strict schema.
+  // Exactly these fields, even if handed a FilePayload: root entries are
+  // read with a strict schema.
   const { version, updatedAt, updatedBy, contentHash, envBase64 } = payload
   return sealJson(key, entryAad(repoName), {
     version,
