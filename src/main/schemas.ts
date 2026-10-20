@@ -22,6 +22,7 @@ export const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: 
 const PullReq = z.strictObject({ ...File, expected: Expected })
 const EnvKey = z.string().max(200).regex(KEY_RE)
 const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
+const MergeChoice = z.strictObject({ key: EnvKey, take: z.enum(['local', 'vault']) })
 /** Env file patterns (see shared/envrules): chosen among the files found in a repo, never a path. */
 const Patterns = z
   .array(
@@ -103,6 +104,9 @@ export const requestSchemas = {
   [CH.previewPull]: z.strictObject(File),
   [CH.pull]: PullReq,
   [CH.pullRawDiff]: PullReq.extend({ values: z.boolean() }),
+  [CH.previewMerge]: z.strictObject(File),
+  [CH.mergeValues]: PullReq,
+  [CH.merge]: PullReq.extend({ choices: z.array(MergeChoice).max(1000) }),
   [CH.openEditor]: z.strictObject(File),
   [CH.saveEdit]: z.strictObject({
     ...File,

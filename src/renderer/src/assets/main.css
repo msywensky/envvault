@@ -791,6 +791,45 @@ code,
   text-decoration: line-through;
 }
 
+/* ---------- resolve dialog ---------- */
+
+.resolve-table td {
+  vertical-align: top;
+}
+
+.resolve-key {
+  word-break: break-all;
+}
+
+.resolve-value {
+  width: 26%;
+}
+
+.resolve-text {
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.resolve-table .segmented {
+  white-space: nowrap;
+}
+
+.resolve-table .segment {
+  padding: 3px 10px;
+  font-size: 12.5px;
+}
+
+/* A key still waiting for a choice. */
+.resolve-open td:first-child {
+  box-shadow: inset 3px 0 var(--warn-text);
+}
+
+/* The copy the key will come from. */
+.resolve-taken {
+  background: var(--info-bg);
+}
+
 /* ---------- raw diff (pull dialog) ---------- */
 
 .dialog.dialog-wide {

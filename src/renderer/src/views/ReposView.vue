@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { sameFile } from '../../../shared/envfile'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
 import RemoveDialog from '../components/RemoveDialog.vue'
 import RepoSettingsDialog from '../components/RepoSettingsDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
+import ResolveDialog from '../components/ResolveDialog.vue'
 import SyncDialog from '../components/SyncDialog.vue'
 import { call, enterMini, loadRepos, store, toast } from '../store'
 import {
@@ -19,6 +21,7 @@ import {
 
 const loading = ref(false)
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
+const resolving = ref<RepoRow | null>(null)
 const editing = ref<RepoRow | null>(null)
 const removing = ref<RepoRow | null>(null)
 const configuring = ref<RepoInfo | null>(null)
@@ -68,8 +71,19 @@ async function refresh(rescan: boolean): Promise<void> {
 }
 
 function onAction(repo: RepoRow, action: RowAction): void {
+  if (action === 'resolve') {
+    resolving.value = repo
+    return
+  }
   const mode = action === 'push' || action === 'keep-local' ? 'push' : 'pull'
   open.value = { repo, mode, conflict: action === 'keep-local' || action === 'keep-vault' }
+}
+
+/** From the Resolve dialog: review keeping one whole copy instead. */
+function keepInstead(mode: 'push' | 'pull'): void {
+  const repo = resolving.value
+  resolving.value = null
+  if (repo) open.value = { repo, mode, conflict: true }
 }
 
 /** From the editor: delete the vault copy instead. */
@@ -80,6 +94,7 @@ function removeInstead(): void {
 
 async function onDone(): Promise<void> {
   open.value = null
+  resolving.value = null
   editing.value = null
   removing.value = null
   await refresh(false)
@@ -116,7 +131,16 @@ function openSyncSettings(): void {
 const copies = (n: number): string =>
   n === 0 ? 'Nothing in the vault' : `${n} vault ${n === 1 ? 'copy' : 'copies'}`
 
-onMounted(() => refresh(true))
+onMounted(async () => {
+  await refresh(true)
+  // Mini mode's Resolve… comes back to the full window for this (see MiniView).
+  const file = store.resolveFile
+  store.resolveFile = null
+  if (!file) return
+  const target = { name: file.repoName, local: true, path: file.path, storedName: null }
+  const row = store.repos.find((r) => sameFile(r, target))
+  if (row && actionsFor(row).includes('resolve')) resolving.value = row
+})
 </script>
 
 <template>
@@ -282,6 +306,15 @@ onMounted(() => refresh(true))
       :conflict="open.conflict"
       @close="open = null"
       @done="onDone"
+    />
+
+    <ResolveDialog
+      v-if="resolving"
+      :key="rowKey(resolving)"
+      :repo="resolving"
+      @close="resolving = null"
+      @done="onDone"
+      @keep="keepInstead"
     />
 
     <EnvEditorDialog

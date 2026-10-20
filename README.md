@@ -13,6 +13,7 @@ A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your
 - [Install](#install)
 - [Setup](#setup)
 - [Using it](#using-it)
+  - [Resolving a conflict](#resolving-a-conflict)
   - [Machine-specific keys](#machine-specific-keys)
   - [`.env.example` checks](#envexample-checks)
   - [Monorepos](#monorepos)
@@ -43,22 +44,22 @@ The vault can also be a **private git repository** instead of a synced folder: t
 
 **Sync status** is three-way: local file, vault copy, and what this machine last synced. That separates "local newer", "vault newer" and "conflict". A vault copy whose version went backwards (a rollback) is shown as a conflict, never offered as a simple pull. The one exception is when it is byte-identical to your local file: then nothing would change either way, and it shows as in sync.
 
-| Status      | Meaning                                                                                      | Action                  |
-| ----------- | -------------------------------------------------------------------------------------------- | ----------------------- |
-| In sync     | Local and vault are byte-identical, apart from machine-specific values                       | —                       |
-| Local only  | Never pushed                                                                                 | Push                    |
-| Local newer | Only you changed it since the last sync                                                      | Push                    |
-| Vault newer | Only another machine changed it                                                              | Pull                    |
-| Conflict    | Both changed, or they differ and this machine never synced them, or the vault went backwards | Keep local / Keep vault |
-| Vault only  | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it   | Remove…                 |
-| Excluded    | In the vault, but the repo's settings no longer sync it                                      | Remove…                 |
-| No .env     | Nothing on either side                                                                       | —                       |
+| Status      | Meaning                                                                                      | Action   |
+| ----------- | -------------------------------------------------------------------------------------------- | -------- |
+| In sync     | Local and vault are byte-identical, apart from machine-specific values                       | —        |
+| Local only  | Never pushed                                                                                 | Push     |
+| Local newer | Only you changed it since the last sync                                                      | Push     |
+| Vault newer | Only another machine changed it                                                              | Pull     |
+| Conflict    | Both changed, or they differ and this machine never synced them, or the vault went backwards | Resolve… |
+| Vault only  | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it   | Remove…  |
+| Excluded    | In the vault, but the repo's settings no longer sync it                                      | Remove…  |
+| No .env     | Nothing on either side                                                                       | —        |
 
 Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in **Settings → Sync**). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
 
 To see exactly what a pull would change, click **Show raw diff** in the pull dialog. It shows a line-by-line diff from your `.env` to the vault copy with every value masked (`KEY=••••••••`); comments are shown as they are. Click **Show values** to see the values; they are hidden again after a minute (see [Env values](docs/security.md#env-values)).
 
-![Resolving a conflict: key names only, explicit overwrite](docs/conflict.png)
+![Resolving a conflict: a copy chosen for each key that differs, values masked](docs/conflict.png)
 
 ## Security
 
@@ -93,7 +94,18 @@ npm run build      # typecheck and build to out/
    - **a private git repository:** **Create a new vault repository** makes a private one on your GitHub account through the GitHub CLI, or, without it, opens GitHub's new-repository page so you can paste its URL. **Select an existing one** lists your private GitHub repositories, and always takes a pasted URL (GitHub, GitLab, a server of your own). Use a repository just for the vault: EnvVault refuses one that holds other files, and one that isn't private. For a server of your own that can't be checked from outside (SSH only, say), EnvVault asks you to confirm that the repository is private, once.
      Creating it also offers **Require a setup code on every machine**, on by default and always on for a git vault. EnvVault then shows the vault's setup code once (`EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX`): save it in your password manager next to the master password, and type its last group to continue. You can show it again in **Settings → General**, after entering the password.
 2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password, plus the setup code the first time on each machine. EnvVault won't offer to create a vault where encrypted files already are.
-3. Push and pull from the Repositories table. For a conflict, pick **Keep local** (push, overwriting the vault copy) or **Keep vault** (pull, backing up your local file first).
+3. Push and pull from the Repositories table. For a conflict, click **Resolve…** to choose a copy for each key that differs (see below).
+
+### Resolving a conflict
+
+A conflict means both copies changed since this machine last synced, or they differ and this machine never synced them. **Resolve…** merges them key by key:
+
+- Every key whose copies differ is listed by name: different values, only on this machine, or only in the vault copy. Choose which copy each one comes from. **Use this machine's for all** and **Use the vault's for all** set every key at once.
+- Nothing is chosen for you. EnvVault remembers only a hash of what it last synced, not the content, so it can't tell whether a key only one copy has was added there or removed from the other.
+- Values are masked. **Show values** shows both copies' values; they are hidden again after a minute.
+- **Save to both** writes the result to your `.env` (backed up first, like a pull) and as a new version of the vault copy, so both end in sync. Comments and layout come from the vault copy, and machine-specific keys keep your values, as on a pull.
+- **Keep local copy…** and **Keep vault copy…** replace one whole copy with the other instead: a push that overwrites the vault copy, or a pull.
+- A vault copy that went backwards (a rollback) is never merged, and neither are copies that differ only in formatting or comments: keep one of them.
 
 ### Machine-specific keys
 
@@ -187,7 +199,7 @@ Click **Mini** next to a `.env` to shrink EnvVault to a small window, two rows t
 
 - The status updates when that `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
-- A conflict shows **Resolve…**, which goes back to the full window to choose which copy to keep.
+- A conflict shows **Resolve…**, which goes back to the full window and opens the Resolve dialog there.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
 - **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in **Settings → General**.
 
@@ -274,6 +286,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 
 ## Roadmap
 
+- Resolve conflicts knowing which machine changed each key (a three-way merge), so one-sided changes are chosen for you.
 - Automatic pull on or off per repo, and Sync as offered for git worktrees.
 - Unlock with the Bitwarden CLI.
 - Run a command with the vault copy's values in its environment, without a `.env`.

@@ -1,0 +1,408 @@
+<script setup lang="ts">
+// Resolves a conflict key by key. For every key whose copies differ, the user
+// picks this machine's or the vault's; main merges them (in the vault copy's
+// layout, as a pull does) and writes the result to both sides. Key names
+// only, until Show values: the values arrive from repo:mergeValues, live only
+// in `values` (never the store), and are dropped after a minute, when the
+// window is hidden, on reload, and when the dialog closes or the app locks. A
+// rollback, or copies that differ only in formatting, get just the two Keep
+// buttons, which open the push or pull review instead.
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { MergeKey, MergeKind, MergePreview, MergeTake, RepoRow } from '../../../shared/types'
+import { call, store, toast } from '../store'
+import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
+import PullSafety from './PullSafety.vue'
+
+const props = defineProps<{ repo: RepoRow }>()
+// keep: review keeping one whole copy instead (push for local, pull for vault).
+const emit = defineEmits<{ close: []; done: []; keep: [mode: 'push' | 'pull'] }>()
+
+interface Values {
+  local: string | null
+  vault: string | null
+}
+
+const MASK = '••••••••'
+const HIDE_AFTER_SECONDS = 60
+const TAKES: MergeTake[] = ['local', 'vault']
+/** Each kind's two choices, worded for what the result has: this machine's state, then the vault's. */
+const OPTIONS: Record<MergeKind, Record<MergeTake, string>> = {
+  differs: { local: "This machine's", vault: "Vault's" },
+  'local-only': { local: 'Keep', vault: 'Remove' },
+  'vault-only': { local: 'Leave out', vault: 'Add' }
+}
+const KIND_LABEL: Record<MergeKind, string> = {
+  differs: 'Different values',
+  'local-only': 'Only on this machine',
+  'vault-only': 'Only in the vault copy'
+}
+
+const dialog = ref<HTMLDialogElement | null>(null)
+const loading = ref(true)
+const busy = ref(false)
+const error = ref<string | null>(null)
+const preview = ref<MergePreview | null>(null)
+// A Map, not an object: a key may be named like an Object.prototype property.
+const choices = ref(new Map<string, MergeTake>())
+const values = ref<Map<string, Values> | null>(null)
+const valuesLoading = ref(false)
+// Bumped whenever values are dropped, so a response still in flight is discarded.
+let valuesGen = 0
+let hideTimer: ReturnType<typeof setTimeout> | null = null
+
+const subtitle = computed(() => {
+  if (!preview.value) return 'Choose which copy each key comes from.'
+  return preview.value.neverSynced
+    ? 'This machine has never synced this file, and the two copies differ.'
+    : 'Both copies changed since this machine last synced.'
+})
+// Merged here, or only kept whole with the Keep buttons.
+const mergeable = computed(
+  () => preview.value !== null && !preview.value.rollback && !preview.value.formatOnly
+)
+const blocked = computed(() => {
+  const p = preview.value
+  return p !== null && (!p.ignored || !p.backupIgnored || p.tracked)
+})
+const open = computed(() => preview.value?.keys.filter((k) => !choices.value.has(k.key)) ?? [])
+const canSave = computed(
+  () =>
+    mergeable.value && open.value.length === 0 && !blocked.value && !loading.value && !busy.value
+)
+
+/** Whether a copy has the key at all. */
+const has = (k: MergeKey, take: MergeTake): boolean =>
+  k.kind === 'differs' || k.kind === (take === 'local' ? 'local-only' : 'vault-only')
+
+function choose(key: string, take: MergeTake): void {
+  choices.value.set(key, take)
+}
+
+function chooseAll(take: MergeTake): void {
+  for (const k of preview.value?.keys ?? []) choices.value.set(k.key, take)
+}
+
+function dropValues(): void {
+  valuesGen++
+  values.value = null
+  if (hideTimer) clearTimeout(hideTimer)
+  hideTimer = null
+}
+
+function onVisibility(): void {
+  if (document.hidden) dropValues()
+}
+
+/** Compare again. `keepChoices` keeps the choices for keys still listed the same way. */
+async function load(keepChoices = false): Promise<void> {
+  loading.value = true
+  error.value = null
+  dropValues()
+  const before = new Map(preview.value?.keys.map((k) => [k.key, k.kind]))
+  const kept = choices.value
+  // Never leave an old comparison savable if this reload fails.
+  preview.value = null
+  choices.value = new Map()
+  const res = await call(() => window.envvault.previewMerge(fileOf(props.repo)))
+  loading.value = false
+  if (!res.ok) {
+    error.value = res.error.message
+    return
+  }
+  preview.value = res.data
+  if (keepChoices) {
+    for (const k of res.data.keys) {
+      const take = kept.get(k.key)
+      if (take && before.get(k.key) === k.kind) choices.value.set(k.key, take)
+    }
+  }
+}
+
+async function showValues(): Promise<void> {
+  const p = preview.value
+  if (!p) return
+  valuesLoading.value = true
+  error.value = null
+  const gen = valuesGen
+  // A plain copy: p.expected is a reactive proxy, which IPC can't clone.
+  const { localHash, vaultHash } = p.expected
+  const request = { ...fileOf(props.repo), expected: { localHash, vaultHash } }
+  const res = await call(() => window.envvault.mergeValues(request))
+  valuesLoading.value = false
+  if (!res.ok) return failed(res.error.code, res.error.message)
+  // Hidden or reloaded meanwhile: don't show stale values.
+  if (gen !== valuesGen || document.hidden) return
+  values.value = new Map(res.data.values.map((v) => [v.key, { local: v.local, vault: v.vault }]))
+  hideTimer = setTimeout(dropValues, HIDE_AFTER_SECONDS * 1000)
+}
+
+async function save(): Promise<void> {
+  const p = preview.value
+  if (!canSave.value || !p) return
+  busy.value = true
+  error.value = null
+  // Plain objects only: a reactive proxy can't be cloned across contextBridge.
+  const { localHash, vaultHash } = p.expected
+  const request = {
+    ...fileOf(props.repo),
+    expected: { localHash, vaultHash },
+    choices: p.keys.map(({ key }) => ({ key, take: choices.value.get(key) ?? 'vault' }))
+  }
+  const res = await call(() => window.envvault.merge(request))
+  busy.value = false
+  if (res.ok) {
+    const name = fileTitle(props.repo)
+    const version = `v${res.data.row.vault?.version ?? '?'}`
+    toast(
+      'success',
+      res.data.backupName
+        ? `Resolved ${name} (${version}). Previous .env saved as ${res.data.backupName}.`
+        : `Resolved ${name} (${version}).`
+    )
+    emit('done')
+  } else await failed(res.error.code, res.error.message)
+}
+
+async function failed(code: string, message: string): Promise<void> {
+  if (code === 'LOCKED') return
+  if (code === 'LOCAL_CHANGED' || code === 'VAULT_CHANGED') {
+    // Show the fresh comparison; if reloading itself failed, keep that error.
+    await load(true)
+    if (!error.value) error.value = message
+    return
+  }
+  error.value = message
+}
+
+onMounted(() => {
+  dialog.value?.showModal()
+  document.addEventListener('visibilitychange', onVisibility)
+  void load()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibility)
+  dropValues()
+})
+
+// Close, dropping any values, if the session locks while the dialog is open.
+watch(
+  () => store.lockEpoch,
+  () => emit('close')
+)
+</script>
+
+<template>
+  <dialog
+    ref="dialog"
+    class="dialog dialog-wide"
+    aria-labelledby="resolve-title"
+    @cancel.prevent="emit('close')"
+  >
+    <div class="dialog-header">
+      <h2 id="resolve-title">Resolve conflict: {{ fileTitle(repo) }}</h2>
+      <p class="muted small">{{ subtitle }}</p>
+    </div>
+
+    <div class="dialog-body">
+      <div v-if="loading" class="row muted"><span class="spinner" /> Comparing…</div>
+
+      <template v-else-if="preview">
+        <div v-if="preview.rollback" class="notice notice-warn">
+          <strong>This vault copy is older</strong> than the version last synced on this machine. It
+          may have been restored from a backup or rolled back, so it isn't merged. Keep one of the
+          copies instead.
+        </div>
+        <p v-else-if="preview.formatOnly" class="notice notice-info">
+          No keys differ. Only formatting, comments or line endings do, so keep one of the copies.
+        </p>
+
+        <template v-else>
+          <p v-if="preview.keys.length === 0" class="notice notice-info">
+            The two copies already match. Saving just records them as in sync.
+          </p>
+          <template v-else>
+            <div class="row">
+              <span class="grow muted small">
+                Choose which copy each key comes from.
+                <template v-if="preview.unchanged > 0">
+                  {{ preview.unchanged }} other key{{ preview.unchanged === 1 ? ' is' : 's are' }}
+                  the same in both.
+                </template>
+              </span>
+              <button type="button" class="btn btn-sm" :disabled="busy" @click="chooseAll('local')">
+                Use this machine's for all
+              </button>
+              <button type="button" class="btn btn-sm" :disabled="busy" @click="chooseAll('vault')">
+                Use the vault's for all
+              </button>
+            </div>
+
+            <table class="table resolve-table">
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>This machine</th>
+                  <th>Vault copy</th>
+                  <th class="col-actions"><span class="muted">Keep</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="k in preview.keys"
+                  :key="k.key"
+                  :class="{ 'resolve-open': !choices.has(k.key) }"
+                >
+                  <td class="resolve-key">
+                    <code>{{ k.key }}</code>
+                    <div class="muted small">{{ KIND_LABEL[k.kind] }}</div>
+                  </td>
+                  <td
+                    v-for="take in TAKES"
+                    :key="take"
+                    class="resolve-value"
+                    :class="{ 'resolve-taken': choices.get(k.key) === take }"
+                  >
+                    <span v-if="!has(k, take)" class="muted">—</span>
+                    <template v-else-if="values">
+                      <span v-if="values.get(k.key)?.[take] === ''" class="muted small">
+                        (empty)
+                      </span>
+                      <code v-else class="resolve-text">{{ values.get(k.key)?.[take] }}</code>
+                    </template>
+                    <span v-else class="mono muted">{{ MASK }}</span>
+                  </td>
+                  <td class="col-actions">
+                    <div class="segmented" role="radiogroup" :aria-label="`Copy of ${k.key}`">
+                      <button
+                        v-for="take in TAKES"
+                        :key="take"
+                        type="button"
+                        role="radio"
+                        class="segment"
+                        :class="{ 'segment-active': choices.get(k.key) === take }"
+                        :aria-checked="choices.get(k.key) === take"
+                        :disabled="busy"
+                        @click="choose(k.key, take)"
+                      >
+                        {{ OPTIONS[k.kind][take] }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="row">
+              <template v-if="values">
+                <span class="grow muted small">
+                  <strong>Values are shown in plain text.</strong> Hidden again after
+                  {{ HIDE_AFTER_SECONDS }} seconds.
+                </span>
+                <button type="button" class="btn btn-sm" @click="dropValues">Hide values</button>
+              </template>
+              <template v-else>
+                <span class="grow muted small">Values stay masked until you show them.</span>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="valuesLoading || busy"
+                  @click="showValues"
+                >
+                  <span v-if="valuesLoading" class="spinner" />
+                  Show values
+                </button>
+              </template>
+            </div>
+          </template>
+
+          <!-- Machine-specific keys (# envvault:local): kept as a pull keeps them. -->
+          <div v-if="preview.kept.length" class="diff-group">
+            <h3>Kept on this machine ({{ preview.kept.length }})</h3>
+            <div class="chips">
+              <code v-for="key in preview.kept" :key="key" class="chip chip-kept">{{ key }}</code>
+            </div>
+            <p class="muted small">
+              Marked <code class="marker"># envvault:local</code>: your local values stay as they
+              are.
+            </p>
+          </div>
+          <div v-if="preview.unset.length" class="diff-group">
+            <h3>No value on this machine ({{ preview.unset.length }})</h3>
+            <div class="chips">
+              <code v-for="key in preview.unset" :key="key" class="chip chip-unset">{{ key }}</code>
+            </div>
+            <p class="muted small">
+              Machine-specific keys this machine has no value for. They are written empty; set them
+              afterwards.
+            </p>
+          </div>
+
+          <PullSafety
+            :repo="repo"
+            :ignored="preview.ignored"
+            :backup-ignored="preview.backupIgnored"
+            :tracked="preview.tracked"
+            :disabled="busy"
+            @fixed="load(true)"
+          />
+          <p class="muted small">
+            Saving writes the result to your .env and as a new version of the vault copy. Comments
+            and layout come from the vault copy.
+            <template v-if="store.settings?.backups ?? true">
+              Your current .env is saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+            </template>
+            <template v-else
+              >Backups are off in Settings, so your current .env isn't saved.</template
+            >
+          </p>
+        </template>
+
+        <p class="muted small">
+          Vault copy: v{{ preview.vault.version }} from {{ preview.vault.updatedBy }},
+          <span :title="absoluteTime(preview.vault.updatedAt)">{{
+            relativeTime(preview.vault.updatedAt)
+          }}</span
+          >.
+        </p>
+      </template>
+
+      <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
+    </div>
+
+    <div class="dialog-footer">
+      <button
+        type="button"
+        class="btn"
+        :disabled="busy"
+        title="Review pushing your local copy over the vault copy"
+        @click="emit('keep', 'push')"
+      >
+        Keep local copy…
+      </button>
+      <button
+        type="button"
+        class="btn"
+        :disabled="busy"
+        title="Review pulling the vault copy over your local copy"
+        @click="emit('keep', 'pull')"
+      >
+        Keep vault copy…
+      </button>
+      <span class="grow" />
+      <!-- Focused first, so Enter never starts keeping one whole copy. -->
+      <button type="button" class="btn" autofocus @click="emit('close')">Cancel</button>
+      <button
+        v-if="mergeable"
+        type="button"
+        class="btn btn-primary"
+        :disabled="!canSave"
+        :title="open.length ? 'Choose a copy for every key first' : undefined"
+        @click="save"
+      >
+        <span v-if="busy" class="spinner" />
+        Save to both
+      </button>
+    </div>
+  </dialog>
+</template>

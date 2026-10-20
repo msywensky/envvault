@@ -1,6 +1,7 @@
 // A small reactive store (no Pinia). It never holds env values: main sends
-// key names, statuses and metadata, and the one response with values (the
-// raw pull diff after "Show values") is fetched and held only by SyncDialog.
+// key names, statuses and metadata, and the responses with values (after a
+// "Show values" click, and the editor's) are fetched and held only by the
+// dialog that shows them.
 import { reactive } from 'vue'
 import { sameFile } from '../../shared/envfile'
 import { autoPullMessage, cliPushMessage } from '../../shared/messages'
@@ -46,7 +47,9 @@ export const store = reactive({
   /** Bumped whenever the session locks, so open dialogs close themselves. */
   lockEpoch: 0,
   /** Mini mode's env file (see MiniView), or null for the full window. */
-  mini: null as EnvFile | null
+  mini: null as EnvFile | null,
+  /** A conflict to open the Resolve dialog for once the full window is back (see MiniView). */
+  resolveFile: null as EnvFile | null
 })
 
 let nextToastId = 1

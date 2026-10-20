@@ -164,7 +164,10 @@ const removable = (row: RepoRow): boolean =>
                 type="button"
                 class="btn btn-sm"
                 :class="{
-                  'btn-primary': i === 0 && line.row.status !== 'conflict' && !isQuiet(line.row)
+                  'btn-primary':
+                    i === 0 &&
+                    (line.row.status !== 'conflict' || action === 'resolve') &&
+                    !isQuiet(line.row)
                 }"
                 @click="$emit('action', line.row, action)"
               >

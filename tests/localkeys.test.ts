@@ -144,3 +144,60 @@ describe('mergePull', () => {
     expect(mergePull(text('A=1', 'A=2'), text('A=3', 'A=4')).text).toBeNull()
   })
 })
+
+describe('mergePull with keys taken from the local file', () => {
+  const local = (...keys: string[]): Map<string, 'local'> => new Map(keys.map((k) => [k, 'local']))
+
+  it('puts the local lines of a key both have in the vault position', () => {
+    const vault = text('# shared', 'A=2', 'B=vault', 'C=3')
+    expect(mergePull(vault, text('C=0', 'B="local" # mine', 'A=1'), local('B'))).toEqual({
+      text: text('# shared', 'A=2', 'B="local" # mine', 'C=3'),
+      kept: [],
+      unset: []
+    })
+  })
+
+  it('drops a vault key the local file lacks, with its marker line', () => {
+    expect(mergePull(text('A=1', 'GONE=x', 'B=2'), text('A=1', 'B=2'), local('GONE')).text).toBe(
+      text('A=1', 'B=2')
+    )
+    expect(mergePull(text('A=1', M, 'GONE=', 'B=2'), text('A=1', 'B=2'), local('GONE')).text).toBe(
+      text('A=1', 'B=2')
+    )
+  })
+
+  it('appends local-only keys in local order, after kept ones in the same order', () => {
+    expect(
+      mergePull(text('A=1'), text('NEW2=b', M, 'DB=/b', 'A=1', 'NEW1=a'), local('NEW1', 'NEW2'))
+        .text
+    ).toBe(text('A=1', 'NEW2=b', M, 'DB=/b', 'NEW1=a'))
+    expect(mergePull('A=1', text('A=1', 'NEW=a'), local('NEW')).text).toBe(text('A=1', 'NEW=a'))
+    expect(mergePull('A=1\r\n', 'NEW=a', local('NEW')).text).toBe('A=1\r\nNEW=a\r\n')
+  })
+
+  it('leaves vault lines alone for keys not taken, and kept keys kept', () => {
+    const vault = text('A=2', M, 'DB=', 'B=3')
+    expect(mergePull(vault, text('A=1', 'DB=/b', 'B=0'), local('A', 'DB')).text).toBe(
+      text('A=1', M, 'DB=/b', 'B=3')
+    )
+  })
+
+  it('keeps a multi-line local value verbatim, ending like the vault line', () => {
+    expect(
+      mergePull('PEM=x\r\nA=1\r\n', text('PEM="-----BEGIN', 'abc', '-----END"'), local('PEM')).text
+    ).toBe('PEM="-----BEGIN\nabc\n-----END"\r\nA=1\r\n')
+  })
+
+  it('refuses a taken key that is assigned more than once in either file', () => {
+    expect(() => mergePull(text('A=1'), text('A=2', 'A=3'), local('A'))).toThrow(
+      DuplicateLocalKeyError
+    )
+    expect(() => mergePull(text('A=1', 'A=2'), text('A=3'), local('A'))).toThrow(
+      DuplicateLocalKeyError
+    )
+  })
+
+  it('takes nothing without a local file', () => {
+    expect(mergePull(text('A=1'), null, local('A'))).toEqual({ text: null, kept: [], unset: [] })
+  })
+})

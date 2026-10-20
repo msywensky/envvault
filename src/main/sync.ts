@@ -1,7 +1,8 @@
 // Push / pull flows, one env file at a time: a repo's root .env, or one in a
 // folder inside it (see core/envpath). Every function takes a private copy
 // of the key (see session.withKey) and returns metadata and key names only,
-// never values, except pullRawDiff, which the user asks for explicitly.
+// never values, except pullRawDiff, mergeValues and the editor's, which the
+// user asks for explicitly.
 // Serialisation (one write at a time) is done by the IPC handlers.
 // Machine-specific keys (# envvault:local, see core/localkeys) are blanked in
 // what a push uploads and status hashes, and kept from the local file by a
@@ -19,6 +20,7 @@ import {
   isBackupOf
 } from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
+import { compareEnv, differingValues, MergeError, takesFor } from '../core/envmerge'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys } from '../core/localkeys'
@@ -41,6 +43,11 @@ import type {
   ExampleCheck,
   Expected,
   GitignoreResult,
+  LastSync,
+  MergePreview,
+  MergeRequest,
+  MergeResult,
+  MergeValues,
   PullPreview,
   PullRequest,
   PullResult,
@@ -732,23 +739,27 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
     checkExpected(s, req.expected)
-    const name = envFileName(s.file.path)
-    const [tracked, ignored] = await Promise.all([
-      isTracked(envDir, name),
-      checkIgnored(envDir, name)
-    ])
-    if (tracked) {
-      throw new AppError(
-        'ENV_TRACKED',
-        `${s.file.path} is committed to git. Run \`git rm --cached ${s.file.path}\`, commit, then retry.`
-      )
-    }
-    if (!ignored) {
-      throw new AppError('ENV_NOT_IGNORED', `${s.file.path} is not in .gitignore. Add it first.`)
-    }
-
+    await requirePullable(s, envDir)
     return { backupName: await applyPull(s, envDir, s.payload, s.vault, vaultId) }
   })
+}
+
+/** Secrets are written only into an env file git ignores and doesn't track. */
+async function requirePullable(s: Snapshot, envDir: string): Promise<void> {
+  const name = envFileName(s.file.path)
+  const [tracked, ignored] = await Promise.all([
+    isTracked(envDir, name),
+    checkIgnored(envDir, name)
+  ])
+  if (tracked) {
+    throw new AppError(
+      'ENV_TRACKED',
+      `${s.file.path} is committed to git. Run \`git rm --cached ${s.file.path}\`, commit, then retry.`
+    )
+  }
+  if (!ignored) {
+    throw new AppError('ENV_NOT_IGNORED', `${s.file.path} is not in .gitignore. Add it first.`)
+  }
 }
 
 /**
@@ -791,33 +802,59 @@ async function applyPull(
   vaultId: string
 ): Promise<string | null> {
   let backup: string | null = null
-  const fileName = envFileName(s.file.path)
   const bytes = mergedBytes(decodeEnv(payload), s.local).bytes
   try {
     if (sha256Hex(bytes) !== s.localHash) {
-      // The temp file holds plaintext, so it is named to match .env.bak.*
-      // and checked like the backup: a crash must never leave secrets in an
-      // un-ignored file.
-      const tmpName = `.env.bak.tmp-${randomHex(8)}`
-      const wantBackup =
-        s.local && s.cfg.backups ? backupName(fileName, backupStamp(new Date())) : null
-      for (const name of [tmpName, wantBackup]) {
-        if (name && !(await checkIgnored(envDir, name))) {
-          throw new AppError(
-            'BACKUP_NOT_IGNORED',
-            `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
-          )
-        }
-      }
-      if (s.local && wantBackup) backup = await writeBackup(envDir, wantBackup, s.local)
-      await atomicWrite(envDir, fileName, bytes, { tmpName, mode: 0o600 })
-      // Only once the file is written: a failed pull never costs an older backup.
-      if (backup) await pruneBackups(envDir, fileName, s.cfg.backupCount)
+      backup = await writeLocal(s, envDir, bytes, await localWriteNames(s, envDir))
     }
   } finally {
     bytes.fill(0)
   }
   await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+  return backup
+}
+
+/** The temp file and backup a write of the local env file uses (see writeLocal). */
+interface WriteNames {
+  tmpName: string
+  backup: string | null
+}
+
+/**
+ * Names for writeLocal, checked to be git-ignored. The temp file holds
+ * plaintext, so it is named to match .env.bak.* and checked like the backup:
+ * a crash must never leave secrets in an un-ignored file.
+ */
+async function localWriteNames(s: Snapshot, envDir: string): Promise<WriteNames> {
+  const tmpName = `.env.bak.tmp-${randomHex(8)}`
+  const backup =
+    s.local && s.cfg.backups ? backupName(envFileName(s.file.path), backupStamp(new Date())) : null
+  for (const name of [tmpName, backup]) {
+    if (name && !(await checkIgnored(envDir, name))) {
+      throw new AppError(
+        'BACKUP_NOT_IGNORED',
+        `${name} would not be ignored by git. Add ".env.bak.*" to .gitignore.`
+      )
+    }
+  }
+  return { tmpName, backup }
+}
+
+/**
+ * Replace the local env file with `bytes`, backing up the bytes read in the
+ * snapshot first. Returns the backup's name, or null if none was made.
+ */
+async function writeLocal(
+  s: Snapshot,
+  envDir: string,
+  bytes: Buffer,
+  names: WriteNames
+): Promise<string | null> {
+  const fileName = envFileName(s.file.path)
+  const backup = s.local && names.backup ? await writeBackup(envDir, names.backup, s.local) : null
+  await atomicWrite(envDir, fileName, bytes, { tmpName: names.tmpName, mode: 0o600 })
+  // Only once the file is written: a failed pull never costs an older backup.
+  if (backup) await pruneBackups(envDir, fileName, s.cfg.backupCount)
   return backup
 }
 
@@ -861,6 +898,148 @@ async function pruneBackups(dir: string, fileName: string, keep: number): Promis
       console.error(`[envvault] removing an old backup failed: ${errnoCode(err) ?? 'unknown'}`)
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resolving a conflict key by key (see core/envmerge). The merged file is
+// written to both sides, so they end in sync. Like pullRawDiff, mergeValues
+// returns env values, when the user asks to see them.
+
+const noLocalToMerge = (): AppError =>
+  new AppError('ENV_NOT_FOUND', 'This repo has no .env to merge with the vault copy.')
+
+/** The vault copy went backwards since the last sync here (see computeStatus). */
+const rolledBack = (vault: VaultInfo, last: LastSync | null): boolean =>
+  last !== null && vault.version < last.version
+
+function merging<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    if (err instanceof DuplicateKeyError) {
+      throw new AppError(
+        'ENV_DUPLICATE_KEY',
+        "A key is assigned more than once in .env or the vault copy, so they can't be merged key by key. Keep one copy instead, or remove the duplicate."
+      )
+    }
+    // MergeError messages are fixed strings that never contain keys or values.
+    if (err instanceof MergeError) throw new AppError('MERGE_INVALID', err.message)
+    throw err
+  }
+}
+
+/** The keys that differ between the local env file and its vault copy. Key names only. */
+export function previewMerge(
+  key: Uint8Array,
+  vaultId: string,
+  file: EnvFile
+): Promise<MergePreview> {
+  return withSnapshot(key, file, async (s) => {
+    if (!s.local) throw noLocalToMerge()
+    if (!s.payload || !s.vault) throw noVaultCopy()
+    const envDir = folderFor(s)
+    const [last, git] = await Promise.all([
+      getLast(vaultId, s.id),
+      ignoreStatus(envDir, envFileName(s.file.path))
+    ])
+    const vaultBytes = decodeEnv(s.payload)
+    try {
+      const local = s.local
+      const cmp = merging(() => compareEnv(local.toString('utf8'), vaultBytes.toString('utf8')))
+      return {
+        keys: cmp.keys,
+        unchanged: cmp.unchanged,
+        kept: cmp.kept,
+        unset: cmp.unset,
+        formatOnly: cmp.keys.length === 0 && s.syncedHash !== s.vault.contentHash,
+        vault: s.vault,
+        neverSynced: last === null,
+        rollback: rolledBack(s.vault, last),
+        ...git,
+        expected: expectedOf(s)
+      }
+    } finally {
+      vaultBytes.fill(0)
+    }
+  })
+}
+
+/**
+ * Both copies' values of the keys previewMerge lists: one of the few places
+ * env values leave the main process, when the user asks for them. Only for
+ * the content the user reviewed.
+ */
+export function mergeValues(key: Uint8Array, req: PullRequest): Promise<MergeValues> {
+  return withSnapshot(key, req, async (s) => {
+    if (!s.local) throw noLocalToMerge()
+    if (!s.payload) throw noVaultCopy()
+    folderFor(s)
+    checkExpected(s, req.expected)
+    const vaultBytes = decodeEnv(s.payload)
+    try {
+      const local = s.local
+      return {
+        values: merging(() => differingValues(local.toString('utf8'), vaultBytes.toString('utf8')))
+      }
+    } finally {
+      vaultBytes.fill(0)
+    }
+  })
+}
+
+/**
+ * Merge the two copies with the user's choice for every key that differs,
+ * then write the result to both sides: the vault copy first (if it changes),
+ * then the local env file, backed up like a pull. All checks run before
+ * either write. If the local write fails, the last sync stays as it was, so
+ * the file still shows as a conflict and resolving again lists only the keys
+ * that still differ.
+ */
+export function merge(key: Uint8Array, vaultId: string, req: MergeRequest): Promise<MergeResult> {
+  return withSnapshot(key, req, async (s) => {
+    if (!s.local) throw noLocalToMerge()
+    if (!s.payload || !s.vault) throw noVaultCopy()
+    const envDir = folderFor(s)
+    checkExpected(s, req.expected)
+    const last = await getLast(vaultId, s.id)
+    if (rolledBack(s.vault, last)) {
+      throw new AppError(
+        'MERGE_INVALID',
+        'The vault copy is older than the version last synced here, so it is not merged. Keep one of the copies instead.'
+      )
+    }
+    const local = s.local
+    const vaultBytes = decodeEnv(s.payload)
+    let merged: Buffer | null = null
+    let synced: Buffer | null = null
+    try {
+      const takes = merging(() =>
+        takesFor(compareEnv(local.toString('utf8'), vaultBytes.toString('utf8')), req.choices)
+      )
+      await requirePullable(s, envDir)
+      // Takes ownership of vaultBytes (returned as is, or wiped).
+      merged = mergedBytes(vaultBytes, local, takes).bytes
+      if (merged.length > MAX_ENV_BYTES) {
+        throw new AppError('ENV_TOO_LARGE', 'The merged .env would be larger than 1 MiB.')
+      }
+      synced = syncedBytes(merged)
+      const names = sha256Hex(merged) !== s.localHash ? await localWriteNames(s, envDir) : null
+
+      let vault = s.vault
+      if (sha256Hex(synced) !== vault.contentHash) {
+        const payload = makePayload(synced, nextVersion(vault, last), s.cfg.machineName)
+        await s.cfg.vault.write(s.keys, s.stored, payload, s.vaultVersion)
+        vault = toInfo(payload)
+      }
+      const backupName = names ? await writeLocal(s, envDir, merged, names) : null
+      await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+      return { row: syncedRow(s, vault), backupName }
+    } finally {
+      if (synced !== merged) synced?.fill(0)
+      merged?.fill(0)
+      vaultBytes.fill(0)
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 // Push (or Pull) button with the window's controls, and the row below its
 // status. Main keeps the row fresh (EV.repoStatus, see src/main/mini.ts), so
 // nothing here polls. A push or pull still goes through SyncDialog's review;
-// the window grows while it's open. A conflict's two choices don't fit, so
-// Resolve goes back to the full window. When the vault locks, a compact
+// the window grows while it's open. A conflict's Resolve dialog doesn't fit,
+// so Resolve goes back to the full window and opens it there. When the vault locks, a compact
 // unlock form takes over; anything it can't handle (a setup code, no vault
 // yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
@@ -43,7 +43,7 @@ const canUnlockHere = computed(
 )
 const onTop = computed(() => store.settings?.miniOnTop ?? true)
 const actions = computed(() => (row.value ? actionsFor(row.value) : []))
-const conflict = computed(() => row.value?.status === 'conflict' && actions.value.length > 1)
+const conflict = computed(() => actions.value.includes('resolve'))
 const vaultInfo = computed(() => {
   const v = row.value?.vault
   if (!v) return ''
@@ -66,6 +66,12 @@ async function review(repo: RepoRow, action: RowAction): Promise<void> {
   if (!res.ok) return
   const mode = action === 'push' || action === 'keep-local' ? 'push' : 'pull'
   open.value = { repo, mode, conflict: action === 'keep-local' || action === 'keep-vault' }
+}
+
+/** Open the Resolve dialog in the full window (see ReposView). */
+async function resolve(file: RepoRow): Promise<void> {
+  store.resolveFile = fileOf(file)
+  await exitMini()
 }
 
 async function closeReview(done: boolean): Promise<void> {
@@ -163,8 +169,8 @@ watch(locked, async (now) => {
           v-if="conflict"
           type="button"
           class="btn btn-sm"
-          title="Choose which copy to keep, in the full window"
-          @click="exitMini"
+          title="Choose which copy each key comes from, in the full window"
+          @click="resolve(row)"
         >
           Resolve…
         </button>

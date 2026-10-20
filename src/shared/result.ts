@@ -37,6 +37,7 @@ export type ErrorCode =
   | 'ENV_NOT_UTF8'
   | 'ENV_DUPLICATE_KEY'
   | 'EDIT_INVALID'
+  | 'MERGE_INVALID'
   | 'ENV_NOT_IGNORED'
   | 'ENV_TRACKED'
   | 'BACKUP_NOT_IGNORED'

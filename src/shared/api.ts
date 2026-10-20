@@ -8,6 +8,10 @@ import type {
   GitignoreResult,
   GitRepoChoice,
   Layout,
+  MergePreview,
+  MergeRequest,
+  MergeResult,
+  MergeValues,
   PullPreview,
   PullRequest,
   PullResult,
@@ -50,6 +54,9 @@ export interface Responses {
   'repo:previewPull': PullPreview
   'repo:pull': PullResult
   'repo:pullRawDiff': RawDiff
+  'repo:previewMerge': MergePreview
+  'repo:mergeValues': MergeValues
+  'repo:merge': MergeResult
   'repo:openEditor': EditorData
   'repo:saveEdit': SaveEditResult
   'repo:removeFromVault': null
@@ -110,6 +117,12 @@ export interface EnvVaultApi {
   pull(request: PullRequest): R<'repo:pull'>
   /** Line-by-line diff of what a pull would write, masked unless `values` is set. */
   pullRawDiff(request: RawDiffRequest): R<'repo:pullRawDiff'>
+  /** The keys whose local and vault values differ, for resolving a conflict. Key names only. */
+  previewMerge(file: EnvFile): R<'repo:previewMerge'>
+  /** Both values of each key previewMerge lists (see ResolveDialog). */
+  mergeValues(request: PullRequest): R<'repo:mergeValues'>
+  /** Merge with a copy chosen per key, and write the result to both sides. */
+  merge(request: MergeRequest): R<'repo:merge'>
   /** The vault copy as editor rows, values included (see EnvEditorDialog). */
   openEditor(file: EnvFile): R<'repo:openEditor'>
   /** Apply edits to the vault copy, if it is still the one openEditor returned. */

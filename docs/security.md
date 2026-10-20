@@ -41,9 +41,10 @@
 
 ## Env values
 
-**Env values cross IPC in only two places: the raw pull diff after you click Show values, and the vault-copy editor.** Everything else is key names, statuses and metadata, and no value is ever logged.
+**Env values cross IPC in only three places: the raw pull diff and the Resolve dialog after you click Show values, and the vault-copy editor.** Everything else is key names, statuses and metadata, and no value is ever logged.
 
 - **The raw diff** is masked in the main process: values, multi-line continuations and unrecognised lines become `••••••••`. **Show values** sends only the changed lines plus 3 lines of context, for the exact content the preview showed. Values stay only in the pull dialog, never the app's store, and are dropped after 60 seconds, when the window is hidden, the dialog closes or EnvVault locks.
+- **The Resolve dialog** gets both copies' values of the keys that differ, only when you click **Show values**, for the exact content it compared. They stay only in that dialog and are dropped like the raw diff's. Your choices go back as key names; the main process builds the merged file itself.
 - **The editor** receives the vault copy's values when it opens, and sends back only the keys you changed, with the version it opened, so it can't overwrite a newer copy. Values stay only in the editor, never the app's store, and are dropped when it closes or EnvVault locks. How it masks them is in [Editing the vault copy](../README.md#editing-the-vault-copy).
 
 ## Data handling
@@ -54,6 +55,7 @@
 - **`.env.example`** is read with the same checks as `.env` (and at most 1 MiB), only to compare it. Only key names leave the main process.
 - **Machine-specific values** (`# envvault:local`) are never uploaded: the vault copy has `KEY=` under the marker.
 - **Pulls** are refused unless the env file is git-ignored and **not tracked**, checked by git in the file's folder. The backup and the temp file are named so `.env.bak.*` covers them, and are checked too. A pull never creates a folder.
+- **Resolving a conflict** writes both sides: every check (the content you reviewed, no rollback, the pull's git checks) runs first, then the vault copy is written at the version you reviewed, then your env file, as a pull writes it.
 - **Removing a vault copy** deletes only the version you saw, touches no `.env`, and keeps that version as this machine's floor, so a later push continues above it.
 - **Writes** are atomic (temp file, fsync, rename) and conditional: a vault file is written only if it's still at the version EnvVault read, so a push can't overwrite a copy that changed after review, and `meta.json` only if none exists. In a synced folder this is exact on one machine, best effort between machines.
 - **`meta.json` is attacker-controlled:** its KDF parameters must be between MODERATE and SENSITIVE (no downgrade, no denial of service), the key check is bound to the vault ID, and EnvVault won't create a vault where encrypted entries already exist.
