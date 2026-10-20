@@ -70,7 +70,7 @@ export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
  */
 export const isQuiet = (row: RepoRow): boolean =>
   row.path !== null && row.path.includes('/') && row.status === 'local-only'
-export type RowAction = 'push' | 'pull' | 'keep-local' | 'keep-vault'
+export type RowAction = 'push' | 'pull' | 'resolve' | 'keep-local' | 'keep-vault'
 
 export const STATUS_LABEL: Record<RowStatus, string> = {
   'in-sync': 'In sync',
@@ -106,7 +106,8 @@ export function actionsFor(row: RepoRow): RowAction[] {
     case 'vault-newer':
       return ['pull']
     case 'conflict':
-      return row.hasEnv ? ['keep-local', 'keep-vault'] : ['keep-vault']
+      // With no local file there is nothing to merge: only the vault copy can be kept.
+      return row.hasEnv ? ['resolve'] : ['keep-vault']
     default:
       return []
   }
@@ -133,6 +134,7 @@ export function envKeyProblem(key: string): string | null {
 export const ACTION_LABEL: Record<RowAction, string> = {
   push: 'Push',
   pull: 'Pull',
+  resolve: 'Resolve…',
   'keep-local': 'Keep local',
   'keep-vault': 'Keep vault'
 }

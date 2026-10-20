@@ -8,8 +8,9 @@
 // reloaded.
 import { computed, onMounted, ref, watch } from 'vue'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
-import { call, run, store, toast } from '../store'
+import { call, store, toast } from '../store'
 import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
+import PullSafety from './PullSafety.vue'
 import RawDiffView from './RawDiffView.vue'
 
 const props = defineProps<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean }>()
@@ -152,16 +153,6 @@ async function failed(code: string, message: string): Promise<void> {
     return
   }
   error.value = message
-}
-
-async function fixGitignore(): Promise<void> {
-  busy.value = true
-  const res = await run(() => window.envvault.addGitignore(fileOf(props.repo)))
-  busy.value = false
-  if (res) {
-    toast('success', 'Added .env and .env.bak.* to .gitignore.')
-    await load()
-  }
 }
 
 onMounted(() => {
@@ -346,28 +337,14 @@ watch(
 
         <!-- Pull: safety checks. -->
         <template v-if="pullPreview">
-          <div v-if="pullPreview.tracked" class="notice notice-error">
-            <strong>.env is committed to git.</strong> Pulling would put secrets in your next
-            commit. Run <code>git rm --cached .env</code> in this repo, commit, then try again.
-          </div>
-          <div
-            v-else-if="!pullPreview.ignored || !pullPreview.backupIgnored"
-            class="notice notice-error stack"
-          >
-            <span v-if="!pullPreview.ignored">
-              <strong>.env is not in .gitignore.</strong> EnvVault won't write secrets into a file
-              git would pick up.
-            </span>
-            <span v-else>
-              <strong>Backups wouldn't be git-ignored.</strong> Pulling saves your current .env as
-              <code>.env.bak.&lt;timestamp&gt;</code>, which .gitignore doesn't cover yet.
-            </span>
-            <div>
-              <button type="button" class="btn btn-sm" :disabled="busy" @click="fixGitignore">
-                Add .env to .gitignore
-              </button>
-            </div>
-          </div>
+          <PullSafety
+            :repo="repo"
+            :ignored="pullPreview.ignored"
+            :backup-ignored="pullPreview.backupIgnored"
+            :tracked="pullPreview.tracked"
+            :disabled="busy"
+            @fixed="load"
+          />
           <div v-if="pullPreview.rollback" class="notice notice-warn">
             <strong>This vault copy is older</strong> than the version last synced on this machine.
             It may have been restored from a backup or rolled back.
