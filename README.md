@@ -54,7 +54,7 @@ The vault can also be a **private git repository** instead of a synced folder: t
 | Excluded    | In the vault, but the repo's settings no longer sync it                                      | Remove…                 |
 | No .env     | Nothing on either side                                                                       | —                       |
 
-Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in Settings). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
+Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in **Settings → Sync**). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
 
 To see exactly what a pull would change, click **Show raw diff** in the pull dialog. It shows a line-by-line diff from your `.env` to the vault copy with every value masked (`KEY=••••••••`); comments are shown as they are. Click **Show values** to see the values; they are hidden again after a minute (see [Env values](docs/security.md#env-values)).
 
@@ -91,7 +91,7 @@ npm run build      # typecheck and build to out/
 1. **First machine:** choose your projects folder (the folder that contains your git repos) and the vault, then create the vault with a master password of at least 12 characters that isn't easy to guess (several random words, or one your password manager generates). The vault is either:
    - **a synced folder:** pick it with the folder picker;
    - **a private git repository:** **Create a new vault repository** makes a private one on your GitHub account through the GitHub CLI, or, without it, opens GitHub's new-repository page so you can paste its URL. **Select an existing one** lists your private GitHub repositories, and always takes a pasted URL (GitHub, GitLab, a server of your own). Use a repository just for the vault: EnvVault refuses one that holds other files, and one that isn't private. For a server of your own that can't be checked from outside (SSH only, say), EnvVault asks you to confirm that the repository is private, once.
-     Creating it also offers **Require a setup code on every machine**, on by default and always on for a git vault. EnvVault then shows the vault's setup code once (`EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX`): save it in your password manager next to the master password, and type its last group to continue. You can show it again in Settings, after entering the password.
+     Creating it also offers **Require a setup code on every machine**, on by default and always on for a git vault. EnvVault then shows the vault's setup code once (`EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX`): save it in your password manager next to the master password, and type its last group to continue. You can show it again in **Settings → General**, after entering the password.
 2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password, plus the setup code the first time on each machine. EnvVault won't offer to create a vault where encrypted files already are.
 3. Push and pull from the Repositories table. For a conflict, pick **Keep local** (push, overwriting the vault copy) or **Keep vault** (pull, backing up your local file first).
 
@@ -118,7 +118,7 @@ If a repo has a `.env.example`, the push and pull dialogs compare it with the `.
 - keys your `.env` has that `.env.example` doesn't document;
 - values that are the same in both files and look like secrets, since `.env.example` is usually committed. A value looks like a secret if it is a URL with a password for a non-local host, 8+ characters under a key name such as `*_SECRET`, `*_TOKEN`, `*_PASSWORD` or `*_KEY`, or a long token-like string. Localhost URLs, ports, other plain values and browser-public keys (`VITE_`, `NEXT_PUBLIC_`, ...) are never flagged.
 
-You can turn the checks off in Settings.
+You can turn the checks off in **Settings → Sync**.
 
 ### Monorepos
 
@@ -135,7 +135,7 @@ Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders
 
 Click **Settings…** on a repo (on its row, or next to its name when it has several files) to choose what EnvVault does with it. Everything except **Sync as** is kept in the vault, encrypted, so every machine uses the same settings.
 
-- **Env files to sync** and **Env files not to sync** are patterns, one per line. By default every repo syncs each `.env`, in any folder. **Defaults…**, above the list, changes that for every repo without lists of its own.
+- **Env files to sync** and **Env files not to sync** are patterns, one per line. By default every repo syncs each `.env`, in any folder. **Defaults…**, above the list, opens **Settings → Sync**, where you change that for every repo without lists of its own.
   - A name matches in every folder: `.env.local`, `.env.*`, `.env.*.local`. A path is from the repo root: `apps/*/.env.local`. A path whose last part isn't a file name means a folder and everything in it: `apps/legacy`, `**/fixtures`. `*` matches within a name, `**` any number of folders, and case doesn't matter.
   - Exclude wins. A Next.js or Vite app that commits `.env` with its defaults and keeps its secrets in `.env.local` syncs `.env.local` only: include `.env.local`.
   - Never synced, whatever the patterns say: templates (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`, also after another name, as in `.env.local.example`) and EnvVault's own backups (`.env.bak.*`). Variants git tracks, such as a committed `.env.development`, aren't listed either: git already syncs them.
@@ -171,7 +171,7 @@ Click **Remove…** on a Vault only row (a repo or package that's gone), or **Re
 
 ### Automatic pull
 
-Off by default; turn it on in Settings. While EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for `.env` files whose vault copy changed on another machine while your file didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
+Off by default; turn it on in **Settings → Sync**. While EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for `.env` files whose vault copy changed on another machine while your file didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
 
 - It never pulls a conflict, a rollback, or a `.env` that isn't git-ignored or is tracked; those keep their **Pull** button. Nor one whose folder isn't there.
 - It creates a missing `.env` when the vault has a copy, including one you deleted.
@@ -189,11 +189,11 @@ Click **Mini** next to a `.env` to shrink EnvVault to a small window, two rows t
 - **Push** still shows the review first: the window grows for it, then shrinks back.
 - A conflict shows **Resolve…**, which goes back to the full window to choose which copy to keep.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
-- **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in Settings.
+- **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in **Settings → General**.
 
 ### Command line
 
-Turn on **Allow command-line access** in Settings. Then, while EnvVault is running and unlocked, run `envvault` inside a repo in your projects folder:
+Turn on **Allow command-line access** in **Settings → Command line**. Then, while EnvVault is running and unlocked, run `envvault` inside a repo in your projects folder:
 
 ```sh
 envvault status                  # the status of this repo's .env files (--all for every repo)
@@ -223,7 +223,7 @@ envvault push --expect <token>   # ...that pushes exactly what you saw, if nothi
 
 ### Claude Code skill
 
-With command-line access on, click **Install** next to _Claude Code skill_ in Settings. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env` files, or type `/envvault`.
+With command-line access on, click **Install** next to _Claude Code skill_ in **Settings → Command line**. That writes `~/.claude/skills/envvault/SKILL.md`, so in any project you can ask Claude to check or push the repo's `.env` files, or type `/envvault`.
 
 - Claude runs `status` and `push --dry-run` on its own, shows you the key changes and warnings, and asks before the real push. Claude Code also asks you to approve that command.
 - The skill points at this copy of EnvVault's command. If you move or update EnvVault, Settings shows it as out of date: click **Update**.
@@ -236,20 +236,24 @@ There is no backdoor. If you lose the master password, or the setup code and eve
 
 ## Settings
 
-| Setting             | Default   | Notes                                                                   |
-| ------------------- | --------- | ----------------------------------------------------------------------- |
-| Projects folder     | —         | Repos are its direct subfolders that contain `.git`                     |
-| Vault               | —         | A synced folder or a private git repository. Changing it locks EnvVault |
-| Setup code          | —         | Shows this machine's setup code for the vault, after the password       |
-| Machine name        | hostname  | Shown to other machines as "updated by"                                 |
-| Auto-lock           | On, 5 min | 1–120 minutes of inactivity. Turning it off asks you to confirm first   |
-| .env.example checks | On        | Warnings in the push and pull dialogs                                   |
-| Automatic pull      | Off       | Every minute while unlocked; one-sided changes only                     |
-| Backups             | On, 3     | `.env.bak.<timestamp>` before a pull; keeps the newest 1–50 per file    |
-| Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
-| Mini window on top  | On        | Keeps the mini window above other windows                               |
+Settings has three tabs. Each has its own **Save**, at its top and bottom, which saves only that tab; a dot on a tab means it has unsaved changes. The projects folder, the vault, the setup code and the Claude Code skill act at once, without **Save**.
 
-Repo settings (**Settings…** on a repo, and **Defaults…**) are kept in the vault, for every machine; only **Sync as** is this machine's. Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
+| Tab          | Setting             | Default   | Notes                                                                      |
+| ------------ | ------------------- | --------- | -------------------------------------------------------------------------- |
+| General      | Machine name        | hostname  | Shown to other machines as "updated by"                                    |
+| General      | Projects folder     | —         | Repos are its direct subfolders that contain `.git`                        |
+| General      | Mini window on top  | On        | Keeps the mini window above other windows                                  |
+| General      | Vault               | —         | A synced folder or a private git repository. Changing it locks EnvVault    |
+| General      | Setup code          | —         | Shows this machine's setup code for the vault, after the password          |
+| General      | Auto-lock           | On, 5 min | 1–120 minutes of inactivity. Turning it off asks you to confirm first      |
+| Sync         | Default env files   | `.env`    | Kept in the vault, for every machine (see [Repo settings](#repo-settings)) |
+| Sync         | .env.example checks | On        | Warnings in the push and pull dialogs                                      |
+| Sync         | Automatic pull      | Off       | Every minute while unlocked; one-sided changes only                        |
+| Sync         | Backups             | On, 3     | `.env.bak.<timestamp>` before a pull; keeps the newest 1–50 per file       |
+| Command line | Command-line access | Off       | The `envvault` command                                                     |
+| Command line | Claude Code skill   | —         | Installs or removes the skill; needs command-line access                   |
+
+Repo settings (**Settings…** on a repo, and the defaults in **Settings → Sync**) are kept in the vault, for every machine; only **Sync as** is this machine's. Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
 
 ## Development
 
