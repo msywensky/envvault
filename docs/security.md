@@ -50,6 +50,7 @@
 ## Data handling
 
 - **Setup code:** each machine keeps the vault's secret in `vault-secrets.json`, sealed with the OS's secure storage (the Keychain or DPAPI). The code is shown at creation and, after the password, in Settings. It's never logged, is forgotten once it's off the screen, and is kept on a new machine only once the password proves right.
+- **Merge bases:** to tell what changed on which side, each machine keeps the content it last synced of each env file (machine-specific values blanked, as in the vault copy) in `<userData>/bases/<vaultId>/`. Each is encrypted with XChaCha20-Poly1305 under a key derived from the vault key, so it opens only while unlocked, and bound to the exact version and hash this machine last synced, so a stale, swapped or edited one is ignored (the merge is then two-way). File names are a hash, so no repo names show. A base is deleted with its vault copy. It never leaves the main process.
 - **The key** lives only in the main process; each operation gets a copy, wiped when it finishes. It's wiped on lock, idle timeout (default 5 minutes; can be turned off after a warning), window close, sleep and screen lock.
 - **Finding env files:** `git ls-files`, which never refreshes the index (unlike `git status`), so no clean or smudge filters run, and skips folders git ignores. Templates, backups and tracked variants never sync; ignored repos are never read.
 - **`.env.example`** is read with the same checks as `.env` (and at most 1 MiB), only to compare it. Only key names leave the main process.
