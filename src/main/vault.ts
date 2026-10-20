@@ -4,6 +4,7 @@
 //   <repo>.env.enc         a repo's own .env; <repo> is the lowercased repo name
 //   <repo>.<tag>.file.enc  an env file elsewhere in that repo; the tag names its
 //                          path (see fileTagger), which is kept in the ciphertext
+//   settings.enc           repo settings for every machine (core/vaultsettings)
 // Anything else in the store is ignored.
 //
 // A format 2 vault's key also needs its secret, which is never in the vault:
@@ -15,8 +16,10 @@ import {
   VaultTamperError,
   decryptFilePayload,
   decryptPayload,
+  decryptSettings,
   encryptFilePayload,
   encryptPayload,
+  encryptSettings,
   fileTagger,
   makeKeyCheck,
   parseMeta,
@@ -35,6 +38,14 @@ import { ROOT_ENV, envPathId, isEnvPath } from '../core/envpath'
 import { passwordProblem } from '../core/password'
 import { isValidRepoName } from '../core/paths'
 import { formatSetupCode, parseSetupCode, SetupCodeError } from '../core/setupcode'
+import {
+  MAX_SETTINGS_BYTES,
+  SettingsError,
+  emptySettings,
+  parseSettings,
+  settingsTooLarge,
+  type VaultSettings
+} from '../core/vaultsettings'
 import type { EnvFile, SetupCodeState, VaultFolderState, VaultLocation } from '../shared/types'
 import { getConfig } from './config'
 import { AppError } from './errors'
@@ -44,15 +55,17 @@ import { storeFor } from './store'
 import { StoreConflictError, type StoreSnapshot, type VaultStore } from './store/types'
 
 const META = 'meta.json'
+// Never an entry's name: those end in .env.enc or .file.enc.
+const SETTINGS = 'settings.enc'
 // The suffixes never overlap, so a name is one kind or the other: a repo
 // called "web.0123456789abcdef" still has the root entry "….env.enc".
 const ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.env\.enc$/
 const FILE_ENTRY_RE = /^([a-z0-9][a-z0-9._-]*)\.([0-9a-f]{16})\.file\.enc$/
 export const MIN_PASSWORD_CHARS = 12
 
-/** A file that belongs in a vault: meta.json or an entry. */
+/** A file that belongs in a vault: meta.json, the settings or an entry. */
 export const isVaultFile = (name: string): boolean =>
-  name === META || ENTRY_RE.test(name) || FILE_ENTRY_RE.test(name)
+  name === META || name === SETTINGS || ENTRY_RE.test(name) || FILE_ENTRY_RE.test(name)
 
 /** The vault entry id for a repo: case-insensitive, like the filesystems. */
 export const entryId = (repoName: string): string => repoName.toLowerCase()
@@ -142,6 +155,11 @@ export interface Vault {
   write(keys: EntryKeys, file: EnvFile, payload: Payload, expected: string | null): Promise<string>
   /** Remove one entry if it is still at `expected`, otherwise VAULT_CHANGED. */
   remove(ref: EntryRef, expected: string): Promise<void>
+  /**
+   * Encrypt and write the repo settings, if they are still at `expected` (a
+   * version from SettingsRead, or null for none); otherwise VAULT_CHANGED.
+   */
+  writeSettings(keys: EntryKeys, settings: VaultSettings, expected: string | null): Promise<string>
 }
 
 export interface VaultSnapshot {
@@ -149,6 +167,17 @@ export interface VaultSnapshot {
   readonly entries: EntryRef[]
   /** Decrypt one entry, with the version to write against, or null if there is none. */
   read(keys: EntryKeys, ref: EntryRef): Promise<VaultEntry | null>
+  /** The repo settings. Never fails with an AppError: see SettingsRead.error. */
+  settings(keys: EntryKeys): Promise<SettingsRead>
+}
+
+export interface SettingsRead {
+  /** The settings in force: the vault's, or the built-in ones if it has none or they can't be read. */
+  settings: VaultSettings
+  /** settings.enc's version, to write against: null if there is none. */
+  version: string | null
+  /** Why settings.enc couldn't be read (VAULT_TAMPERED, VAULT_NEEDS_UPDATE), or null. */
+  error: AppError | null
 }
 
 export interface VaultEntry {
@@ -168,7 +197,8 @@ export function vaultOn(store: VaultStore, secrets: VaultSecrets = machineSecret
     showSetupCode: (password) => showSetupCode(store, secrets, password),
     snapshot: async () => entriesOf(await store.snapshot()),
     write: (keys, file, payload, expected) => writeEntry(store, keys, file, payload, expected),
-    remove: (ref, expected) => removeEntry(store, ref, expected)
+    remove: (ref, expected) => removeEntry(store, ref, expected),
+    writeSettings: (keys, settings, expected) => writeSettings(store, keys, settings, expected)
   }
 }
 
@@ -201,7 +231,7 @@ async function vaultState(store: VaultStore): Promise<FolderState> {
   if (!(await store.reachable())) return 'folder-missing'
   const { names } = await store.snapshot()
   if (names.includes(META)) return 'ready'
-  return entryRefs(names).length > 0 ? 'meta-missing' : 'empty'
+  return entryRefs(names).length > 0 || names.includes(SETTINGS) ? 'meta-missing' : 'empty'
 }
 
 function entryRefs(names: string[]): EntryRef[] {
@@ -450,7 +480,8 @@ async function derive(
 function entriesOf(snapshot: StoreSnapshot): VaultSnapshot {
   return {
     entries: entryRefs(snapshot.names),
-    read: (keys, ref) => readEntry(snapshot, keys, ref)
+    read: (keys, ref) => readEntry(snapshot, keys, ref),
+    settings: (keys) => readSettings(snapshot, keys)
   }
 }
 
@@ -475,12 +506,15 @@ async function readEntry(
     // Only someone with the key could write a mismatch, but the path decides
     // where a pull writes: it must be what the name says, and never the root
     // .env, which has its own entry.
-    if (
-      !isEnvPath(path) ||
-      path === ROOT_ENV ||
-      keys.tagger.tag(ref.repoId, envPathId(path)) !== ref.tag
-    ) {
+    if (path === ROOT_ENV || keys.tagger.tag(ref.repoId, envPathId(path)) !== ref.tag) {
       throw new VaultTamperError("The file's path doesn't match its name.")
+    }
+    // Written with the key, for a file this version doesn't sync.
+    if (!isEnvPath(path)) {
+      throw new AppError(
+        'VAULT_NEEDS_UPDATE',
+        `The vault copy of an env file in "${ref.repoId}" (${entryName(ref)}) was saved by a newer EnvVault. Update this one to use it.`
+      )
     }
     return { payload, path, version: found.version }
   } catch (err) {
@@ -529,3 +563,63 @@ async function removeEntry(store: VaultStore, ref: EntryRef, expected: string): 
 
 const vaultChanged = (): AppError =>
   new AppError('VAULT_CHANGED', 'The vault copy changed since you reviewed it. Review again.')
+
+// What the built-in settings mean, for the messages below.
+const BUILT_IN_MEANS = 'Until then every .env syncs, and no repo is ignored.'
+
+async function readSettings(snapshot: StoreSnapshot, keys: EntryKeys): Promise<SettingsRead> {
+  const found = await snapshot.get(SETTINGS)
+  if (!found) return { settings: emptySettings(), version: null, error: null }
+  const failed = (error: AppError): SettingsRead => ({
+    settings: emptySettings(),
+    version: found.version,
+    error
+  })
+  const tampered = (): SettingsRead =>
+    failed(
+      new AppError(
+        'VAULT_TAMPERED',
+        `The repo settings in the vault failed verification (corrupted, tampered with, or from a different vault). Reset them to start again. ${BUILT_IN_MEANS}`
+      )
+    )
+  // Room for the ciphertext's header and tag.
+  if (found.bytes.length > MAX_SETTINGS_BYTES + 1024) return tampered()
+  try {
+    return {
+      settings: parseSettings(await decryptSettings(keys.key, found.bytes)),
+      version: found.version,
+      error: null
+    }
+  } catch (err) {
+    if (err instanceof SettingsError && err.newer) {
+      return failed(
+        new AppError(
+          'VAULT_NEEDS_UPDATE',
+          `The repo settings in the vault were saved by a newer EnvVault. Update this one to use them. ${BUILT_IN_MEANS}`
+        )
+      )
+    }
+    if (err instanceof SettingsError || err instanceof VaultTamperError) return tampered()
+    throw err
+  }
+}
+
+async function writeSettings(
+  store: VaultStore,
+  keys: EntryKeys,
+  settings: VaultSettings,
+  expected: string | null
+): Promise<string> {
+  if (settingsTooLarge(settings)) {
+    throw new AppError('BAD_REQUEST', 'The repo settings would be too large to save.')
+  }
+  const bytes = await encryptSettings(keys.key, settings)
+  try {
+    return await store.write(SETTINGS, bytes, expected)
+  } catch (err) {
+    if (err instanceof StoreConflictError) {
+      throw new AppError('VAULT_CHANGED', 'The repo settings changed on another machine.')
+    }
+    throw err
+  }
+}
