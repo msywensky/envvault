@@ -11,6 +11,7 @@ const tone = computed(() => {
     case 'local-newer':
     case 'vault-newer':
     case 'local-only':
+    case 'both-changed':
       return 'badge-info'
     case 'conflict':
       return 'badge-warn'

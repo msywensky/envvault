@@ -70,12 +70,13 @@ export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
  */
 export const isQuiet = (row: RepoRow): boolean =>
   row.path !== null && row.path.includes('/') && row.status === 'local-only'
-export type RowAction = 'push' | 'pull' | 'resolve' | 'keep-local' | 'keep-vault'
+export type RowAction = 'push' | 'pull' | 'merge' | 'resolve' | 'keep-local' | 'keep-vault'
 
 export const STATUS_LABEL: Record<RowStatus, string> = {
   'in-sync': 'In sync',
   'local-newer': 'Local newer',
   'vault-newer': 'Vault newer',
+  'both-changed': 'Both changed',
   'local-only': 'Local only',
   'vault-only': 'Vault only',
   'no-env': 'No .env',
@@ -88,10 +89,12 @@ export const STATUS_HINT: Record<RowStatus, string> = {
   'in-sync': 'Local .env and the vault copy are identical.',
   'local-newer': 'You changed the local .env since the last sync.',
   'vault-newer': 'Another machine pushed a newer version.',
+  'both-changed': 'This machine and another changed it since the last sync, but not the same keys.',
   'local-only': 'This .env has never been pushed to the vault.',
   'vault-only': 'In the vault, but this repo is not in your projects folder.',
   'no-env': 'No .env here and none in the vault.',
-  conflict: 'Both sides changed, or they differ and were never synced here.',
+  conflict:
+    "Both sides changed the same key, or they differ and this machine can't tell which changed what.",
   error: 'Something is wrong with this repo or its vault copy.',
   excluded:
     "In the vault, but this repo's settings don't sync it. Remove the vault copy, or change the settings."
@@ -105,6 +108,8 @@ export function actionsFor(row: RepoRow): RowAction[] {
       return ['push']
     case 'vault-newer':
       return ['pull']
+    case 'both-changed':
+      return ['merge']
     case 'conflict':
       // With no local file there is nothing to merge: only the vault copy can be kept.
       return row.hasEnv ? ['resolve'] : ['keep-vault']
@@ -118,7 +123,9 @@ export function actionsFor(row: RepoRow): RowAction[] {
  * isn't local-only (push that instead). A No .env row starts an empty copy.
  */
 export function canEdit(row: RepoRow): boolean {
-  return ['in-sync', 'local-newer', 'vault-newer', 'conflict', 'no-env'].includes(row.status)
+  return ['in-sync', 'local-newer', 'vault-newer', 'both-changed', 'conflict', 'no-env'].includes(
+    row.status
+  )
 }
 
 /** Same rule as core's KEY_RE (src/core/envdiff.ts) and main's EnvKey schema. */
@@ -134,6 +141,7 @@ export function envKeyProblem(key: string): string | null {
 export const ACTION_LABEL: Record<RowAction, string> = {
   push: 'Push',
   pull: 'Pull',
+  merge: 'Merge…',
   resolve: 'Resolve…',
   'keep-local': 'Keep local',
   'keep-vault': 'Keep vault'

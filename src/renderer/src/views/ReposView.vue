@@ -71,7 +71,7 @@ async function refresh(rescan: boolean): Promise<void> {
 }
 
 function onAction(repo: RepoRow, action: RowAction): void {
-  if (action === 'resolve') {
+  if (action === 'resolve' || action === 'merge') {
     resolving.value = repo
     return
   }
@@ -139,7 +139,7 @@ onMounted(async () => {
   if (!file) return
   const target = { name: file.repoName, local: true, path: file.path, storedName: null }
   const row = store.repos.find((r) => sameFile(r, target))
-  if (row && actionsFor(row).includes('resolve')) resolving.value = row
+  if (row && actionsFor(row).some((a) => a === 'resolve' || a === 'merge')) resolving.value = row
 })
 </script>
 
