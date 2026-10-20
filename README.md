@@ -102,11 +102,14 @@ A conflict means both copies changed since this machine last synced, or they dif
 
 - Every key whose copies differ is listed by name: different values, only on this machine, or only in the vault copy. Choose which copy each one comes from. **Use this machine's for all** and **Use the vault's for all** set every key at once.
 - If a key differs because each machine should have its own value (a port, a local path), choose **Machine-specific**: your `.env` keeps your value and gets the [marker](#machine-specific-keys), and the vault copy keeps the key without a value.
-- Nothing is chosen for you. EnvVault remembers only a hash of what it last synced, not the content, so it can't tell whether a key only one copy has was added there or removed from the other.
+- Nothing is chosen for you, with one exception. EnvVault remembers only a hash of what it last synced, not the content, so it can't tell whether a key only one copy has was added there or removed from the other. The exception: if this machine never synced the file and your `.env` only lacks keys the vault copy has (every other key the same), it's most likely just older, so those keys start as **Add**.
 - Values are masked. **Show values** shows both copies' values; they are hidden again after a minute.
-- **Save to both** writes the result to your `.env` (backed up first, like a pull) and as a new version of the vault copy, so both end in sync. Comments and layout come from the vault copy, and machine-specific keys keep your values, as on a pull.
-- **Keep local copy…** and **Keep vault copy…** replace one whole copy with the other instead: a push that overwrites the vault copy, or a pull.
-- A vault copy that went backwards (a rollback) is never merged, and neither are copies that differ only in formatting or comments: keep one of them.
+- **Save** brings both sides in sync. What it writes depends on your choices, and the dialog says so once every key has one:
+  - every key from the vault: your `.env` becomes the vault copy (backed up first, like a pull), and the vault copy doesn't change;
+  - every key from this machine: your `.env` stays as you wrote it (apart from markers for machine-specific keys) and becomes the new version of the vault copy, like a push;
+  - a mix: your `.env` is rewritten (backed up first) and the vault copy gets a new version. Comments and layout come from the vault copy.
+- Machine-specific keys keep your values, as on a pull.
+- A vault copy that went backwards (a rollback) is never merged, and copies that differ only in formatting or comments have no keys to choose. For those, and for a file that can't be compared, the dialog offers **Keep this machine's file…** and **Keep the vault's file…** instead: a push that overwrites the vault copy, or a pull.
 
 ### Machine-specific keys
 

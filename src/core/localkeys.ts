@@ -160,3 +160,31 @@ export function mergePull(
 
   return { text: out, kept: [...keep].sort(), unset }
 }
+
+/**
+ * What resolving writes when this machine's copy wins every key: the local
+ * file as written, except that each key made machine-specific (`machine`) or
+ * marked in the vault copy gets a marker if it lacks one, and the vault's
+ * machine-specific keys the local file lacks are appended empty, as a pull
+ * writes them. So nothing the vault keeps per machine is lost, and the rest
+ * is byte for byte the local file. Throws DuplicateLocalKeyError if a key to
+ * mark is assigned more than once.
+ */
+export function keepLocal(vault: string, local: string, machine: Iterable<string> = []): string {
+  const v = scanLines(vault)
+  const l = scanLines(local)
+  const { unset } = keptKeys(v, l)
+  const mark = new Set([...v.marked, ...machine].filter((k) => l.byKey.has(k) && !l.marked.has(k)))
+  requireSingle(l, mark)
+
+  const eol = l.ends.find((e) => e !== '') ?? v.ends.find((e) => e !== '') ?? '\n'
+  let out = l.bom
+  for (let i = 0; i < l.lines.length; i++) {
+    const a = l.starts.get(i)
+    if (a && mark.has(a.key)) out += LOCAL_MARKER + eol
+    out += (l.lines[i] ?? '') + (l.ends[i] ?? '')
+  }
+  if (unset.length > 0 && out !== l.bom && !out.endsWith('\n')) out += eol
+  for (const key of unset) out += `${LOCAL_MARKER}${eol}${key}=${eol}`
+  return out
+}

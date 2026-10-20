@@ -34,7 +34,8 @@ const marks = ref<string[]>([])
 const markListOpen = ref(false)
 
 const title = computed(() => {
-  if (props.conflict) return props.mode === 'push' ? 'Keep local copy' : 'Keep vault copy'
+  if (props.conflict)
+    return props.mode === 'push' ? "Keep this machine's file" : "Keep the vault's file"
   return props.mode === 'push' ? 'Push to vault' : 'Pull from vault'
 })
 

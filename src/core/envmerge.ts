@@ -80,6 +80,15 @@ export function differingValues(local: string, vault: string): MergeValues['valu
 }
 
 /**
+ * Whether this machine's copy wins every key that differs (`local` or
+ * `machine`), so the merged file can be the local file as written (see
+ * keepLocal) rather than rebuilt in the vault copy's layout.
+ */
+export function winsEveryKey(cmp: EnvComparison, takes: LocalTakes): boolean {
+  return cmp.keys.length > 0 && cmp.keys.every((k) => takes.has(k.key))
+}
+
+/**
  * Pull and mark: `keys` kept from the local file as machine-specific, for
  * mergePull; every other key comes from the vault, as on a pull. Throws
  * MergeError unless each is a key whose values differ, named once.

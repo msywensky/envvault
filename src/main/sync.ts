@@ -20,7 +20,14 @@ import {
   isBackupOf
 } from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
-import { compareEnv, differingValues, markTakes, MergeError, takesFor } from '../core/envmerge'
+import {
+  compareEnv,
+  differingValues,
+  markTakes,
+  MergeError,
+  takesFor,
+  winsEveryKey
+} from '../core/envmerge'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys, type LocalTakes } from '../core/localkeys'
@@ -71,7 +78,7 @@ import { MAX_REPO_NAMES, getConfig, updateConfig } from './config'
 import { AppError, errnoCode } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
-import { mergedBytes, syncedBytes } from './localkeys'
+import { keptLocalBytes, mergedBytes, syncedBytes } from './localkeys'
 import {
   MAX_ENV_BYTES,
   envFilesIn,
@@ -758,9 +765,10 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
     if (mark.length > 0) {
       // Pull and mark: the marked keys keep this machine's values, so the
       // vault copy changes too and is written like a resolved conflict.
-      return applyMerge(s, envDir, vaultId, (local, vault) =>
-        markTakes(compareEnv(local, vault), mark)
-      )
+      return applyMerge(s, envDir, vaultId, (local, vault) => ({
+        takes: markTakes(compareEnv(local, vault), mark),
+        layout: 'vault'
+      }))
     }
     await requirePullable(s, envDir)
     return {
@@ -1028,27 +1036,40 @@ export function merge(key: Uint8Array, vaultId: string, req: MergeRequest): Prom
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
     checkExpected(s, req.expected)
-    const { vault, backupName } = await applyMerge(s, envDir, vaultId, (local, vault) =>
-      takesFor(compareEnv(local, vault), req.choices)
-    )
+    const { vault, backupName } = await applyMerge(s, envDir, vaultId, (local, vault) => {
+      const cmp = compareEnv(local, vault)
+      const takes = takesFor(cmp, req.choices)
+      return { takes, layout: winsEveryKey(cmp, takes) ? 'local' : 'vault' }
+    })
     return { row: syncedRow(s, vault), backupName }
   })
 }
 
+/** How applyMerge builds the file. */
+interface MergePlan {
+  /** The keys taken from the local file (see mergePull). */
+  takes: LocalTakes
+  /**
+   * `local` when this machine's copy wins every key: the result is the local
+   * file as written (see keepLocal), not rebuilt in the vault copy's layout.
+   */
+  layout: 'local' | 'vault'
+}
+
 /**
- * Merge the two copies, with the keys `takesOf` returns taken from the local
- * file (see mergePull), and write the result to both sides: the vault copy
- * first (if it changes), then the local env file, backed up like a pull. All
- * checks run before either write, and a vault copy that went backwards is
- * never merged. If the local write fails, the last sync stays as it was, so
- * the file still shows as a conflict and resolving again lists only the keys
- * that still differ. The caller has checked `expected`.
+ * Merge the two copies as `planOf` says and write the result to both sides:
+ * the vault copy first (if it changes), then the local env file (if it
+ * changes), backed up like a pull. All checks run before either write, and a
+ * vault copy that went backwards is never merged. If the local write fails,
+ * the last sync stays as it was, so the file still shows as a conflict and
+ * resolving again lists only the keys that still differ. The caller has
+ * checked `expected`.
  */
 async function applyMerge(
   s: Snapshot,
   envDir: string,
   vaultId: string,
-  takesOf: (local: string, vault: string) => LocalTakes
+  planOf: (local: string, vault: string) => MergePlan
 ): Promise<{ vault: VaultInfo; backupName: string | null }> {
   if (!s.local) throw noLocalToMerge()
   if (!s.payload || !s.vault) throw noVaultCopy()
@@ -1064,10 +1085,14 @@ async function applyMerge(
   let merged: Buffer | null = null
   let synced: Buffer | null = null
   try {
-    const takes = merging(() => takesOf(local.toString('utf8'), vaultBytes.toString('utf8')))
+    const plan = merging(() => planOf(local.toString('utf8'), vaultBytes.toString('utf8')))
     await requirePullable(s, envDir)
-    // Takes ownership of vaultBytes (returned as is, or wiped).
-    merged = mergedBytes(vaultBytes, local, takes).bytes
+    const machine = [...plan.takes].filter(([, take]) => take === 'machine').map(([key]) => key)
+    // Both take ownership of vaultBytes (returned as is, or wiped).
+    merged =
+      plan.layout === 'local'
+        ? keptLocalBytes(vaultBytes, local, machine)
+        : mergedBytes(vaultBytes, local, plan.takes).bytes
     if (merged.length > MAX_ENV_BYTES) {
       throw new AppError('ENV_TOO_LARGE', 'The merged .env would be larger than 1 MiB.')
     }
