@@ -337,7 +337,7 @@ describe('env files in subfolders', () => {
     await withEntryKeys(key, async (keys) => {
       for (const file of [
         { repoName: 'platform', path: '../.env' },
-        { repoName: 'platform', path: 'apps/web/.env.local' },
+        { repoName: 'platform', path: 'apps/web/.env.example' },
         { repoName: '../x', path: ROOT_ENV }
       ]) {
         expect(() => entryFor(keys, file)).toThrow('Not an env file.')

@@ -277,7 +277,7 @@ describe('exit codes', () => {
       ['push', '--yes', '--path', 'apps/web/.env'],
       ['status', '--repo', 'web', '--path', '.env'],
       ['push', '--yes', '--repo', 'web', '--path', '../.env'],
-      ['push', '--yes', '--repo', 'web', '--path', 'apps/web/.env.local'],
+      ['push', '--yes', '--repo', 'web', '--path', 'apps/web/.env.example'],
       ['push', '--yes', '--repo', 'web', '--path', 'apps\\web\\.env']
     ]) {
       expect((await cli(argv)).code, argv.join(' ')).toBe(2)

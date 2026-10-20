@@ -1,7 +1,7 @@
 import { lstat, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ENV_FILE_NAMES, envPathId, isEnvPath } from '../core/envpath'
+import { envPathId, isEnvPath } from '../core/envpath'
 import { parseGitVersion } from '../core/gitremote'
 import type { GitignoreResult } from '../shared/types'
 import { AppError } from './errors'
@@ -112,7 +112,7 @@ export async function ignoreStatus(dir: string): Promise<GitignoreResult> {
 }
 
 // Every file named like an env file, in any folder.
-const ENV_PATHSPECS = ENV_FILE_NAMES.map((name) => `:(glob)**/${name}`)
+const ENV_PATHSPECS = [':(glob)**/.env']
 
 /**
  * The env files git knows of in the repo at `repoDir`, as sorted paths from

@@ -1,21 +1,28 @@
 // Env files inside a repo, named by their path from the repo root: ".env",
-// "apps/web/.env". Paths use "/" on every platform, as git prints them, and
-// are ASCII-only like repo names, so they need no normalisation. A valid path
-// never leaves its repo: no "." or ".." segments, no ".git", and nothing
-// Windows would read as another name (a trailing dot, a device name).
+// "apps/web/.env.local". Paths use "/" on every platform, as git prints them,
+// and are ASCII-only like repo names, so they need no normalisation. A valid
+// path never leaves its repo: no "." or ".." segments, no ".git", and nothing
+// Windows would read as another name (a trailing dot, a device name). Which
+// of these a repo actually syncs is up to its rules (src/shared/envrules.ts).
 import { ROOT_ENV } from '../shared/envfile'
+import { isReservedEnvName } from '../shared/envrules'
 import { isWindowsReserved } from './paths'
 
 export { ROOT_ENV }
 
-/** The file names that are synced, in any folder. */
-export const ENV_FILE_NAMES: readonly string[] = [ROOT_ENV]
-
 /** At most this many folders between the repo root and the file. */
 export const MAX_ENV_FOLDERS = 8
 const MAX_ENV_PATH = 255
+const MAX_ENV_NAME = 100
 
 const FOLDER_RE = /^[A-Za-z0-9._@+-]{1,100}$/
+// .env, or .env.<suffix> with dot-separated parts: .env.local, .env.production.local.
+const ENV_NAME_RE = /^\.env(?:\.[A-Za-z0-9_-]+)*$/
+
+/** True for a file name EnvVault can sync: .env or .env.<suffix>, except reserved names. */
+export function isEnvFileName(name: string): boolean {
+  return name.length <= MAX_ENV_NAME && ENV_NAME_RE.test(name) && !isReservedEnvName(name)
+}
 
 function isFolderName(name: string): boolean {
   return (
@@ -35,7 +42,7 @@ export function isEnvPath(path: string): boolean {
   const file = parts.pop()
   return (
     file !== undefined &&
-    ENV_FILE_NAMES.includes(file) &&
+    isEnvFileName(file) &&
     parts.length <= MAX_ENV_FOLDERS &&
     parts.every(isFolderName)
   )
