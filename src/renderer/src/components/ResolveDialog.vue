@@ -79,6 +79,20 @@ const canSave = computed(
 const marking = computed(
   () => preview.value?.keys.filter((k) => choices.value.get(k.key) === 'machine') ?? []
 )
+// Every key from the vault: the result is the vault copy, so only the local file changes.
+const allFromVault = computed(
+  () => preview.value?.keys.every((k) => choices.value.get(k.key) === 'vault') ?? false
+)
+// Set when the vault copy's extra keys started out as Add (see suggestsAdd).
+const suggested = ref(false)
+
+/**
+ * A file this machine never synced that only lacks keys the vault copy has
+ * (every shared key the same) is most likely just older, so those keys start
+ * as Add. Anything else starts with nothing chosen.
+ */
+const suggestsAdd = (p: MergePreview): boolean =>
+  p.neverSynced && p.keys.length > 0 && p.keys.every((k) => k.kind === 'vault-only')
 
 /** Whether a copy has the key at all. */
 const has = (k: MergeKey, side: Side): boolean =>
@@ -131,6 +145,10 @@ async function load(keepChoices = false): Promise<void> {
       const take = kept.get(k.key)
       if (take && before.get(k.key) === k.kind) choices.value.set(k.key, take)
     }
+  }
+  suggested.value = suggestsAdd(res.data)
+  if (suggested.value) {
+    for (const k of res.data.keys) if (!choices.value.has(k.key)) choices.value.set(k.key, 'vault')
   }
 }
 
@@ -244,7 +262,12 @@ watch(
           <template v-else>
             <div class="row">
               <span class="grow muted small">
-                Choose which copy each key comes from.
+                <template v-if="suggested">
+                  Your .env only lacks keys the vault copy has, so they're set to
+                  <strong>Add</strong>. Choose <strong>Leave out</strong> for any you removed on
+                  purpose.
+                </template>
+                <template v-else>Choose which copy each key comes from.</template>
                 <template v-if="preview.unchanged > 0">
                   {{ preview.unchanged }} other key{{ preview.unchanged === 1 ? ' is' : 's are' }}
                   the same in both.
@@ -384,8 +407,13 @@ watch(
             @fixed="load(true)"
           />
           <p class="muted small">
-            Saving writes the result to your .env and as a new version of the vault copy. Comments
-            and layout come from the vault copy.
+            <template v-if="allFromVault">
+              Saving puts the vault copy in your .env; the vault copy itself doesn't change.
+            </template>
+            <template v-else>
+              Saving writes the result to your .env and, if you keep anything of this machine's, as
+              a new version of the vault copy. Comments and layout come from the vault copy.
+            </template>
             <template v-if="store.settings?.backups ?? true">
               Your current .env is saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
             </template>
