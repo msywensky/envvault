@@ -83,9 +83,10 @@ export function keptKeys(v: Scanned, l: Scanned | null): { keep: Set<string>; un
 
 /**
  * Keys whose result comes from the local file in a merge (see mergePull):
- * present with its local lines, or absent if the local file lacks it.
+ * `local`, present with its local lines or absent if the local file lacks
+ * it; `machine`, kept and marked like a machine-specific key.
  */
-export type LocalTakes = ReadonlyMap<string, 'local'>
+export type LocalTakes = ReadonlyMap<string, 'local' | 'machine'>
 
 /**
  * What a pull writes: the vault copy, except that every key marked in either
@@ -95,10 +96,11 @@ export type LocalTakes = ReadonlyMap<string, 'local'>
  * machine-specific value. Throws DuplicateLocalKeyError if a kept key appears
  * more than once in either file.
  *
- * Resolving a conflict is the same merge with `takes`: each of those keys
+ * Resolving a conflict is the same merge with `takes`: each `local` key
  * gets its local lines in the vault's position, loses its vault lines if the
- * local file lacks it, or is appended if only the local file has it. Keys not
- * in `takes` come from the vault, and a kept key stays kept whatever `takes` says.
+ * local file lacks it, or is appended if only the local file has it. Each
+ * `machine` key the local file has is kept as if it were marked. Keys not in
+ * `takes` come from the vault, and a kept key stays kept whatever `takes` says.
  */
 export function mergePull(
   vault: string,
@@ -108,6 +110,7 @@ export function mergePull(
   const v = scanLines(vault)
   const l = local === null ? null : scanLines(local)
   const { keep, unset } = keptKeys(v, l)
+  for (const [k, take] of takes) if (take === 'machine' && l?.byKey.has(k)) keep.add(k)
   const own = new Set([...takes.keys()].filter((k) => !keep.has(k)))
   if (!l || (keep.size === 0 && own.size === 0)) return { text: null, kept: [], unset }
   requireSingle(l, [...keep, ...own])

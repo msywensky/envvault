@@ -197,6 +197,25 @@ describe('mergePull with keys taken from the local file', () => {
     )
   })
 
+  it('keeps and marks machine-specific keys, in place or appended', () => {
+    const vault = text('A=2', 'PORT=3001', 'B=3')
+    const merge = mergePull(
+      vault,
+      text('PORT=3000', 'A=1', 'DEV=x'),
+      new Map([
+        ['PORT', 'machine'],
+        ['DEV', 'machine']
+      ])
+    )
+    expect(merge).toEqual({
+      text: text('A=2', M, 'PORT=3000', 'B=3', M, 'DEV=x'),
+      kept: ['DEV', 'PORT'],
+      unset: []
+    })
+    // The vault copy then holds the keys without values.
+    expect(projectEnv(merge.text ?? '')).toBe(text('A=2', M, 'PORT=', 'B=3', M, 'DEV='))
+  })
+
   it('takes nothing without a local file', () => {
     expect(mergePull(text('A=1'), null, local('A'))).toEqual({ text: null, kept: [], unset: [] })
   })

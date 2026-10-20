@@ -3,7 +3,9 @@
 // holds env values: they arrive from repo:openEditor, live only in `rows`
 // (never the store), are masked until shown, are masked again when the window
 // is hidden or after a minute without input, and are dropped when the dialog
-// closes or the app locks. Only changed values go back, via repo:saveEdit.
+// closes or the app locks. Only changed values go back, via repo:saveEdit,
+// with the keys to mark machine-specific by name (their values then leave the
+// vault copy).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { RepoRow } from '../../../shared/types'
 import { envKeyProblem, fileOf, fileTitle } from '../status'
@@ -21,6 +23,8 @@ interface Row {
   original: string | null
   value: string
   marked: boolean
+  /** To be marked machine-specific by this save. */
+  marking: boolean
   removed: boolean
   revealed: boolean
 }
@@ -40,11 +44,14 @@ let nextId = 0
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 
 const isChanged = (r: Row): boolean =>
-  r.original !== null && !r.removed && !r.marked && r.value !== r.original
+  r.original !== null && !r.removed && !r.marked && !r.marking && r.value !== r.original
 const added = computed(() => rows.value.filter((r) => r.original === null))
 const changed = computed(() => rows.value.filter(isChanged))
 const removed = computed(() => rows.value.filter((r) => r.original !== null && r.removed))
-const dirty = computed(() => added.value.length + changed.value.length + removed.value.length > 0)
+const marking = computed(() => rows.value.filter((r) => r.marking))
+const dirty = computed(
+  () => added.value.length + changed.value.length + removed.value.length + marking.value.length > 0
+)
 
 /** Why an added row's key can't be saved, or null. */
 function keyProblem(row: Row): string | null {
@@ -93,6 +100,7 @@ async function load(): Promise<void> {
     original: e.value,
     value: e.value,
     marked: e.marked,
+    marking: false,
     removed: false,
     revealed: false
   }))
@@ -107,9 +115,19 @@ function addRow(): void {
     original: null,
     value: '',
     marked: false,
+    marking: false,
     removed: false,
     revealed: false
   })
+}
+
+/** Mark a key machine-specific, or undo that. Its value goes back to the one loaded. */
+function toggleMarking(row: Row): void {
+  row.marking = !row.marking
+  if (row.marking) {
+    row.value = row.original ?? ''
+    row.revealed = false
+  }
 }
 
 function toggleRemove(row: Row): void {
@@ -136,7 +154,8 @@ async function save(): Promise<void> {
     expectedVaultHash,
     set: changed.value.map((r) => ({ key: r.key, value: r.value })),
     add: added.value.map((r) => ({ key: r.key, value: r.value })),
-    remove: removed.value.map((r) => r.key)
+    remove: removed.value.map((r) => r.key),
+    mark: marking.value.map((r) => r.key)
   }
   const res = await call(() => window.envvault.saveEdit(request))
   if (res.ok) {
@@ -214,6 +233,17 @@ watch(
             <code v-for="r in removed" :key="r.id" class="chip chip-removed">{{ r.key }}</code>
           </div>
         </div>
+        <div v-if="marking.length" class="diff-group">
+          <h3>Machine-specific from now on ({{ marking.length }})</h3>
+          <div class="chips">
+            <code v-for="r in marking" :key="r.id" class="chip chip-kept">{{ r.key }}</code>
+          </div>
+          <p class="muted small">
+            Marked <code class="marker"># envvault:local</code>: the vault copy keeps these keys
+            without values, and each of your machines keeps its own. Machines that already have them
+            keep their values when they pull; a machine that doesn't gets them empty.
+          </p>
+        </div>
         <p class="muted small">
           Saving writes a new version of the vault copy.
           <template v-if="repo.hasEnv">Your local .env changes only when you pull.</template>
@@ -237,7 +267,8 @@ watch(
               :class="{
                 'editor-removed': row.removed,
                 'editor-changed': isChanged(row),
-                'editor-added': row.original === null
+                'editor-added': row.original === null,
+                'editor-marking': row.marking
               }"
             >
               <td class="editor-key">
@@ -258,8 +289,15 @@ watch(
                 <code v-else>{{ row.key }}</code>
               </td>
               <td class="editor-value">
-                <span v-if="row.marked" class="muted small">
+                <span
+                  v-if="row.marked"
+                  class="muted small"
+                  title="To sync it again, remove the # envvault:local line above it in each machine's .env, then push."
+                >
                   Machine-specific: set on each machine
+                </span>
+                <span v-else-if="row.marking" class="muted small">
+                  Machine-specific from now on: each machine keeps its own value
                 </span>
                 <span v-else-if="row.removed" class="muted small">Removed</span>
                 <textarea
@@ -289,14 +327,32 @@ watch(
               <td class="col-actions">
                 <div class="row">
                   <button
-                    v-if="!row.marked && !row.removed"
+                    v-if="!row.marked && !row.removed && !row.marking"
                     type="button"
                     class="btn btn-sm"
                     @click="row.revealed = !row.revealed"
                   >
                     {{ row.revealed ? 'Hide' : 'Show' }}
                   </button>
-                  <button type="button" class="btn btn-sm" @click="toggleRemove(row)">
+                  <button
+                    v-if="row.original !== null && !row.marked && !row.removed"
+                    type="button"
+                    class="btn btn-sm"
+                    :title="
+                      row.marking
+                        ? undefined
+                        : 'Keep this key in the vault copy without its value, so each machine keeps its own'
+                    "
+                    @click="toggleMarking(row)"
+                  >
+                    {{ row.marking ? 'Undo' : 'Machine-specific' }}
+                  </button>
+                  <button
+                    v-if="!row.marking"
+                    type="button"
+                    class="btn btn-sm"
+                    @click="toggleRemove(row)"
+                  >
                     {{ row.removed ? 'Undo' : 'Remove' }}
                   </button>
                 </div>

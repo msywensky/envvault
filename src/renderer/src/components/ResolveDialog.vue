@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Resolves a conflict key by key. For every key whose copies differ, the user
-// picks this machine's or the vault's; main merges them (in the vault copy's
-// layout, as a pull does) and writes the result to both sides. Key names
+// picks this machine's or the vault's, or makes it machine-specific (this
+// machine's value, marked # envvault:local); main merges them (in the vault
+// copy's layout, as a pull does) and writes the result to both sides. Key names
 // only, until Show values: the values arrive from repo:mergeValues, live only
 // in `values` (never the store), and are dropped after a minute, when the
 // window is hidden, on reload, and when the dialog closes or the app locks. A
@@ -24,13 +25,19 @@ interface Values {
 
 const MASK = '••••••••'
 const HIDE_AFTER_SECONDS = 60
-const TAKES: MergeTake[] = ['local', 'vault']
-/** Each kind's two choices, worded for what the result has: this machine's state, then the vault's. */
-const OPTIONS: Record<MergeKind, Record<MergeTake, string>> = {
-  differs: { local: "This machine's", vault: "Vault's" },
-  'local-only': { local: 'Keep', vault: 'Remove' },
+type Side = 'local' | 'vault'
+const SIDES: Side[] = ['local', 'vault']
+/**
+ * Each kind's choices, worded for what the result has: this machine's state,
+ * the vault's, then machine-specific, which needs this machine to have the key.
+ */
+const OPTIONS: Record<MergeKind, Partial<Record<MergeTake, string>>> = {
+  differs: { local: "This machine's", vault: "Vault's", machine: 'Machine-specific' },
+  'local-only': { local: 'Keep', vault: 'Remove', machine: 'Machine-specific' },
   'vault-only': { local: 'Leave out', vault: 'Add' }
 }
+const takesOf = (k: MergeKey): MergeTake[] =>
+  (['local', 'vault', 'machine'] as const).filter((t) => OPTIONS[k.kind][t] !== undefined)
 const KIND_LABEL: Record<MergeKind, string> = {
   differs: 'Different values',
   'local-only': 'Only on this machine',
@@ -69,16 +76,25 @@ const canSave = computed(
   () =>
     mergeable.value && open.value.length === 0 && !blocked.value && !loading.value && !busy.value
 )
+const marking = computed(
+  () => preview.value?.keys.filter((k) => choices.value.get(k.key) === 'machine') ?? []
+)
 
 /** Whether a copy has the key at all. */
-const has = (k: MergeKey, take: MergeTake): boolean =>
-  k.kind === 'differs' || k.kind === (take === 'local' ? 'local-only' : 'vault-only')
+const has = (k: MergeKey, side: Side): boolean =>
+  k.kind === 'differs' || k.kind === (side === 'local' ? 'local-only' : 'vault-only')
+
+/** The copy whose value the result has: a machine-specific key keeps this machine's. */
+const takenSide = (key: string): Side | null => {
+  const take = choices.value.get(key)
+  return take === undefined ? null : take === 'vault' ? 'vault' : 'local'
+}
 
 function choose(key: string, take: MergeTake): void {
   choices.value.set(key, take)
 }
 
-function chooseAll(take: MergeTake): void {
+function chooseAll(take: Side): void {
   for (const k of preview.value?.keys ?? []) choices.value.set(k.key, take)
 }
 
@@ -218,7 +234,11 @@ watch(
         </p>
 
         <template v-else>
-          <p v-if="preview.keys.length === 0" class="notice notice-info">
+          <p v-if="preview.keys.length === 0 && preview.unmarked.length" class="notice notice-info">
+            No key needs a choice. The vault copy marks some of your keys machine-specific: saving
+            keeps your values and marks them in your .env too.
+          </p>
+          <p v-else-if="preview.keys.length === 0" class="notice notice-info">
             The two copies already match. Saving just records them as in sync.
           </p>
           <template v-else>
@@ -255,27 +275,33 @@ watch(
                 >
                   <td class="resolve-key">
                     <code>{{ k.key }}</code>
-                    <div class="muted small">{{ KIND_LABEL[k.kind] }}</div>
+                    <div class="muted small">
+                      {{
+                        choices.get(k.key) === 'machine'
+                          ? 'Machine-specific from now on'
+                          : KIND_LABEL[k.kind]
+                      }}
+                    </div>
                   </td>
                   <td
-                    v-for="take in TAKES"
-                    :key="take"
+                    v-for="side in SIDES"
+                    :key="side"
                     class="resolve-value"
-                    :class="{ 'resolve-taken': choices.get(k.key) === take }"
+                    :class="{ 'resolve-taken': takenSide(k.key) === side }"
                   >
-                    <span v-if="!has(k, take)" class="muted">—</span>
+                    <span v-if="!has(k, side)" class="muted">—</span>
                     <template v-else-if="values">
-                      <span v-if="values.get(k.key)?.[take] === ''" class="muted small">
+                      <span v-if="values.get(k.key)?.[side] === ''" class="muted small">
                         (empty)
                       </span>
-                      <code v-else class="resolve-text">{{ values.get(k.key)?.[take] }}</code>
+                      <code v-else class="resolve-text">{{ values.get(k.key)?.[side] }}</code>
                     </template>
                     <span v-else class="mono muted">{{ MASK }}</span>
                   </td>
                   <td class="col-actions">
                     <div class="segmented" role="radiogroup" :aria-label="`Copy of ${k.key}`">
                       <button
-                        v-for="take in TAKES"
+                        v-for="take in takesOf(k)"
                         :key="take"
                         type="button"
                         role="radio"
@@ -292,6 +318,13 @@ watch(
                 </tr>
               </tbody>
             </table>
+
+            <p v-if="marking.length" class="notice notice-info">
+              <strong>Machine-specific:</strong> this machine keeps its value and marks it
+              <code class="marker"># envvault:local</code>. The vault copy keeps the key without a
+              value, so each of your machines keeps its own, and a machine that doesn't have it gets
+              it empty.
+            </p>
 
             <div class="row">
               <template v-if="values">
@@ -325,6 +358,10 @@ watch(
             <p class="muted small">
               Marked <code class="marker"># envvault:local</code>: your local values stay as they
               are.
+              <template v-if="preview.unmarked.length">
+                The vault copy marks {{ preview.unmarked.join(', ') }}, so your .env gets the marker
+                too.
+              </template>
             </p>
           </div>
           <div v-if="preview.unset.length" class="diff-group">

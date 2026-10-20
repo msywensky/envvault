@@ -783,6 +783,10 @@ code,
   box-shadow: inset 3px 0 var(--warn-text);
 }
 
+.editor-marking td:first-child {
+  box-shadow: inset 3px 0 var(--info-text);
+}
+
 .editor-removed td {
   opacity: 0.55;
 }
@@ -797,12 +801,13 @@ code,
   vertical-align: top;
 }
 
+/* Breaks only a name too long for the column, so the choices can't squeeze it. */
 .resolve-key {
-  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .resolve-value {
-  width: 26%;
+  width: 24%;
 }
 
 .resolve-text {

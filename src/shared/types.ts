@@ -90,6 +90,8 @@ export interface SaveEditRequest extends EnvFile {
   set: EnvChange[]
   add: EnvChange[]
   remove: string[]
+  /** Keys to mark machine-specific (# envvault:local): the vault copy keeps them without a value. */
+  mark: string[]
 }
 
 export interface SaveEditResult {
@@ -395,8 +397,12 @@ export interface MergeKey {
   kind: MergeKind
 }
 
-/** Which copy a key comes from in the merged file. */
-export type MergeTake = 'local' | 'vault'
+/**
+ * Which copy a key comes from in the merged file. `machine`: this machine's
+ * value, marked machine-specific, so the vault copy keeps the key without a
+ * value. Not for a key only the vault copy has.
+ */
+export type MergeTake = 'local' | 'vault' | 'machine'
 
 export interface MergeChoice {
   key: string
@@ -413,7 +419,9 @@ export interface MergePreview {
   kept: string[]
   /** Keys the vault marks machine-specific that the local file lacks: written empty. */
   unset: string[]
-  /** No key differs: only formatting, comments or line endings do. */
+  /** Kept keys the vault marks but the local file doesn't: the merged file marks them. */
+  unmarked: string[]
+  /** No key differs and none needs a marker: only formatting, comments or line endings do. */
   formatOnly: boolean
   vault: VaultInfo
   /** This machine has never synced this file. */
