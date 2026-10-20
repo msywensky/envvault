@@ -101,6 +101,7 @@ npm run build      # typecheck and build to out/
 A conflict means both copies changed since this machine last synced, or they differ and this machine never synced them. **Resolve…** merges them key by key:
 
 - Every key whose copies differ is listed by name: different values, only on this machine, or only in the vault copy. Choose which copy each one comes from. **Use this machine's for all** and **Use the vault's for all** set every key at once.
+- If a key differs because each machine should have its own value (a port, a local path), choose **Machine-specific**: your `.env` keeps your value and gets the [marker](#machine-specific-keys), and the vault copy keeps the key without a value.
 - Nothing is chosen for you. EnvVault remembers only a hash of what it last synced, not the content, so it can't tell whether a key only one copy has was added there or removed from the other.
 - Values are masked. **Show values** shows both copies' values; they are hidden again after a minute.
 - **Save to both** writes the result to your `.env` (backed up first, like a pull) and as a new version of the vault copy, so both end in sync. Comments and layout come from the vault copy, and machine-specific keys keep your values, as on a pull.
@@ -121,6 +122,10 @@ DATA_DIR=/Users/me/data
 - A pull never overwrites or deletes a key that is marked in your `.env` or in the vault copy. It keeps your line and adds the marker if your file didn't have it. A marked key you don't have yet is written empty, and the pull dialog lists it so you can fill it in.
 - If the vault marks a key but your `.env` doesn't, pushing uploads your value and drops the marker. The push dialog warns you first.
 - A marked key must be assigned only once in the file.
+
+You can also mark a key from the app: **Machine-specific** in the [Resolve dialog](#resolving-a-conflict) or in the [editor](#editing-the-vault-copy). Either way the vault copy keeps the key without its value, and each machine adds the marker the next time it pulls, keeping its own value.
+
+To make a key shared again, remove its `# envvault:local` line in the `.env` on each machine, then push. Removing it in only one place isn't enough: a pull keeps a key that your `.env` marks, and the next push from that machine marks it in the vault again.
 
 ### `.env.example` checks
 
@@ -168,6 +173,7 @@ Click **Edit** on a `.env` to change its vault copy in a table of keys and value
 
 - Values are masked until you click **Show**, and masked again when the window is hidden or after a minute without input. You can type or paste a new value into a masked field without displaying it. Multi-line values (such as a PEM key) need **Show** to edit.
 - You can add, change and remove keys. Machine-specific keys are listed but have no value to edit, since the vault doesn't store one.
+- **Machine-specific** marks a key: the vault copy keeps it without its value, and each machine keeps its own (see [Machine-specific keys](#machine-specific-keys)).
 - Comments, blank lines, `export`, spacing and line endings stay as they are. A changed value keeps its line's prefix and trailing comment, and is quoted only as much as dotenv needs to read it back exactly.
 - **Review changes** lists the key names that change. **Save to vault** writes a new version, unless the vault copy changed since you opened the editor; then reload and edit again.
 - Saving never touches your local `.env` directly. A repo that has one shows "Vault newer" afterwards; automatic pull brings the edit in right away (or click **Pull** if it's off), keeping machine-specific values.

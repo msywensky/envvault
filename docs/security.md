@@ -53,7 +53,7 @@
 - **The key** lives only in the main process; each operation gets a copy, wiped when it finishes. It's wiped on lock, idle timeout (default 5 minutes; can be turned off after a warning), window close, sleep and screen lock.
 - **Finding env files:** `git ls-files`, which never refreshes the index (unlike `git status`), so no clean or smudge filters run, and skips folders git ignores. Templates, backups and tracked variants never sync; ignored repos are never read.
 - **`.env.example`** is read with the same checks as `.env` (and at most 1 MiB), only to compare it. Only key names leave the main process.
-- **Machine-specific values** (`# envvault:local`) are never uploaded: the vault copy has `KEY=` under the marker.
+- **Machine-specific values** (`# envvault:local`) are never uploaded: the vault copy has `KEY=` under the marker. Marking a key from the app (in the Resolve dialog or the editor) sends only its name, and removes its value from the vault copy; earlier versions in a git vault's history keep it.
 - **Pulls** are refused unless the env file is git-ignored and **not tracked**, checked by git in the file's folder. The backup and the temp file are named so `.env.bak.*` covers them, and are checked too. A pull never creates a folder.
 - **Resolving a conflict** writes both sides: every check (the content you reviewed, no rollback, the pull's git checks) runs first, then the vault copy is written at the version you reviewed, then your env file, as a pull writes it.
 - **Removing a vault copy** deletes only the version you saw, touches no `.env`, and keeps that version as this machine's floor, so a later push continues above it.
