@@ -80,6 +80,24 @@ export function differingValues(local: string, vault: string): MergeValues['valu
 }
 
 /**
+ * Pull and mark: `keys` kept from the local file as machine-specific, for
+ * mergePull; every other key comes from the vault, as on a pull. Throws
+ * MergeError unless each is a key whose values differ, named once.
+ */
+export function markTakes(cmp: EnvComparison, keys: string[]): LocalTakes {
+  const differs = new Set(cmp.keys.filter((k) => k.kind === 'differs').map((k) => k.key))
+  const takes = new Map<string, 'machine'>()
+  for (const key of keys) {
+    if (!differs.has(key)) {
+      throw new MergeError('Only a key whose value changes can be marked here. Review again.')
+    }
+    if (takes.has(key)) throw new MergeError('A key was marked more than once.')
+    takes.set(key, 'machine')
+  }
+  return takes
+}
+
+/**
  * The keys taken from the local file, for mergePull. Throws MergeError
  * unless `choices` names every key in `cmp` exactly once, and nothing else,
  * and marks only keys the local file has.

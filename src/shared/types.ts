@@ -362,8 +362,18 @@ export interface PushRequest extends EnvFile {
   expected: Expected
 }
 
-export interface PullRequest extends EnvFile {
+/** An env file, and the content the user reviewed (see Expected). */
+export interface ReviewedFile extends EnvFile {
   expected: Expected
+}
+
+export interface PullRequest extends ReviewedFile {
+  /**
+   * Changed keys to keep with this machine's values, marked machine-specific
+   * (pull and mark). The vault copy then changes too: it is written with
+   * them blank, like a resolved conflict.
+   */
+  mark?: string[]
 }
 
 /**
@@ -383,6 +393,8 @@ export interface RawDiffRequest extends PullRequest {
 
 export interface PullResult {
   backupName: string | null
+  /** The vault copy now: a new version if keys were marked. */
+  vault: VaultInfo
 }
 
 /**
@@ -444,7 +456,7 @@ export interface MergeValues {
 }
 
 /** Resolve a conflict: a copy for every key in MergePreview.keys. */
-export interface MergeRequest extends PullRequest {
+export interface MergeRequest extends ReviewedFile {
   choices: MergeChoice[]
 }
 
