@@ -1,72 +1,38 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import FolderField from '../components/FolderField.vue'
-import SetupCodeField from '../components/SetupCodeField.vue'
-import SkillField from '../components/SkillField.vue'
-import { run, store, toast } from '../store'
-import { machineNameProblem } from '../status'
-import { vaultKindLabel, vaultLabel } from '../vault'
+// Settings, in tabs. Each tab saves on its own, with a Save above and below
+// it. Every tab stays mounted, so switching keeps unsaved edits; leaving
+// Settings drops them.
+import { reactive } from 'vue'
+import SettingsCommandLine from '../components/SettingsCommandLine.vue'
+import SettingsGeneral from '../components/SettingsGeneral.vue'
+import SettingsSync from '../components/SettingsSync.vue'
+import { store, type SettingsTab } from '../store'
 
-const busy = ref(false)
-const machineName = ref(store.settings?.machineName ?? '')
-const nameProblem = computed(() => machineNameProblem(machineName.value))
-const autoLock = ref(store.settings?.autoLock ?? true)
-const autoLockMinutes = ref(store.settings?.autoLockMinutes ?? 5)
-// Turning auto-lock off waits for the warning to be confirmed; turning it on doesn't.
-const confirmingAutoLockOff = ref(false)
-const checkExample = ref(store.settings?.checkExample ?? true)
-const autoPull = ref(store.settings?.autoPull ?? false)
-const backups = ref(store.settings?.backups ?? true)
-const backupCount = ref(store.settings?.backupCount ?? 3)
-const cliAccess = ref(store.settings?.cliAccess ?? false)
-const miniOnTop = ref(store.settings?.miniOnTop ?? true)
+const TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'sync', label: 'Sync' },
+  { id: 'cli', label: 'Command line' }
+]
 
-async function pick(which: 'projects'): Promise<void> {
-  busy.value = true
-  const next = await run(() => window.envvault.pickFolder(which))
-  busy.value = false
-  if (next) {
-    store.settings = next
-    toast('success', 'Folder saved.')
+const unsaved = reactive<Record<SettingsTab, boolean>>({ general: false, sync: false, cli: false })
+
+// Arrow keys, Home and End move between tabs, as in any tab list.
+function onKeydown(event: KeyboardEvent): void {
+  const i = TABS.findIndex((t) => t.id === store.settingsTab)
+  const moves: Record<string, number> = {
+    ArrowLeft: i - 1,
+    ArrowRight: i + 1,
+    Home: 0,
+    End: TABS.length - 1
   }
-}
-
-function changeAutoLock(event: Event): void {
-  const input = event.target as HTMLInputElement
-  if (input.checked) {
-    autoLock.value = true
-    confirmingAutoLockOff.value = false
-    return
-  }
-  input.checked = true
-  confirmingAutoLockOff.value = true
-}
-
-function turnOffAutoLock(): void {
-  autoLock.value = false
-  confirmingAutoLockOff.value = false
-}
-
-async function save(): Promise<void> {
-  busy.value = true
-  const saved = await run(() =>
-    window.envvault.saveSettings({
-      autoLock: autoLock.value,
-      autoLockMinutes: Number(autoLockMinutes.value),
-      machineName: machineName.value,
-      checkExample: checkExample.value,
-      autoPull: autoPull.value,
-      backups: backups.value,
-      backupCount: Number(backupCount.value),
-      cliAccess: cliAccess.value,
-      miniOnTop: miniOnTop.value
-    })
-  )
-  busy.value = false
-  if (saved) {
-    store.settings = saved
-    toast('success', 'Settings saved.')
-  }
+  const to = moves[event.key]
+  if (to === undefined) return
+  event.preventDefault()
+  const tab = TABS[(to + TABS.length) % TABS.length]
+  if (!tab) return
+  store.settingsTab = tab.id
+  const list = event.currentTarget as HTMLElement
+  list.querySelector<HTMLElement>(`#settings-tab-${tab.id}`)?.focus()
 }
 </script>
 
@@ -75,153 +41,49 @@ async function save(): Promise<void> {
     <div class="page-header">
       <h1 class="grow">Settings</h1>
     </div>
-    <div class="card">
-      <form class="card-body stack" @submit.prevent="save">
-        <FolderField
-          label="Projects folder"
-          :path="store.settings?.projectsPath ?? null"
-          :busy="busy"
-          @pick="pick('projects')"
-        />
-        <!-- Changing it is done in Setup, which offers both kinds of vault. -->
-        <div class="field">
-          <label>Vault</label>
-          <div class="folder">
-            <span class="vault-kind">{{ vaultKindLabel(store.settings?.vault) }}</span>
-            <span class="folder-path" :title="vaultLabel(store.settings?.vault)">
-              {{ vaultLabel(store.settings?.vault) }}
-            </span>
-            <button type="button" class="btn btn-sm" :disabled="busy" @click="store.view = 'setup'">
-              Change…
-            </button>
-          </div>
-          <p class="muted small">Changing it locks EnvVault so you can unlock the other vault.</p>
-        </div>
-        <SetupCodeField />
-        <div class="field">
-          <label for="settings-machine">This machine's name</label>
-          <input
-            id="settings-machine"
-            v-model="machineName"
-            class="input"
-            maxlength="64"
-            required
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <p v-if="nameProblem" class="muted small">{{ nameProblem }}</p>
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input :checked="autoLock" type="checkbox" @change="changeAutoLock" />
-            <span>Lock automatically when idle</span>
-          </label>
-          <div v-if="confirmingAutoLockOff" class="notice notice-warn stack" role="alert">
-            <p>
-              <strong>Turn off auto-lock?</strong> EnvVault will stay unlocked until you click Lock,
-              close its window, or the computer sleeps or locks its screen. Meanwhile anyone at this
-              computer can push, pull and show .env values without the password.
-            </p>
-            <div class="row">
-              <span class="grow" />
-              <button type="button" class="btn btn-sm" @click="confirmingAutoLockOff = false">
-                Keep it on
-              </button>
-              <button type="button" class="btn btn-sm btn-danger" @click="turnOffAutoLock">
-                Turn off
-              </button>
-            </div>
-          </div>
-          <p v-else-if="!autoLock" class="muted small">
-            EnvVault stays unlocked until you click Lock, close its window, or the computer sleeps
-            or locks its screen.
-          </p>
-        </div>
-        <div v-if="autoLock" class="field">
-          <label for="settings-autolock">Auto-lock after (minutes idle)</label>
-          <input
-            id="settings-autolock"
-            v-model.number="autoLockMinutes"
-            class="input input-narrow"
-            type="number"
-            min="1"
-            max="120"
-            required
-          />
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input v-model="checkExample" type="checkbox" />
-            <span>Compare with .env.example before a push or pull</span>
-          </label>
-          <p class="muted small">
-            Warns about missing keys and secret-looking values copied into .env.example. Never
-            blocks.
-          </p>
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input v-model="autoPull" type="checkbox" />
-            <span>Pull automatically when another machine updates a .env</span>
-          </label>
-          <p class="muted small">
-            While EnvVault is unlocked. Only when your local .env hasn't changed since the last
-            sync; conflicts are left for you. Creates a missing .env, and saves a backup first if
-            backups are on. Off by default: a push from any of your machines then reaches this one
-            without review.
-          </p>
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input v-model="backups" type="checkbox" />
-            <span>Back up .env before a pull replaces it</span>
-          </label>
-          <p class="muted small">
-            Saved next to it as .env.bak.&lt;timestamp&gt;, in plaintext like .env. Git ignores
-            them, but other tools may not: add .env.bak.* to a .dockerignore too.
-          </p>
-        </div>
-        <div v-if="backups" class="field">
-          <label for="settings-backups">Backups to keep per repo</label>
-          <input
-            id="settings-backups"
-            v-model.number="backupCount"
-            class="input input-narrow"
-            type="number"
-            min="1"
-            max="50"
-            required
-          />
-          <p class="muted small">Older ones are deleted when a pull saves a new one.</p>
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input v-model="miniOnTop" type="checkbox" />
-            <span>Keep the mini window on top</span>
-          </label>
-          <p class="muted small">
-            Click Mini next to a repo to show just that repo, with its Push button, in a small
-            window above your other windows.
-          </p>
-        </div>
-        <div class="field">
-          <label class="checkbox">
-            <input v-model="cliAccess" type="checkbox" />
-            <span>Allow command-line access</span>
-          </label>
-          <p class="muted small">
-            Lets the envvault command and the Claude Code skill check status and push while EnvVault
-            is unlocked. Any program running as you can use it. It never receives values.
-          </p>
-        </div>
-        <SkillField />
-        <div class="row">
-          <span class="grow" />
-          <button type="submit" class="btn btn-primary" :disabled="busy || !!nameProblem">
-            Save
-          </button>
-        </div>
-      </form>
+    <div class="subtabs" role="tablist" aria-label="Settings" @keydown="onKeydown">
+      <button
+        v-for="tab in TABS"
+        :id="`settings-tab-${tab.id}`"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        class="subtab"
+        :class="{ 'subtab-active': store.settingsTab === tab.id }"
+        :aria-selected="store.settingsTab === tab.id ? 'true' : 'false'"
+        :aria-controls="`settings-panel-${tab.id}`"
+        :tabindex="store.settingsTab === tab.id ? 0 : -1"
+        @click="store.settingsTab = tab.id"
+      >
+        {{ tab.label }}
+        <span v-if="unsaved[tab.id]" class="unsaved-dot" title="Unsaved changes">
+          <span class="sr-only">(unsaved changes)</span>
+        </span>
+      </button>
     </div>
+    <section
+      v-show="store.settingsTab === 'general'"
+      id="settings-panel-general"
+      role="tabpanel"
+      aria-labelledby="settings-tab-general"
+    >
+      <SettingsGeneral @unsaved="unsaved.general = $event" />
+    </section>
+    <section
+      v-show="store.settingsTab === 'sync'"
+      id="settings-panel-sync"
+      role="tabpanel"
+      aria-labelledby="settings-tab-sync"
+    >
+      <SettingsSync @unsaved="unsaved.sync = $event" />
+    </section>
+    <section
+      v-show="store.settingsTab === 'cli'"
+      id="settings-panel-cli"
+      role="tabpanel"
+      aria-labelledby="settings-tab-cli"
+    >
+      <SettingsCommandLine @unsaved="unsaved.cli = $event" />
+    </section>
   </div>
 </template>

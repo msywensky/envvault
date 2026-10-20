@@ -11,11 +11,15 @@ import type {
   RepoInfo,
   RepoRow,
   RepoSettingsView,
-  Settings
+  Settings,
+  SettingsRequest
 } from '../../shared/types'
 import { fileOf } from './status'
 
 export type View = 'loading' | 'setup' | 'lock' | 'repos' | 'settings'
+
+/** Settings' tabs (see SettingsView). */
+export type SettingsTab = 'general' | 'sync' | 'cli'
 
 export interface Toast {
   id: number
@@ -27,6 +31,8 @@ export const store = reactive({
   view: 'loading' as View,
   app: null as AppState | null,
   settings: null as Settings | null,
+  /** The Settings tab to show, for this run only. */
+  settingsTab: 'general' as SettingsTab,
   /** A row per env file of the repos that aren't ignored. */
   repos: [] as RepoRow[],
   /** Every repo, ignored ones included (see RepoInfo). */
@@ -81,6 +87,38 @@ export async function run<T>(request: () => Promise<Result<T>>): Promise<T | nul
   if (res.ok) return res.data
   if (res.error.code !== 'LOCKED') toast('error', res.error.message)
   return null
+}
+
+/**
+ * Save some of this machine's settings. settings:save takes them all, so the
+ * others are sent as saved: one tab's Save never saves another tab's edits.
+ * Returns whether it saved.
+ */
+export async function saveSettings(changes: Partial<SettingsRequest>): Promise<boolean> {
+  const s = store.settings
+  if (!s) return false
+  const request: SettingsRequest = {
+    autoLock: s.autoLock,
+    autoLockMinutes: s.autoLockMinutes,
+    machineName: s.machineName,
+    checkExample: s.checkExample,
+    autoPull: s.autoPull,
+    backups: s.backups,
+    backupCount: s.backupCount,
+    cliAccess: s.cliAccess,
+    miniOnTop: s.miniOnTop,
+    ...changes
+  }
+  const saved = await run(() => window.envvault.saveSettings(request))
+  if (saved) store.settings = saved
+  return saved !== null
+}
+
+/** True if any of these differ from the saved settings. */
+export function unsavedSettings(draft: Partial<SettingsRequest>): boolean {
+  const saved = store.settings
+  if (!saved) return false
+  return (Object.keys(draft) as (keyof SettingsRequest)[]).some((k) => draft[k] !== saved[k])
 }
 
 /** Re-read app state and pick the screen to show. */

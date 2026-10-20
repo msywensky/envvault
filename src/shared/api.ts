@@ -22,6 +22,7 @@ import type {
   SaveEditRequest,
   SaveEditResult,
   Settings,
+  SettingsRequest,
   SkillInfo,
   VaultNameRequest
 } from './types'
@@ -71,17 +72,7 @@ export interface EnvVaultApi {
   /** Throttled by the renderer; resets the idle auto-lock timer. */
   activity(): R<'app:activity'>
   getSettings(): R<'settings:get'>
-  saveSettings(patch: {
-    autoLock: boolean
-    autoLockMinutes: number
-    machineName: string
-    checkExample: boolean
-    autoPull: boolean
-    backups: boolean
-    backupCount: number
-    cliAccess: boolean
-    miniOnTop: boolean
-  }): R<'settings:save'>
+  saveSettings(settings: SettingsRequest): R<'settings:save'>
   /** Opens a native folder picker. Resolves to null if cancelled. */
   pickFolder(which: 'projects' | 'vault'): R<'settings:pickFolder'>
   /**
