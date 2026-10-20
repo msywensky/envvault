@@ -210,7 +210,7 @@ Packaging (`electron-builder.yml`) is deliberately minimal:
 - macOS (dmg) and Windows (nsis) only. `build:linux` has no config and isn't supported.
 - Only `out/` is shipped. electron-builder adds `package.json` and the production dependencies itself.
 - `out/cli/**` is `asarUnpack`ed, because the envvault command runs under plain Node, which can't read `app.asar`.
-- Electron fuses (`electronFuses`) turn off run-as-node, `NODE_OPTIONS` and `--inspect`, and load only an integrity-checked `app.asar`. `grantFileProtocolExtraPrivileges` stays on: the renderer loads over `file://`, and without it the window is blank.
+- Electron fuses (`electronFuses`) turn off run-as-node, `NODE_OPTIONS` and `--inspect`, and load only an integrity-checked `app.asar`. `grantFileProtocolExtraPrivileges` stays on: the renderer loads over `file://`, and without it the window is blank. `resetAdHocDarwinSignature` re-signs ad hoc after the flip: electron-builder signs only when it finds an identity, and Apple Silicon kills an app whose framework no longer matches its signature (`Code Signature Invalid` in `IsRunAsNodeEnabled`).
 - No auto-update (`publish: null`), unsigned, not notarized. Unsigned also means macOS system notifications fail (see automatic pull above).
 - The macOS entitlements allow only V8's JIT (needed for libsodium's WebAssembly).
 - `npm run build:unpack` produces `dist/win-unpacked/`. The packaged app ignores `ENVVAULT_PROFILE` and keeps its data in `%APPDATA%\envvault`.

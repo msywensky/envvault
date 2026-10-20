@@ -24,6 +24,10 @@ electronFuses:
   # Left on (the default): the renderer loads over file://, and turning it off
   # leaves a blank window.
   grantFileProtocolExtraPrivileges: true
+  # Flipping fuses rewrites Electron Framework and breaks its ad-hoc signature, and
+  # electron-builder re-signs only with a signing identity. Without this the unsigned
+  # build is killed at launch on Apple Silicon (Code Signature Invalid).
+  resetAdHocDarwinSignature: true
 
 # No native modules (libsodium is WebAssembly), so nothing to rebuild.
 npmRebuild: false
