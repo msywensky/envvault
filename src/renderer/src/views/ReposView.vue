@@ -1,24 +1,66 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import type { RepoRow } from '../../../shared/types'
+import type { RepoInfo, RepoRow } from '../../../shared/types'
+import DefaultsDialog from '../components/DefaultsDialog.vue'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
 import RemoveDialog from '../components/RemoveDialog.vue'
+import RepoSettingsDialog from '../components/RepoSettingsDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
 import SyncDialog from '../components/SyncDialog.vue'
-import { enterMini, loadRepos, store } from '../store'
-import { actionsFor, folderName, isQuiet, rowKey, type RowAction } from '../status'
+import { call, enterMini, loadRepos, store, toast } from '../store'
+import {
+  actionsFor,
+  folderName,
+  isQuiet,
+  repoKey,
+  rowKey,
+  syncsAs,
+  type RowAction
+} from '../status'
 
 const loading = ref(false)
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
 const editing = ref<RepoRow | null>(null)
 const removing = ref<RepoRow | null>(null)
+const configuring = ref<RepoInfo | null>(null)
+const editingDefaults = ref(false)
+const showNoEnv = ref(false)
+const showIgnored = ref(false)
+const confirmingReset = ref(false)
+const busy = ref(false)
+
+const rowsOf = computed(() => {
+  const byRepo = new Map<string, RepoRow[]>()
+  for (const row of store.repos)
+    byRepo.set(repoKey(row), [...(byRepo.get(repoKey(row)) ?? []), row])
+  return byRepo
+})
+/** Repos that aren't ignored, and have nothing but the No .env placeholder (or not even that). */
+const noEnv = computed(() =>
+  store.repoInfo.filter(
+    (r) =>
+      !r.ignored && (rowsOf.value.get(repoKey(r)) ?? []).every((row) => row.status === 'no-env')
+  )
+)
+const ignored = computed(() => store.repoInfo.filter((r) => r.ignored))
+const listed = computed(() => {
+  const apart = new Set(noEnv.value.map(repoKey))
+  return {
+    rows: store.repos.filter((r) => !apart.has(repoKey(r))),
+    repos: store.repoInfo.filter((r) => !r.ignored && !apart.has(repoKey(r)))
+  }
+})
+/** The No .env row, which starts a vault copy with Edit. */
+const placeholder = (repo: RepoInfo): RepoRow | null => rowsOf.value.get(repoKey(repo))?.[0] ?? null
+
+const settingsError = computed(() => store.repoSettings?.error ?? null)
 
 const counts = computed(() => {
   // Files found but never pushed are only suggestions.
-  const needsAction = store.repos.filter(
+  const needsAction = listed.value.rows.filter(
     (r) => !isQuiet(r) && (r.status === 'error' || actionsFor(r).length > 0)
   ).length
-  return { total: new Set(store.repos.map((r) => r.name.toLowerCase())).size, needsAction }
+  return { total: store.repoInfo.filter((r) => !r.ignored).length, needsAction }
 })
 
 /** Reload the list. `rescan` also asks git again which env files each repo has. */
@@ -46,6 +88,45 @@ async function onDone(): Promise<void> {
   await refresh(false)
 }
 
+/** Ignore a repo, or stop, keeping the rest of its settings. */
+async function setIgnored(repo: RepoInfo, on: boolean): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  const own = store.repoSettings?.repos[repo.vaultName.toLowerCase()]
+  // Plain values only: IPC can't clone reactive ones.
+  const request = {
+    vaultName: repo.vaultName,
+    ignored: on,
+    include: own?.include ? [...own.include] : null,
+    exclude: own?.exclude ? [...own.exclude] : null
+  }
+  const res = await call(() => window.envvault.saveRepoSettings(request))
+  busy.value = false
+  if (res.ok) {
+    toast('success', on ? `Ignoring ${repo.name}.` : `No longer ignoring ${repo.name}.`)
+    await refresh(!on)
+  } else if (res.error.code !== 'LOCKED') {
+    toast('error', res.error.message)
+  }
+}
+
+async function resetSettings(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  const res = await call(() => window.envvault.resetSettings())
+  busy.value = false
+  confirmingReset.value = false
+  if (res.ok) {
+    toast('success', 'Reset the repo settings.')
+    await refresh(false)
+  } else if (res.error.code !== 'LOCKED') {
+    toast('error', res.error.message)
+  }
+}
+
+const copies = (n: number): string =>
+  n === 0 ? 'Nothing in the vault' : `${n} vault ${n === 1 ? 'copy' : 'copies'}`
+
 onMounted(() => refresh(true))
 </script>
 
@@ -64,28 +145,161 @@ onMounted(() => refresh(true))
           </template>
         </p>
       </div>
+      <button
+        type="button"
+        class="btn"
+        :disabled="!store.reposLoaded || !!settingsError"
+        title="The env files every repo without its own lists syncs"
+        @click="editingDefaults = true"
+      >
+        Defaults…
+      </button>
       <button type="button" class="btn" :disabled="loading" @click="refresh(true)">
         <span v-if="loading" class="spinner" />
         Refresh
       </button>
     </div>
 
+    <div v-if="settingsError" class="notice notice-error stack settings-error" role="alert">
+      <span>{{ settingsError.message }}</span>
+      <div v-if="settingsError.code === 'VAULT_TAMPERED'" class="row">
+        <template v-if="confirmingReset">
+          <span class="grow">
+            Replace them with empty settings on every machine? Every repo then syncs its .env files
+            only, and none is ignored.
+          </span>
+          <button type="button" class="btn btn-sm" @click="confirmingReset = false">Cancel</button>
+          <button
+            type="button"
+            class="btn btn-sm btn-danger"
+            :disabled="busy"
+            @click="resetSettings"
+          >
+            Reset
+          </button>
+        </template>
+        <button v-else type="button" class="btn btn-sm" @click="confirmingReset = true">
+          Reset settings…
+        </button>
+      </div>
+    </div>
+
     <div class="card">
       <div v-if="!store.reposLoaded" class="empty">
         <span class="row"><span class="spinner" /> Loading…</span>
       </div>
-      <div v-else-if="store.repos.length === 0" class="empty">
+      <div v-else-if="store.repoInfo.length === 0" class="empty">
         No git repositories found in the projects folder.
+      </div>
+      <div v-else-if="listed.rows.length === 0" class="empty">
+        No repo has env files to sync yet. They're listed below.
       </div>
       <RepoTable
         v-else
-        :rows="store.repos"
+        :rows="listed.rows"
+        :repos="listed.repos"
         @action="onAction"
         @edit="editing = $event"
         @mini="enterMini"
         @remove="removing = $event"
+        @settings="configuring = $event"
       />
     </div>
+
+    <section v-if="store.reposLoaded && noEnv.length" class="repo-section">
+      <button
+        type="button"
+        class="btn-link small"
+        :aria-expanded="showNoEnv"
+        @click="showNoEnv = !showNoEnv"
+      >
+        No env files ({{ noEnv.length }}) · {{ showNoEnv ? 'Hide' : 'Show' }}
+      </button>
+      <div v-if="showNoEnv" class="card">
+        <table class="table">
+          <tbody>
+            <tr v-for="repo in noEnv" :key="repoKey(repo)">
+              <td>
+                <div class="repo-name">{{ repo.name }}</div>
+                <div v-if="syncsAs(repo)" class="muted small">
+                  syncs as <code>{{ repo.vaultName }}</code>
+                </div>
+              </td>
+              <td class="col-actions">
+                <div class="row">
+                  <button
+                    v-if="placeholder(repo)"
+                    type="button"
+                    class="btn btn-sm"
+                    title="Start a vault copy of its .env"
+                    @click="editing = placeholder(repo)"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="busy || !!settingsError"
+                    title="Leave this repo alone, on every machine"
+                    @click="setIgnored(repo, true)"
+                  >
+                    Ignore
+                  </button>
+                  <button type="button" class="btn btn-sm" @click="configuring = repo">
+                    Settings…
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="store.reposLoaded && ignored.length" class="repo-section">
+      <button
+        type="button"
+        class="btn-link small"
+        :aria-expanded="showIgnored"
+        @click="showIgnored = !showIgnored"
+      >
+        Ignored ({{ ignored.length }}) · {{ showIgnored ? 'Hide' : 'Show' }}
+      </button>
+      <div v-if="showIgnored" class="card">
+        <table class="table">
+          <tbody>
+            <tr v-for="repo in ignored" :key="repoKey(repo)" class="row-dim">
+              <td>
+                <div class="repo-name">{{ repo.name }}</div>
+                <div class="small">
+                  {{
+                    repo.local ? copies(repo.copies) : `Only in the vault: ${copies(repo.copies)}`
+                  }}
+                  <template v-if="syncsAs(repo)">
+                    · syncs as <code>{{ repo.vaultName }}</code>
+                  </template>
+                </div>
+              </td>
+              <td class="col-actions">
+                <div class="row">
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="busy || !!settingsError"
+                    @click="setIgnored(repo, false)"
+                  >
+                    Stop ignoring
+                  </button>
+                  <button type="button" class="btn btn-sm" @click="configuring = repo">
+                    Settings…
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <SyncDialog
       v-if="open"
@@ -113,5 +327,14 @@ onMounted(() => refresh(true))
       @close="removing = null"
       @done="onDone"
     />
+
+    <RepoSettingsDialog
+      v-if="configuring"
+      :key="repoKey(configuring)"
+      :repo="configuring"
+      @close="configuring = null"
+    />
+
+    <DefaultsDialog v-if="editingDefaults" @close="editingDefaults = false" />
   </div>
 </template>

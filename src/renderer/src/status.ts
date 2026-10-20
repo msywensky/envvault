@@ -1,5 +1,6 @@
 import { ROOT_ENV } from '../../shared/envfile'
-import type { EnvFile, RepoRow } from '../../shared/types'
+import { MAX_PATTERNS, patternProblem } from '../../shared/envrules'
+import type { EnvFile, RepoInfo, RepoRow } from '../../shared/types'
 
 export type RowStatus = RepoRow['status']
 
@@ -20,6 +21,42 @@ export const repoKey = (repo: Pick<RepoRow, 'name' | 'local'>): string =>
 /** A key for v-for and :key, unique per env file (see sameFile). */
 export const rowKey = (row: RepoRow): string =>
   `${repoKey(row)}\n${row.path?.toLowerCase() ?? row.storedName ?? ''}`
+
+/** The name a folder syncs as in the vault, if this machine syncs it as another; else null. */
+export function syncsAs(repo: Pick<RepoInfo, 'name' | 'local' | 'vaultName'>): string | null {
+  return repo.local && repo.vaultName.toLowerCase() !== repo.name.toLowerCase()
+    ? repo.vaultName
+    : null
+}
+
+/** Same rule as core's isValidRepoName (src/core/paths.ts), less device names, which main refuses. */
+export function repoNameProblem(name: string): string | null {
+  if (name === '') return 'Enter a name.'
+  if (name.length > 100) return 'Use at most 100 characters.'
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.endsWith('.')) {
+    return 'Use letters, digits, . _ or -, starting with a letter or digit and not ending with a dot.'
+  }
+  return null
+}
+
+/** The patterns in a text box: one per line, blank lines left out. */
+export const patternLines = (text: string): string[] =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+
+/** What's wrong with a text box of patterns (see src/shared/envrules.ts), or []. */
+export function patternListProblems(text: string): string[] {
+  const problems = text.split(/\r?\n/).flatMap((line, i) => {
+    const problem = line.trim() === '' ? null : patternProblem(line.trim())
+    return problem ? [`Line ${i + 1}: ${problem}`] : []
+  })
+  if (patternLines(text).length > MAX_PATTERNS) {
+    problems.push(`Use at most ${MAX_PATTERNS} patterns.`)
+  }
+  return problems
+}
 
 /** How a file is named in titles and toasts: "webapp", or "platform/apps/web/.env". */
 export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
