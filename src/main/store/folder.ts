@@ -60,10 +60,9 @@ export class FolderStore implements VaultStore {
     }
   }
 
-  // Check, then rename over. A meta.json used to be created with O_EXCL;
-  // now another process could slip one in between the check and the
-  // rename, a window of milliseconds that vault.ts narrows further by
-  // re-checking the vault state right before it creates one.
+  // Check, then rename over. Another process could slip a meta.json in
+  // between the check and the rename, a window of milliseconds that vault.ts
+  // narrows further by re-checking the vault state right before it creates one.
   async write(name: string, bytes: Uint8Array, expected: string | null): Promise<string> {
     checkName(name)
     return this.serial(async () => {

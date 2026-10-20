@@ -237,7 +237,7 @@ describe('env files in subfolders', () => {
       expect(entry).toMatchObject({ path: 'apps/Web/.env', version })
       expect(entry?.payload).not.toHaveProperty('path')
       expect(entry && decodeEnv(entry.payload).toString('utf8')).toBe('W=1\n')
-      // The root entry is written as before, without a path.
+      // The root entry has no path.
       const rootEntry = await snapshot.read(keys, root('platform'))
       expect(rootEntry?.path).toBe(ROOT_ENV)
       expect(stateKey(ref)).toBe(`platform/${ref.kind === 'file' ? ref.tag : ''}`)

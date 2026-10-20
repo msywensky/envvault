@@ -1702,7 +1702,7 @@ describe('monorepo', { timeout: 30_000 }, () => {
     expect(listed['platform/apps/web/.env']).toBe('vault-newer')
   })
 
-  it('keeps the root .env in its own entry, written exactly as before', async () => {
+  it('keeps the root .env in its own entry, without a path', async () => {
     const a = await on('a')
     await pushRepo(a, 'platform')
     expect(entries()).toContain('platform.env.enc')

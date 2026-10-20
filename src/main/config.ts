@@ -55,18 +55,6 @@ const LoadSchema = z.object({
   repoNames: RepoNames.catch({})
 })
 
-/**
- * Before vault kinds, the vault was always a folder, saved as `vaultPath`.
- * Only the new shape is saved; an older EnvVault reading it shows Setup again.
- */
-function migrate(raw: object): object {
-  if ('vault' in raw || !('vaultPath' in raw)) return raw
-  const { vaultPath, ...rest } = raw as { vaultPath: unknown }
-  return typeof vaultPath === 'string'
-    ? { ...rest, vault: { kind: 'folder', path: vaultPath } }
-    : rest
-}
-
 /** The session's idle limit: minutes, or null when auto-lock is off. */
 export function autoLockAfter(settings: Settings): number | null {
   return settings.autoLock ? settings.autoLockMinutes : null
@@ -88,7 +76,7 @@ export async function getConfig(): Promise<Settings> {
   } catch (err) {
     if (!isErrno(err, 'ENOENT')) console.error('[envvault] config.json unreadable; using defaults')
   }
-  cache = LoadSchema.parse(typeof raw === 'object' && raw !== null ? migrate(raw) : {})
+  cache = LoadSchema.parse(typeof raw === 'object' && raw !== null ? raw : {})
   return cache
 }
 

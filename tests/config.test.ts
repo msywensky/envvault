@@ -1,6 +1,5 @@
-// config.json: loading is forgiving, saving is strict, and settings from
-// before vault kinds (a plain `vaultPath`) load as a folder vault.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+// config.json: loading is forgiving, saving is strict.
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,37 +18,14 @@ beforeEach(() => {
 
 const load = async (): Promise<typeof import('../src/main/config')> => import('../src/main/config')
 
-const saved = (): Record<string, unknown> =>
-  JSON.parse(readFileSync(join(h.userData, 'config.json'), 'utf8')) as Record<string, unknown>
-
 describe('config.json', () => {
-  it('loads an old vaultPath as a folder vault, and saves only the new shape', async () => {
-    const old = { projectsPath: '/p', vaultPath: '/v', autoLockMinutes: 7, machineName: 'old' }
-    writeFileSync(join(h.userData, 'config.json'), JSON.stringify(old))
-    const config = await load()
-    const cfg = await config.getConfig()
-    expect(cfg.vault).toEqual({ kind: 'folder', path: '/v' })
-    expect(cfg).not.toHaveProperty('vaultPath')
-    expect(cfg.autoLockMinutes).toBe(7)
-
-    await config.updateConfig({ machineName: 'new' })
-    expect(saved()['vault']).toEqual({ kind: 'folder', path: '/v' })
-    expect(saved()).not.toHaveProperty('vaultPath')
-  })
-
-  it('prefers vault over a leftover vaultPath, and drops bad locations', async () => {
-    writeFileSync(
-      join(h.userData, 'config.json'),
-      JSON.stringify({ vault: { kind: 'folder', path: '/new' }, vaultPath: '/old' })
-    )
-    expect((await (await load()).getConfig()).vault).toEqual({ kind: 'folder', path: '/new' })
+  it('loads a vault location, and drops a bad one', async () => {
+    const vault = { kind: 'folder', path: '/v' }
+    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ vault }))
+    expect((await (await load()).getConfig()).vault).toEqual(vault)
 
     vi.resetModules()
     writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ vault: { kind: 'nas' } }))
-    expect((await (await load()).getConfig()).vault).toBeNull()
-
-    vi.resetModules()
-    writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ vaultPath: 42 }))
     expect((await (await load()).getConfig()).vault).toBeNull()
   })
 
