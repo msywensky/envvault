@@ -38,7 +38,8 @@ Run each command from inside the repo, always with \`--json\`. The output is \`{
 - \`local-newer\`: the local .env changed since the last sync. Push it.
 - \`local-only\`: the vault has no copy yet. Push it.
 - \`vault-newer\`: another machine pushed. EnvVault pulls it automatically (if that's turned on), or the user pulls it in the app.
-- \`conflict\`: both sides changed. The user resolves it in the app.
+- \`both-changed\`: both sides changed, but not the same keys. The user merges it in the app.
+- \`conflict\`: both sides changed the same key, or EnvVault can't tell. The user resolves it in the app.
 - \`vault-only\` or \`no-env\`: there is no local .env (for \`vault-only\`, its folder may not be in this copy of the repo).
 - \`excluded\`: the vault has a copy, but the repo's settings no longer sync this file. The user removes it in the app.
 - \`error\`: see the row's \`error.message\`.

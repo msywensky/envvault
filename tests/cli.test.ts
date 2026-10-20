@@ -185,6 +185,15 @@ describe('envvault status', () => {
       ])
     ).toMatch(/^web-wt \(as web\) {2}local newer: .*\nweb {14}local newer: /)
   })
+
+  it('says to merge or resolve a file changed on both sides in the app', () => {
+    expect(formatRows([{ ...ROW, status: 'both-changed' }])).toMatch(
+      /^web {2}both changed: merge it in EnvVault/
+    )
+    expect(formatRows([{ ...ROW, status: 'conflict' }])).toMatch(
+      /^web {2}conflict: resolve it in EnvVault/
+    )
+  })
 })
 
 describe('envvault push', () => {

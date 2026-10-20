@@ -6,7 +6,14 @@ import type { FileRules } from './envrules'
 import type { AppErrorInfo } from './result'
 
 export type SyncStatus =
-  'vault-only' | 'no-env' | 'local-only' | 'vault-newer' | 'in-sync' | 'local-newer' | 'conflict'
+  | 'vault-only'
+  | 'no-env'
+  | 'local-only'
+  | 'vault-newer'
+  | 'in-sync'
+  | 'local-newer'
+  | 'both-changed'
+  | 'conflict'
 
 /**
  * One env file: a repo in the projects folder by name, and the file's path in
