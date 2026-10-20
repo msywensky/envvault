@@ -104,7 +104,7 @@ A conflict means both copies changed since this machine last synced, or they dif
 - If a key differs because each machine should have its own value (a port, a local path), choose **Machine-specific**: your `.env` keeps your value and gets the [marker](#machine-specific-keys), and the vault copy keeps the key without a value.
 - Nothing is chosen for you, with one exception. EnvVault remembers only a hash of what it last synced, not the content, so it can't tell whether a key only one copy has was added there or removed from the other. The exception: if this machine never synced the file and your `.env` only lacks keys the vault copy has (every other key the same), it's most likely just older, so those keys start as **Add**.
 - Values are masked. **Show values** shows both copies' values; they are hidden again after a minute.
-- **Save to both** brings both sides in sync. What it writes depends on your choices, and the dialog says so once every key has one:
+- **Save** brings both sides in sync. What it writes depends on your choices, and the dialog says so once every key has one:
   - every key from the vault: your `.env` becomes the vault copy (backed up first, like a pull), and the vault copy doesn't change;
   - every key from this machine: your `.env` stays as you wrote it (apart from markers for machine-specific keys) and becomes the new version of the vault copy, like a push;
   - a mix: your `.env` is rewritten (backed up first) and the vault copy gets a new version. Comments and layout come from the vault copy.

@@ -498,7 +498,7 @@ watch(
         @click="save"
       >
         <span v-if="busy" class="spinner" />
-        Save to both
+        Save
       </button>
     </div>
   </dialog>
