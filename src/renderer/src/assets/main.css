@@ -795,6 +795,21 @@ code,
   text-decoration: line-through;
 }
 
+/* Pull and mark: a checkbox per changed key. */
+.mark-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.mark-list legend {
+  margin-bottom: 4px;
+  padding: 0;
+}
+
 /* ---------- resolve dialog ---------- */
 
 .resolve-table td {

@@ -2455,3 +2455,103 @@ describe('marking a key machine-specific', { timeout: 30_000 }, () => {
     expect((await rows(a))['svc']).toBe('in-sync')
   })
 })
+
+describe('pull and mark', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const M = '# envvault:local'
+  let pmVault: string
+  let location: VaultLocation
+  let pmA: string
+  let pmB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? pmA : pmB, vault: location })
+  const envOf = (projects: string, repo: string): string => join(projects, repo, '.env')
+  const stored = (m: Machine, repo: string): Promise<string> => storedEnv(m, repo, '.env', pmVault)
+
+  beforeAll(async () => {
+    pmVault = join(root, 'pm-vault')
+    mkdirSync(pmVault)
+    location = { kind: 'folder', path: pmVault }
+    pmA = join(root, 'pm-a')
+    pmB = join(root, 'pm-b')
+    await (await on('a')).vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('pulls the rest and keeps the marked keys, writing both sides', async () => {
+    makeRepo(pmA, 'web', { '.gitignore': IGNORE, '.env': 'A=1\nPORT=3000\n' })
+    makeRepo(pmB, 'web', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'web')
+    await pullRepo(await on('b'), 'web')
+    // B sets its own port and pushes it; A's would be overwritten by a plain pull.
+    writeFileSync(envOf(pmB, 'web'), 'A=2\nPORT=4000\n')
+    await pushRepo(await on('b'), 'web')
+
+    const a = await on('a')
+    expect((await rows(a))['web']).toBe('vault-newer')
+    const { key, vaultId } = await a.open()
+    const preview = await a.sync.previewPull(key, vaultId, envFile('web'))
+    expect(preview.diff.changed).toEqual(['A', 'PORT'])
+    const req = { ...envFile('web'), expected: preview.expected, mark: ['PORT'] }
+
+    // The raw diff shows the pull with the mark.
+    const raw = await a.sync.pullRawDiff(key, { ...req, values: true })
+    expect(raw.lines.filter((l) => l.kind !== 'gap' && l.kind !== 'same')).toEqual([
+      { kind: 'del', text: 'A=1', oldNo: 1, newNo: null },
+      { kind: 'add', text: 'A=2', oldNo: null, newNo: 1 },
+      { kind: 'add', text: M, oldNo: null, newNo: 2 }
+    ])
+
+    const result = await a.sync.pull(key, vaultId, req)
+    expect(result.vault.version).toBe(3)
+    expect(readFileSync(envOf(pmA, 'web'), 'utf8')).toBe(`A=2\n${M}\nPORT=3000\n`)
+    expect(readFileSync(join(pmA, 'web', result.backupName as string), 'utf8')).toBe(
+      'A=1\nPORT=3000\n'
+    )
+    expect(await stored(a, 'web')).toBe(`A=2\n${M}\nPORT=\n`)
+    expect((await rows(a))['web']).toBe('in-sync')
+
+    // B keeps its own port and gets the marker.
+    const b = await on('b')
+    expect((await rows(b))['web']).toBe('vault-newer')
+    await pullRepo(b, 'web')
+    expect(readFileSync(envOf(pmB, 'web'), 'utf8')).toBe(`A=2\n${M}\nPORT=4000\n`)
+    expect((await rows(b))['web']).toBe('in-sync')
+  })
+
+  it('refuses to mark a key that does not change, and a rollback', async () => {
+    makeRepo(pmA, 'api', { '.gitignore': IGNORE, '.env': 'A=1\nB=1\n' })
+    makeRepo(pmB, 'api', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'api')
+    await pullRepo(await on('b'), 'api')
+    writeFileSync(envOf(pmB, 'api'), 'A=2\nB=1\nNEW=n\n')
+    await pushRepo(await on('b'), 'api')
+
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const preview = await a.sync.previewPull(key, vaultId, envFile('api'))
+    const pull = (mark: string[]): Promise<unknown> =>
+      a.sync.pull(key, vaultId, { ...envFile('api'), expected: preview.expected, mark })
+    for (const mark of [['B'], ['NEW'], ['MISSING']]) {
+      expect(await errorCode(pull(mark)), mark[0]).toBe('MERGE_INVALID')
+    }
+    expect(readFileSync(envOf(pmA, 'api'), 'utf8')).toBe('A=1\nB=1\n')
+
+    // v1 back in the vault on a machine that synced v2: never marked.
+    const entry = join(pmVault, 'api.env.enc')
+    const v2 = readFileSync(entry)
+    await pullRepo(a, 'api')
+    writeFileSync(envOf(pmA, 'api'), 'A=3\nB=1\nNEW=n\n')
+    await pushRepo(await on('a'), 'api')
+    const a2 = await on('a')
+    writeFileSync(entry, v2)
+    writeFileSync(envOf(pmA, 'api'), 'A=4\nB=1\nNEW=n\n')
+    const k = await a2.open()
+    const back = await a2.sync.previewPull(k.key, k.vaultId, envFile('api'))
+    expect(back.rollback).toBe(true)
+    expect(
+      await errorCode(
+        a2.sync.pull(k.key, k.vaultId, { ...envFile('api'), expected: back.expected, mark: ['A'] })
+      )
+    ).toBe('MERGE_INVALID')
+  })
+})

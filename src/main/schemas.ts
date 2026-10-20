@@ -19,8 +19,10 @@ export const EnvPath = z.string().max(255).refine(isEnvPath)
 const File = { repoName: RepoName, path: EnvPath }
 const Password = z.string().min(1).max(1024)
 export const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: Hash.nullable() })
-const PullReq = z.strictObject({ ...File, expected: Expected })
 const EnvKey = z.string().max(200).regex(KEY_RE)
+/** An env file and the content the user reviewed. */
+const Reviewed = z.strictObject({ ...File, expected: Expected })
+const PullReq = Reviewed.extend({ mark: z.array(EnvKey).max(1000).optional() })
 const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
 const MergeChoice = z.strictObject({ key: EnvKey, take: z.enum(['local', 'vault', 'machine']) })
 /** Env file patterns (see shared/envrules): chosen among the files found in a repo, never a path. */
@@ -105,8 +107,8 @@ export const requestSchemas = {
   [CH.pull]: PullReq,
   [CH.pullRawDiff]: PullReq.extend({ values: z.boolean() }),
   [CH.previewMerge]: z.strictObject(File),
-  [CH.mergeValues]: PullReq,
-  [CH.merge]: PullReq.extend({ choices: z.array(MergeChoice).max(1000) }),
+  [CH.mergeValues]: Reviewed,
+  [CH.merge]: Reviewed.extend({ choices: z.array(MergeChoice).max(1000) }),
   [CH.openEditor]: z.strictObject(File),
   [CH.saveEdit]: z.strictObject({
     ...File,

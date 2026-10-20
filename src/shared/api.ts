@@ -23,6 +23,7 @@ import type {
   RepoList,
   RepoRow,
   RepoSettingsRequest,
+  ReviewedFile,
   SaveEditRequest,
   SaveEditResult,
   Settings,
@@ -120,7 +121,7 @@ export interface EnvVaultApi {
   /** The keys whose local and vault values differ, for resolving a conflict. Key names only. */
   previewMerge(file: EnvFile): R<'repo:previewMerge'>
   /** Both values of each key previewMerge lists (see ResolveDialog). */
-  mergeValues(request: PullRequest): R<'repo:mergeValues'>
+  mergeValues(request: ReviewedFile): R<'repo:mergeValues'>
   /** Merge with a copy chosen per key, and write the result to both sides. */
   merge(request: MergeRequest): R<'repo:merge'>
   /** The vault copy as editor rows, values included (see EnvEditorDialog). */

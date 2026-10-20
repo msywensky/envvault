@@ -20,10 +20,10 @@ import {
   isBackupOf
 } from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
-import { compareEnv, differingValues, MergeError, takesFor } from '../core/envmerge'
+import { compareEnv, differingValues, markTakes, MergeError, takesFor } from '../core/envmerge'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
-import { markedKeys, unmarkedKeys } from '../core/localkeys'
+import { markedKeys, unmarkedKeys, type LocalTakes } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import {
   allRepoRules,
@@ -60,6 +60,7 @@ import type {
   RepoList,
   RepoRow,
   RepoSettingsRequest,
+  ReviewedFile,
   SaveEditRequest,
   SaveEditResult,
   Settings,
@@ -714,9 +715,23 @@ export function pullRawDiff(key: Uint8Array, req: RawDiffRequest): Promise<RawDi
     if (!s.payload || !s.vault) throw noVaultCopy()
     folderFor(s)
     checkExpected(s, req.expected)
-    const { bytes } = mergedBytes(decodeEnv(s.payload), s.local)
+    const vaultBytes = decodeEnv(s.payload)
+    const local = s.local?.toString('utf8') ?? ''
+    let takes: LocalTakes = new Map()
     try {
-      const lines = lineDiff(s.local?.toString('utf8') ?? '', bytes.toString('utf8'), {
+      // Pull and mark: the diff shows the marked keys kept.
+      const mark = req.mark ?? []
+      if (mark.length > 0) {
+        takes = merging(() => markTakes(compareEnv(local, vaultBytes.toString('utf8')), mark))
+      }
+    } catch (err) {
+      vaultBytes.fill(0)
+      throw err
+    }
+    // Takes ownership of vaultBytes.
+    const { bytes } = mergedBytes(vaultBytes, s.local, takes)
+    try {
+      const lines = lineDiff(local, bytes.toString('utf8'), {
         mask: !req.values
       })
       return { lines }
@@ -739,8 +754,19 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
     checkExpected(s, req.expected)
+    const mark = req.mark ?? []
+    if (mark.length > 0) {
+      // Pull and mark: the marked keys keep this machine's values, so the
+      // vault copy changes too and is written like a resolved conflict.
+      return applyMerge(s, envDir, vaultId, (local, vault) =>
+        markTakes(compareEnv(local, vault), mark)
+      )
+    }
     await requirePullable(s, envDir)
-    return { backupName: await applyPull(s, envDir, s.payload, s.vault, vaultId) }
+    return {
+      backupName: await applyPull(s, envDir, s.payload, s.vault, vaultId),
+      vault: s.vault
+    }
   })
 }
 
@@ -974,7 +1000,7 @@ export function previewMerge(
  * env values leave the main process, when the user asks for them. Only for
  * the content the user reviewed.
  */
-export function mergeValues(key: Uint8Array, req: PullRequest): Promise<MergeValues> {
+export function mergeValues(key: Uint8Array, req: ReviewedFile): Promise<MergeValues> {
   return withSnapshot(key, req, async (s) => {
     if (!s.local) throw noLocalToMerge()
     if (!s.payload) throw noVaultCopy()
@@ -994,11 +1020,7 @@ export function mergeValues(key: Uint8Array, req: PullRequest): Promise<MergeVal
 
 /**
  * Merge the two copies with the user's choice for every key that differs,
- * then write the result to both sides: the vault copy first (if it changes),
- * then the local env file, backed up like a pull. All checks run before
- * either write. If the local write fails, the last sync stays as it was, so
- * the file still shows as a conflict and resolving again lists only the keys
- * that still differ.
+ * then write the result to both sides (see applyMerge).
  */
 export function merge(key: Uint8Array, vaultId: string, req: MergeRequest): Promise<MergeResult> {
   return withSnapshot(key, req, async (s) => {
@@ -1006,45 +1028,66 @@ export function merge(key: Uint8Array, vaultId: string, req: MergeRequest): Prom
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
     checkExpected(s, req.expected)
-    const last = await getLast(vaultId, s.id)
-    if (rolledBack(s.vault, last)) {
-      throw new AppError(
-        'MERGE_INVALID',
-        'The vault copy is older than the version last synced here, so it is not merged. Keep one of the copies instead.'
-      )
-    }
-    const local = s.local
-    const vaultBytes = decodeEnv(s.payload)
-    let merged: Buffer | null = null
-    let synced: Buffer | null = null
-    try {
-      const takes = merging(() =>
-        takesFor(compareEnv(local.toString('utf8'), vaultBytes.toString('utf8')), req.choices)
-      )
-      await requirePullable(s, envDir)
-      // Takes ownership of vaultBytes (returned as is, or wiped).
-      merged = mergedBytes(vaultBytes, local, takes).bytes
-      if (merged.length > MAX_ENV_BYTES) {
-        throw new AppError('ENV_TOO_LARGE', 'The merged .env would be larger than 1 MiB.')
-      }
-      synced = syncedBytes(merged)
-      const names = sha256Hex(merged) !== s.localHash ? await localWriteNames(s, envDir) : null
-
-      let vault = s.vault
-      if (sha256Hex(synced) !== vault.contentHash) {
-        const payload = makePayload(synced, nextVersion(vault, last), s.cfg.machineName)
-        await s.cfg.vault.write(s.keys, s.stored, payload, s.vaultVersion)
-        vault = toInfo(payload)
-      }
-      const backupName = names ? await writeLocal(s, envDir, merged, names) : null
-      await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
-      return { row: syncedRow(s, vault), backupName }
-    } finally {
-      if (synced !== merged) synced?.fill(0)
-      merged?.fill(0)
-      vaultBytes.fill(0)
-    }
+    const { vault, backupName } = await applyMerge(s, envDir, vaultId, (local, vault) =>
+      takesFor(compareEnv(local, vault), req.choices)
+    )
+    return { row: syncedRow(s, vault), backupName }
   })
+}
+
+/**
+ * Merge the two copies, with the keys `takesOf` returns taken from the local
+ * file (see mergePull), and write the result to both sides: the vault copy
+ * first (if it changes), then the local env file, backed up like a pull. All
+ * checks run before either write, and a vault copy that went backwards is
+ * never merged. If the local write fails, the last sync stays as it was, so
+ * the file still shows as a conflict and resolving again lists only the keys
+ * that still differ. The caller has checked `expected`.
+ */
+async function applyMerge(
+  s: Snapshot,
+  envDir: string,
+  vaultId: string,
+  takesOf: (local: string, vault: string) => LocalTakes
+): Promise<{ vault: VaultInfo; backupName: string | null }> {
+  if (!s.local) throw noLocalToMerge()
+  if (!s.payload || !s.vault) throw noVaultCopy()
+  const last = await getLast(vaultId, s.id)
+  if (rolledBack(s.vault, last)) {
+    throw new AppError(
+      'MERGE_INVALID',
+      'The vault copy is older than the version last synced here, so it is not merged. Keep one of the copies instead.'
+    )
+  }
+  const local = s.local
+  const vaultBytes = decodeEnv(s.payload)
+  let merged: Buffer | null = null
+  let synced: Buffer | null = null
+  try {
+    const takes = merging(() => takesOf(local.toString('utf8'), vaultBytes.toString('utf8')))
+    await requirePullable(s, envDir)
+    // Takes ownership of vaultBytes (returned as is, or wiped).
+    merged = mergedBytes(vaultBytes, local, takes).bytes
+    if (merged.length > MAX_ENV_BYTES) {
+      throw new AppError('ENV_TOO_LARGE', 'The merged .env would be larger than 1 MiB.')
+    }
+    synced = syncedBytes(merged)
+    const names = sha256Hex(merged) !== s.localHash ? await localWriteNames(s, envDir) : null
+
+    let vault = s.vault
+    if (sha256Hex(synced) !== vault.contentHash) {
+      const payload = makePayload(synced, nextVersion(vault, last), s.cfg.machineName)
+      await s.cfg.vault.write(s.keys, s.stored, payload, s.vaultVersion)
+      vault = toInfo(payload)
+    }
+    const backupName = names ? await writeLocal(s, envDir, merged, names) : null
+    await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+    return { vault, backupName }
+  } finally {
+    if (synced !== merged) synced?.fill(0)
+    merged?.fill(0)
+    vaultBytes.fill(0)
+  }
 }
 
 // ---------------------------------------------------------------------------

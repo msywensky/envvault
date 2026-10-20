@@ -123,7 +123,7 @@ DATA_DIR=/Users/me/data
 - If the vault marks a key but your `.env` doesn't, pushing uploads your value and drops the marker. The push dialog warns you first.
 - A marked key must be assigned only once in the file.
 
-You can also mark a key from the app: **Machine-specific** in the [Resolve dialog](#resolving-a-conflict) or in the [editor](#editing-the-vault-copy). Either way the vault copy keeps the key without its value, and each machine adds the marker the next time it pulls, keeping its own value.
+You can also mark a key from the app: **Machine-specific** in the [Resolve dialog](#resolving-a-conflict) or in the [editor](#editing-the-vault-copy), or, when a pull would change a key's value, **Should any of these differ on each machine?** in the pull dialog (the button becomes **Pull and mark**). Either way the vault copy keeps the key without its value, and each machine adds the marker the next time it pulls, keeping its own value. Pull and mark writes a new version of the vault copy as well as your `.env`.
 
 To make a key shared again, remove its `# envvault:local` line in the `.env` on each machine, then push. Removing it in only one place isn't enough: a pull keeps a key that your `.env` marks, and the next push from that machine marks it in the vault again.
 

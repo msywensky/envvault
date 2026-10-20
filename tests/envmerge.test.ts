@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DuplicateKeyError } from '../src/core/envedit'
-import { compareEnv, differingValues, MergeError, takesFor } from '../src/core/envmerge'
+import { compareEnv, differingValues, markTakes, MergeError, takesFor } from '../src/core/envmerge'
 import { LOCAL_MARKER, mergePull, projectEnv } from '../src/core/localkeys'
 
 const M = LOCAL_MARKER
@@ -119,6 +119,21 @@ describe('takesFor', () => {
     expect(() => takesFor(cmp, all.slice(1))).toThrow(MergeError)
     expect(() => takesFor(cmp, [...all, all[0]!])).toThrow(MergeError)
     expect(() => takesFor(cmp, [...all, { key: 'OTHER', take: 'local' }])).toThrow(MergeError)
+  })
+})
+
+describe('markTakes', () => {
+  const cmp = compareEnv(text('PORT=3000', 'NEW=x', 'A=1'), text('PORT=3001', 'GONE=y', 'A=1'))
+
+  it('marks keys whose values differ', () => {
+    expect([...markTakes(cmp, ['PORT'])]).toEqual([['PORT', 'machine']])
+    expect(markTakes(cmp, []).size).toBe(0)
+  })
+
+  it('refuses keys only one copy has, unchanged or unknown keys, and repeats', () => {
+    for (const keys of [['NEW'], ['GONE'], ['A'], ['OTHER'], ['PORT', 'PORT']]) {
+      expect(() => markTakes(cmp, keys), keys.join()).toThrow(MergeError)
+    }
   })
 })
 
