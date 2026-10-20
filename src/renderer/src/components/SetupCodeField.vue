@@ -2,7 +2,8 @@
 // Shows this machine's setup code for the vault, for setting up another
 // machine. Main checks the password again first. The code is a credential:
 // it lives only in this component's refs, and is hidden again after a
-// minute, when the window is hidden, and when the vault locks.
+// minute, when the window is hidden, when you leave Settings' General tab
+// and when the vault locks.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { call, store } from '../store'
 
@@ -51,6 +52,12 @@ onBeforeUnmount(() => {
   hide()
 })
 watch(() => store.lockEpoch, hide)
+watch(
+  () => store.settingsTab,
+  (tab) => {
+    if (tab !== 'general') hide()
+  }
+)
 </script>
 
 <template>

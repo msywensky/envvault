@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
-import DefaultsDialog from '../components/DefaultsDialog.vue'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
 import RemoveDialog from '../components/RemoveDialog.vue'
 import RepoSettingsDialog from '../components/RepoSettingsDialog.vue'
@@ -23,10 +22,8 @@ const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | n
 const editing = ref<RepoRow | null>(null)
 const removing = ref<RepoRow | null>(null)
 const configuring = ref<RepoInfo | null>(null)
-const editingDefaults = ref(false)
 const showNoEnv = ref(false)
 const showIgnored = ref(false)
-const confirmingReset = ref(false)
 const busy = ref(false)
 
 const rowsOf = computed(() => {
@@ -110,18 +107,10 @@ async function setIgnored(repo: RepoInfo, on: boolean): Promise<void> {
   }
 }
 
-async function resetSettings(): Promise<void> {
-  if (busy.value) return
-  busy.value = true
-  const res = await call(() => window.envvault.resetSettings())
-  busy.value = false
-  confirmingReset.value = false
-  if (res.ok) {
-    toast('success', 'Reset the repo settings.')
-    await refresh(false)
-  } else if (res.error.code !== 'LOCKED') {
-    toast('error', res.error.message)
-  }
+// The defaults, and resetting unreadable settings, are on Settings' Sync tab.
+function openSyncSettings(): void {
+  store.settingsTab = 'sync'
+  store.view = 'settings'
 }
 
 const copies = (n: number): string =>
@@ -148,9 +137,8 @@ onMounted(() => refresh(true))
       <button
         type="button"
         class="btn"
-        :disabled="!store.reposLoaded || !!settingsError"
         title="The env files every repo without its own lists syncs"
-        @click="editingDefaults = true"
+        @click="openSyncSettings"
       >
         Defaults…
       </button>
@@ -163,23 +151,8 @@ onMounted(() => refresh(true))
     <div v-if="settingsError" class="notice notice-error stack settings-error" role="alert">
       <span>{{ settingsError.message }}</span>
       <div v-if="settingsError.code === 'VAULT_TAMPERED'" class="row">
-        <template v-if="confirmingReset">
-          <span class="grow">
-            Replace them with empty settings on every machine? Every repo then syncs its .env files
-            only, and none is ignored.
-          </span>
-          <button type="button" class="btn btn-sm" @click="confirmingReset = false">Cancel</button>
-          <button
-            type="button"
-            class="btn btn-sm btn-danger"
-            :disabled="busy"
-            @click="resetSettings"
-          >
-            Reset
-          </button>
-        </template>
-        <button v-else type="button" class="btn btn-sm" @click="confirmingReset = true">
-          Reset settings…
+        <button type="button" class="btn btn-sm" @click="openSyncSettings">
+          Reset in Settings…
         </button>
       </div>
     </div>
@@ -334,7 +307,5 @@ onMounted(() => refresh(true))
       :repo="configuring"
       @close="configuring = null"
     />
-
-    <DefaultsDialog v-if="editingDefaults" @close="editingDefaults = false" />
   </div>
 </template>

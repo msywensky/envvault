@@ -128,7 +128,7 @@ export interface Settings {
   autoPull: boolean
   /** Save the local .env as .env.bak.<timestamp> before a pull replaces it. */
   backups: boolean
-  /** How many of those backups to keep per repo; older ones are deleted on the next backup. */
+  /** How many of those backups to keep per env file; older ones are deleted on the next backup. */
   backupCount: number
   /** Let the envvault command check status and push (see src/main/cliserver.ts). */
   cliAccess: boolean
@@ -140,6 +140,20 @@ export interface Settings {
    */
   repoNames: Record<string, string>
 }
+
+/** The settings settings:save takes, all of them; the others have channels of their own. */
+export type SettingsRequest = Pick<
+  Settings,
+  | 'autoLock'
+  | 'autoLockMinutes'
+  | 'machineName'
+  | 'checkExample'
+  | 'autoPull'
+  | 'backups'
+  | 'backupCount'
+  | 'cliAccess'
+  | 'miniOnTop'
+>
 
 /**
  * The window's layout: the full app, or mini mode on one repo (src/main/mini.ts).

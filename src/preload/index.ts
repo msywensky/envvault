@@ -18,7 +18,7 @@ const api: EnvVaultApi = {
   getState: () => invoke(CH.getState),
   activity: () => invoke(CH.activity),
   getSettings: () => invoke(CH.getSettings),
-  saveSettings: (patch) => invoke(CH.saveSettings, patch),
+  saveSettings: (settings) => invoke(CH.saveSettings, settings),
   pickFolder: (which) => invoke(CH.pickFolder, { which }),
   setGitVault: (url, confirmPrivate = false) => invoke(CH.setGitVault, { url, confirmPrivate }),
   ghStatus: () => invoke(CH.ghStatus),
