@@ -2188,8 +2188,9 @@ describe('resolving a conflict', { timeout: 30_000 }, () => {
       ]
     })
     expect(result.row).toMatchObject({ status: 'in-sync', vault: { version: 3 } })
-    // The vault's layout; B's comment goes, as on a pull.
-    const merged = 'SAME=1\nA=2\nB=2\nNEWA=a\n'
+    // Only B changed comments since the last sync, so B's layout is kept,
+    // with A's changes taken in.
+    const merged = '# mine\nSAME=1\nA=2\nB=2\nNEWA=a\n'
     expect(readFileSync(envOf(mpB, 'mix'), 'utf8')).toBe(merged)
     expect(await stored(b, 'mix')).toBe(merged)
     expect(readFileSync(join(mpB, 'mix', result.backupName as string), 'utf8')).toBe(
@@ -2290,7 +2291,7 @@ describe('resolving a conflict', { timeout: 30_000 }, () => {
     const b = await on('b')
     const { key, vaultId } = await b.open()
     const preview = await b.sync.previewMerge(key, vaultId, envFile('kept'))
-    expect(preview.keys).toEqual([
+    expect(preview.keys).toMatchObject([
       { key: 'A', kind: 'differs' },
       { key: 'NEW', kind: 'local-only' }
     ])
@@ -2460,7 +2461,7 @@ describe('marking a key machine-specific', { timeout: 30_000 }, () => {
     const b = await on('b')
     const { key, vaultId } = await b.open()
     const preview = await b.sync.previewMerge(key, vaultId, envFile('svc'))
-    expect(preview.keys).toEqual([
+    expect(preview.keys).toMatchObject([
       { key: 'PORT', kind: 'differs' },
       { key: 'DEV', kind: 'local-only' }
     ])
@@ -2578,5 +2579,180 @@ describe('pull and mark', { timeout: 30_000 }, () => {
         a2.sync.pull(k.key, k.vaultId, { ...envFile('api'), expected: back.expected, mark: ['A'] })
       )
     ).toBe('MERGE_INVALID')
+  })
+})
+
+describe('three-way', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  let twVault: string
+  let location: VaultLocation
+  let twA: string
+  let twB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? twA : twB, vault: location })
+  const envOf = (projects: string, repo: string): string => join(projects, repo, '.env')
+  const basesOf = async (m: Machine, name: 'a' | 'b'): Promise<string[]> => {
+    const { vaultId } = await m.open()
+    const dir = join(root, `userData-${name}`, 'bases', vaultId)
+    return existsSync(dir) ? readdirSync(dir) : []
+  }
+  const preview = async (
+    m: Machine,
+    repo: string
+  ): Promise<import('../src/shared/types').MergePreview> => {
+    const { key, vaultId } = await m.open()
+    return m.sync.previewMerge(key, vaultId, envFile(repo))
+  }
+  /** Resolve with every suggestion, and `extra` choices for the rest. */
+  const mergeSuggested = async (
+    m: Machine,
+    repo: string,
+    extra: Record<string, 'local' | 'vault'> = {}
+  ): Promise<void> => {
+    const { key, vaultId } = await m.open()
+    const p = await m.sync.previewMerge(key, vaultId, envFile(repo))
+    const choices = p.keys.map((k) => ({
+      key: k.key,
+      take: k.suggested ?? extra[k.key] ?? 'vault'
+    }))
+    await m.sync.merge(key, vaultId, { ...envFile(repo), expected: p.expected, choices })
+  }
+  /** A pushes `start`, B pulls it, so both have a base. */
+  const synced = async (repo: string, start: string): Promise<void> => {
+    makeRepo(twA, repo, { '.gitignore': IGNORE, '.env': start })
+    makeRepo(twB, repo, { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), repo)
+    await pullRepo(await on('b'), repo)
+  }
+
+  beforeAll(async () => {
+    twVault = join(root, 'tw-vault')
+    mkdirSync(twVault)
+    location = { kind: 'folder', path: twVault }
+    twA = join(root, 'tw-a')
+    twB = join(root, 'tw-b')
+    await (await on('a')).vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('suggests each key from the side that changed it, and merges cleanly', async () => {
+    await synced('clean', 'DATABASE_URL=postgres://localhost/a\nPORT=3000\n')
+    expect(await basesOf(await on('a'), 'a')).toHaveLength(1)
+    expect(await basesOf(await on('b'), 'b')).toHaveLength(1)
+
+    writeFileSync(envOf(twA, 'clean'), 'DATABASE_URL=postgres://db/a\nPORT=3000\n')
+    await pushRepo(await on('a'), 'clean')
+    writeFileSync(
+      envOf(twB, 'clean'),
+      'DATABASE_URL=postgres://localhost/a\nPORT=3000\nFLAGS=beta\n'
+    )
+
+    const b = await on('b')
+    const p = await preview(b, 'clean')
+    expect(p).toMatchObject({
+      hasBase: true,
+      clean: true,
+      keys: [
+        {
+          key: 'DATABASE_URL',
+          kind: 'differs',
+          here: 'same',
+          there: 'changed',
+          suggested: 'vault'
+        },
+        { key: 'FLAGS', kind: 'local-only', here: 'added', there: 'same', suggested: 'local' }
+      ]
+    })
+    await mergeSuggested(b, 'clean')
+    const merged = 'DATABASE_URL=postgres://db/a\nPORT=3000\nFLAGS=beta\n'
+    expect(readFileSync(envOf(twB, 'clean'), 'utf8')).toBe(merged)
+    expect((await rows(b))['clean']).toBe('in-sync')
+    await pullRepo(await on('a'), 'clean')
+    expect(readFileSync(envOf(twA, 'clean'), 'utf8')).toBe(merged)
+  })
+
+  it('leaves only a key changed on both sides to choose', async () => {
+    await synced('both', 'A=1\nPORT=3000\n')
+    writeFileSync(envOf(twA, 'both'), 'A=2\nPORT=3001\n')
+    await pushRepo(await on('a'), 'both')
+    writeFileSync(envOf(twB, 'both'), 'A=1\nPORT=4000\n')
+
+    const p = await preview(await on('b'), 'both')
+    expect(p.clean).toBe(false)
+    expect(p.keys.map((k) => [k.key, k.suggested])).toEqual([
+      ['A', 'vault'],
+      ['PORT', null]
+    ])
+  })
+
+  it("keeps the layout of the only side whose comments changed, and isn't clean if both did", async () => {
+    await synced('notes', '# shared\nA=1\nB=1\n')
+    writeFileSync(envOf(twA, 'notes'), '# shared\nA=2\nB=1\n')
+    await pushRepo(await on('a'), 'notes')
+    writeFileSync(envOf(twB, 'notes'), '# mine\nA=1\n\n# note\nB=2\n')
+    const b = await on('b')
+    expect(await preview(b, 'notes')).toMatchObject({
+      clean: true,
+      layoutChanged: { local: true, vault: false }
+    })
+    await mergeSuggested(b, 'notes')
+    expect(readFileSync(envOf(twB, 'notes'), 'utf8')).toBe('# mine\nA=2\n\n# note\nB=2\n')
+
+    await pullRepo(await on('a'), 'notes')
+    writeFileSync(envOf(twA, 'notes'), '# from a\nA=3\n\n# note\nB=2\n')
+    await pushRepo(await on('a'), 'notes')
+    writeFileSync(envOf(twB, 'notes'), '# from b\nA=2\n\n# note\nB=2\n')
+    expect(await preview(await on('b'), 'notes')).toMatchObject({
+      clean: false,
+      layoutChanged: { local: true, vault: true }
+    })
+  })
+
+  it('falls back to two-way without a usable base, and forgets it with the vault copy', async () => {
+    await synced('nobase', 'A=1\n')
+    writeFileSync(envOf(twA, 'nobase'), 'A=2\n')
+    await pushRepo(await on('a'), 'nobase')
+    writeFileSync(envOf(twB, 'nobase'), 'A=1\nB=1\n')
+    const b = await on('b')
+    const dir = join(root, 'userData-b', 'bases', (await b.open()).vaultId)
+    const before = new Set(readdirSync(dir))
+    expect((await preview(b, 'nobase')).hasBase).toBe(true)
+
+    // Tampered: as if there were none.
+    const files = readdirSync(dir)
+    for (const f of files) writeFileSync(join(dir, f), Buffer.from('tampered'))
+    expect(await preview(b, 'nobase')).toMatchObject({ hasBase: false, clean: false })
+    expect((await preview(b, 'nobase')).keys.every((k) => k.suggested === null)).toBe(true)
+    expect(before.size).toBe(files.length)
+
+    // Removing the vault copy removes the base too.
+    const a = await on('a')
+    const k = await a.open()
+    const count = (await basesOf(a, 'a')).length
+    const row = (await a.sync.listRepos(k.key, k.vaultId, {})).rows.find((r) => r.name === 'nobase')
+    await a.sync.removeFromVault(k.key, k.vaultId, {
+      vaultName: 'nobase',
+      path: '.env',
+      expectedVaultHash: row?.vault?.contentHash as string
+    })
+    expect(await basesOf(a, 'a')).toHaveLength(count - 1)
+  })
+
+  it('records a base for automatic pulls and identical copies made by hand', async () => {
+    await synced('auto', 'A=1\n')
+    const b0 = await on('b')
+    const before = (await basesOf(b0, 'b')).length
+    writeFileSync(envOf(twA, 'auto'), 'A=2\n')
+    await pushRepo(await on('a'), 'auto')
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    expect(await b.sync.autoPull(key, vaultId, envFile('auto'))).not.toBeNull()
+    expect(await basesOf(b, 'b')).toHaveLength(before)
+
+    // A copy made by hand on a third repo, identical to the vault's: adopted, with a base.
+    makeRepo(twA, 'byhand', { '.gitignore': IGNORE, '.env': 'X=1\n' })
+    await pushRepo(await on('a'), 'byhand')
+    makeRepo(twB, 'byhand', { '.gitignore': IGNORE, '.env': 'X=1\n' })
+    expect((await rows(await on('b')))['byhand']).toBe('in-sync')
+    expect(await basesOf(await on('b'), 'b')).toHaveLength(before + 1)
   })
 })

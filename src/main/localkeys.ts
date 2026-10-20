@@ -4,6 +4,7 @@
 import {
   DuplicateLocalKeyError,
   keepLocal,
+  mergeKeys,
   mergePull,
   projectEnv,
   type LocalTakes
@@ -93,15 +94,22 @@ export function mergedBytes(
 }
 
 /**
- * What resolving writes when this machine's copy wins every key (see
- * keepLocal): a new buffer the caller must wipe. Takes ownership of `vault`
- * and wipes it.
+ * A merge in the local file's layout: the local file with `fromVault` taken
+ * from the vault copy (see mergeKeys), then marked as keepLocal does. A new
+ * buffer the caller must wipe. Takes ownership of `vault` and wipes it.
  */
-export function keptLocalBytes(vault: Buffer, local: Buffer, machine: Iterable<string>): Buffer {
+export function keptLocalBytes(
+  vault: Buffer,
+  local: Buffer,
+  fromVault: Iterable<string>,
+  machine: Iterable<string>
+): Buffer {
   try {
     const vaultText = vault.toString('utf8')
     const localText = local.toString('utf8')
-    const text = apply(() => keepLocal(vaultText, localText, machine))
+    const text = apply(() =>
+      keepLocal(vaultText, mergeKeys(localText, vaultText, fromVault), machine)
+    )
     requireUtf8(local, localText)
     return Buffer.from(text, 'utf8')
   } finally {

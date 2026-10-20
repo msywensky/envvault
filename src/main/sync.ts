@@ -74,6 +74,7 @@ import type {
   VaultInfo,
   VaultNameRequest
 } from '../shared/types'
+import { forgetBase, loadBase, saveBase } from './bases'
 import { MAX_REPO_NAMES, getConfig, updateConfig } from './config'
 import { AppError, errnoCode } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
@@ -137,6 +138,23 @@ function parseAndWipe(bytes: Buffer | null): Map<string, string> {
   } finally {
     bytes.fill(0)
   }
+}
+
+/**
+ * Record that this machine is in sync with `vault` for `id` (a state.json
+ * key): the last sync, and `bytes`, the vault copy's content, as the base a
+ * later three-way merge starts from (see bases.ts).
+ */
+async function recordSync(
+  key: Uint8Array,
+  vaultId: string,
+  id: string,
+  vault: VaultInfo,
+  bytes: Uint8Array
+): Promise<void> {
+  const last = { version: vault.version, contentHash: vault.contentHash }
+  await setLast(vaultId, id, last)
+  await saveBase(key, vaultId, id, last, bytes)
 }
 
 /** Just the file, from a request that names one. */
@@ -426,7 +444,15 @@ async function repoRows(
         vault &&
         (last?.version !== vault.version || last.contentHash !== vault.contentHash)
       ) {
-        await setLast(vaultId, key, { version: vault.version, contentHash: vault.contentHash })
+        const entry = f.listed?.entry
+        if (entry) {
+          const bytes = decodeEnv(entry.payload)
+          try {
+            await recordSync(keys.key, vaultId, key, vault, bytes)
+          } finally {
+            bytes.fill(0)
+          }
+        }
       }
       return { ...fields, status, vault, error: null }
     } catch (err) {
@@ -676,7 +702,7 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
       await s.cfg.vault.write(s.keys, s.stored, payload, s.vaultVersion)
       vault = toInfo(payload)
     }
-    await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+    await recordSync(s.keys.key, vaultId, s.id, vault, s.synced)
     return syncedRow(s, vault)
   })
 }
@@ -767,7 +793,8 @@ export function pull(key: Uint8Array, vaultId: string, req: PullRequest): Promis
       // vault copy changes too and is written like a resolved conflict.
       return applyMerge(s, envDir, vaultId, (local, vault) => ({
         takes: markTakes(compareEnv(local, vault), mark),
-        layout: 'vault'
+        layout: 'vault',
+        fromVault: []
       }))
     }
     await requirePullable(s, envDir)
@@ -844,7 +871,12 @@ async function applyPull(
   } finally {
     bytes.fill(0)
   }
-  await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+  const synced = decodeEnv(payload)
+  try {
+    await recordSync(s.keys.key, vaultId, s.id, vault, synced)
+  } finally {
+    synced.fill(0)
+  }
   return backup
 }
 
@@ -977,10 +1009,12 @@ export function previewMerge(
       ignoreStatus(envDir, envFileName(s.file.path))
     ])
     const vaultBytes = decodeEnv(s.payload)
+    const base = await loadBase(s.keys.key, vaultId, s.id, last)
     try {
       const localText = s.local.toString('utf8')
       const vaultText = vaultBytes.toString('utf8')
-      const cmp = merging(() => compareEnv(localText, vaultText))
+      const baseText = base?.toString('utf8') ?? null
+      const cmp = merging(() => compareEnv(localText, vaultText, baseText))
       const unmarked = unmarkedKeys(localText, vaultText)
       return {
         keys: cmp.keys,
@@ -991,6 +1025,9 @@ export function previewMerge(
         // A key the vault marks is a difference too: merging marks it here.
         formatOnly:
           cmp.keys.length === 0 && unmarked.length === 0 && s.syncedHash !== s.vault.contentHash,
+        hasBase: cmp.hasBase,
+        layoutChanged: cmp.layoutChanged,
+        clean: cmp.clean,
         vault: s.vault,
         neverSynced: last === null,
         rollback: rolledBack(s.vault, last),
@@ -999,6 +1036,7 @@ export function previewMerge(
       }
     } finally {
       vaultBytes.fill(0)
+      base?.fill(0)
     }
   })
 }
@@ -1036,10 +1074,19 @@ export function merge(key: Uint8Array, vaultId: string, req: MergeRequest): Prom
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
     checkExpected(s, req.expected)
-    const { vault, backupName } = await applyMerge(s, envDir, vaultId, (local, vault) => {
-      const cmp = compareEnv(local, vault)
+    const { vault, backupName } = await applyMerge(s, envDir, vaultId, (local, vault, base) => {
+      const cmp = compareEnv(local, vault, base)
       const takes = takesFor(cmp, req.choices)
-      return { takes, layout: winsEveryKey(cmp, takes) ? 'local' : 'vault' }
+      // This machine's layout when it wins every key, or when only it changed
+      // comments since the last sync; otherwise the vault copy's, as a pull.
+      const ownLayout =
+        winsEveryKey(cmp, takes) ||
+        (cmp.layoutChanged !== null && cmp.layoutChanged.local && !cmp.layoutChanged.vault)
+      return {
+        takes,
+        layout: ownLayout ? 'local' : 'vault',
+        fromVault: cmp.keys.filter((k) => !takes.has(k.key)).map((k) => k.key)
+      }
     })
     return { row: syncedRow(s, vault), backupName }
   })
@@ -1050,10 +1097,13 @@ interface MergePlan {
   /** The keys taken from the local file (see mergePull). */
   takes: LocalTakes
   /**
-   * `local` when this machine's copy wins every key: the result is the local
-   * file as written (see keepLocal), not rebuilt in the vault copy's layout.
+   * Whose layout (comments, order) the result keeps. `local`: the local file
+   * as written with `fromVault` taken from the vault copy (see mergeKeys and
+   * keepLocal); `vault`: the vault copy with `takes` from the local file.
    */
   layout: 'local' | 'vault'
+  /** For a `local` layout: the keys taken from the vault copy. */
+  fromVault: string[]
 }
 
 /**
@@ -1069,7 +1119,7 @@ async function applyMerge(
   s: Snapshot,
   envDir: string,
   vaultId: string,
-  planOf: (local: string, vault: string) => MergePlan
+  planOf: (local: string, vault: string, base: string | null) => MergePlan
 ): Promise<{ vault: VaultInfo; backupName: string | null }> {
   if (!s.local) throw noLocalToMerge()
   if (!s.payload || !s.vault) throw noVaultCopy()
@@ -1082,16 +1132,19 @@ async function applyMerge(
   }
   const local = s.local
   const vaultBytes = decodeEnv(s.payload)
+  const base = await loadBase(s.keys.key, vaultId, s.id, last)
   let merged: Buffer | null = null
   let synced: Buffer | null = null
   try {
-    const plan = merging(() => planOf(local.toString('utf8'), vaultBytes.toString('utf8')))
+    const plan = merging(() =>
+      planOf(local.toString('utf8'), vaultBytes.toString('utf8'), base?.toString('utf8') ?? null)
+    )
     await requirePullable(s, envDir)
     const machine = [...plan.takes].filter(([, take]) => take === 'machine').map(([key]) => key)
     // Both take ownership of vaultBytes (returned as is, or wiped).
     merged =
       plan.layout === 'local'
-        ? keptLocalBytes(vaultBytes, local, machine)
+        ? keptLocalBytes(vaultBytes, local, plan.fromVault, machine)
         : mergedBytes(vaultBytes, local, plan.takes).bytes
     if (merged.length > MAX_ENV_BYTES) {
       throw new AppError('ENV_TOO_LARGE', 'The merged .env would be larger than 1 MiB.')
@@ -1106,12 +1159,13 @@ async function applyMerge(
       vault = toInfo(payload)
     }
     const backupName = names ? await writeLocal(s, envDir, merged, names) : null
-    await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
+    await recordSync(s.keys.key, vaultId, s.id, vault, synced)
     return { vault, backupName }
   } finally {
     if (synced !== merged) synced?.fill(0)
     merged?.fill(0)
     vaultBytes.fill(0)
+    base?.fill(0)
   }
 }
 
@@ -1304,6 +1358,8 @@ export async function removeFromVault(
           contentHash: entry.payload.contentHash
         })
       }
+      // The copy it was the base of is gone.
+      await forgetBase(vaultId, id)
     }
     return null
   })

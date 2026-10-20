@@ -1,10 +1,12 @@
 // Resolving a conflict key by key. compareEnv lists the keys whose copies
 // differ, so the user can choose one copy per key, and takesFor checks those
-// choices before mergePull (core/localkeys) builds the merged file from them.
-// Two-way: without the version both copies started from, a key only one copy
+// choices before mergePull or keepLocal (core/localkeys) build the merged file
+// from them. With the base, what this machine last synced, it is three-way:
+// a key that changed on one side only has a suggested copy, and only keys
+// changed on both are the user's to decide. Without one, a key only one copy
 // has may have been added there or removed from the other, so every
 // difference is the user's choice.
-import type { MergeChoice, MergeKey, MergeValues } from '../shared/types'
+import type { KeyChange, MergeChoice, MergeKey, MergeTake, MergeValues } from '../shared/types'
 import { DuplicateKeyError, decodeValue } from './envedit'
 import { scanLines, type Scanned } from './envlines'
 import { keptKeys, type LocalTakes } from './localkeys'
@@ -18,6 +20,12 @@ export interface EnvComparison {
   unset: string[]
   /** Keys with the same value in both copies. */
   unchanged: number
+  /** A base was given and could be used. */
+  hasBase: boolean
+  /** Comments and blank lines changed since the base, per side; null without a base. */
+  layoutChanged: { local: boolean; vault: boolean } | null
+  /** Every key has a suggestion, and the layout changed on at most one side. */
+  clean: boolean
 }
 
 /** The choices don't fit the comparison. Messages never contain keys or values. */
@@ -28,37 +36,90 @@ export class MergeError extends Error {
   }
 }
 
+const isUnique = (s: Scanned): boolean => [...s.byKey.values()].every((list) => list.length === 1)
+
 function requireUnique(s: Scanned): void {
-  for (const list of s.byKey.values()) if (list.length > 1) throw new DuplicateKeyError()
+  if (!isUnique(s)) throw new DuplicateKeyError()
+}
+
+/** What happened to `key` on one side (`now`) since the base. */
+function changeOf(base: Scanned, now: Scanned, key: string): KeyChange {
+  const was = base.byKey.get(key)?.[0]
+  const is = now.byKey.get(key)?.[0]
+  if (!was) return is ? 'added' : 'same'
+  if (!is) return 'removed'
+  return was.value === is.value ? 'same' : 'changed'
+}
+
+/** The copy to take when only one side changed the key. */
+function suggestionOf(here: KeyChange | null, there: KeyChange | null): MergeTake | null {
+  if (here === null || there === null) return null
+  if (here === 'same') return 'vault'
+  if (there === 'same') return 'local'
+  return null
+}
+
+/** Comments, blank lines and anything else that isn't an assignment or a marker, in order. */
+function layoutOf(s: Scanned): string {
+  const covered = new Set<number>(s.markerLines)
+  for (const a of s.assignments) for (let k = a.first; k <= a.last; k++) covered.add(k)
+  return s.lines.filter((_, i) => !covered.has(i)).join('\n')
 }
 
 /**
  * How the local file and the vault copy differ, key by key. Values compare
  * as parseEnv reads them, so quoting and comments alone are not a difference.
- * Throws DuplicateKeyError if a key is assigned twice in either file.
+ * With `base` (this machine's last sync), each key also says what changed on
+ * each side and which copy to suggest; a base with a key assigned twice is
+ * not used. Throws DuplicateKeyError if a key is assigned twice in either file.
  */
-export function compareEnv(local: string, vault: string): EnvComparison {
+export function compareEnv(
+  local: string,
+  vault: string,
+  base: string | null = null
+): EnvComparison {
   const l = scanLines(local)
   const v = scanLines(vault)
   requireUnique(l)
   requireUnique(v)
+  const scannedBase = base === null ? null : scanLines(base)
+  const b = scannedBase && isUnique(scannedBase) ? scannedBase : null
   const { keep, unset } = keptKeys(v, l)
   const keys: MergeKey[] = []
+  const listKey = (key: string, kind: MergeKey['kind']): void => {
+    const here = b && changeOf(b, l, key)
+    const there = b && changeOf(b, v, key)
+    keys.push({ key, kind, here, there, suggested: suggestionOf(here, there) })
+  }
   let unchanged = 0
   for (const a of l.assignments) {
     if (keep.has(a.key)) continue
     const other = v.byKey.get(a.key)?.[0]
-    if (!other) keys.push({ key: a.key, kind: 'local-only' })
-    else if (other.value !== a.value) keys.push({ key: a.key, kind: 'differs' })
+    if (!other) listKey(a.key, 'local-only')
+    else if (other.value !== a.value) listKey(a.key, 'differs')
     else unchanged++
   }
   for (const a of v.assignments) {
     // A vault-marked key the local file lacks is `unset`, written empty.
-    if (!l.byKey.has(a.key) && !v.marked.has(a.key)) {
-      keys.push({ key: a.key, kind: 'vault-only' })
-    }
+    if (!l.byKey.has(a.key) && !v.marked.has(a.key)) listKey(a.key, 'vault-only')
   }
-  return { keys, kept: [...keep].sort(), unset, unchanged }
+  const layoutChanged = b && {
+    local: layoutOf(l) !== layoutOf(b),
+    vault: layoutOf(v) !== layoutOf(b)
+  }
+  const clean =
+    layoutChanged !== null &&
+    !(layoutChanged.local && layoutChanged.vault) &&
+    keys.every((k) => k.suggested !== null)
+  return {
+    keys,
+    kept: [...keep].sort(),
+    unset,
+    unchanged,
+    hasBase: b !== null,
+    layoutChanged,
+    clean
+  }
 }
 
 /**

@@ -19,7 +19,7 @@ describe('compareEnv', () => {
       text('B=local', 'NEW2=x', 'A=1', 'NEW1=y'),
       text('A=1', 'GONE2=z', 'B=vault', 'GONE1=w')
     )
-    expect(cmp).toEqual({
+    expect(cmp).toMatchObject({
       keys: [
         { key: 'B', kind: 'differs' },
         { key: 'NEW2', kind: 'local-only' },
@@ -44,7 +44,7 @@ describe('compareEnv', () => {
       text(M, 'DB=/a', 'PORT=3000', 'A=1'),
       text('DB=/vault', M, 'PORT=', M, 'HOME_DIR=', 'A=2')
     )
-    expect(cmp).toEqual({
+    expect(cmp).toMatchObject({
       keys: [{ key: 'A', kind: 'differs' }],
       kept: ['DB', 'PORT'],
       unset: ['HOME_DIR'],
@@ -57,13 +57,104 @@ describe('compareEnv', () => {
       '﻿PEM="-----BEGIN\r\nabc\r\n-----END"\r\nA=1\r\n',
       'PEM="-----BEGIN\nabd\n-----END"\nA=1'
     )
-    expect(cmp.keys).toEqual([{ key: 'PEM', kind: 'differs' }])
+    expect(cmp.keys).toMatchObject([{ key: 'PEM', kind: 'differs' }])
     expect(cmp.unchanged).toBe(1)
   })
 
   it('refuses a key assigned more than once in either file', () => {
     expect(() => compareEnv(text('A=1', 'A=2'), text('A=1'))).toThrow(DuplicateKeyError)
     expect(() => compareEnv(text('A=1'), text('B=1', 'B=2'))).toThrow(DuplicateKeyError)
+  })
+})
+
+describe('compareEnv with a base', () => {
+  const base = text(
+    '# base',
+    'SAME=1',
+    'HERE=1',
+    'THERE=1',
+    'BOTH=1',
+    'TWIN=1',
+    'DROP_HERE=1',
+    'DROP_THERE=1'
+  )
+  const local = text(
+    '# base',
+    'SAME=1',
+    'HERE=2',
+    'THERE=1',
+    'BOTH=2',
+    'TWIN=9',
+    'DROP_THERE=1',
+    'NEW_HERE=1'
+  )
+  const vault = text(
+    '# base',
+    'SAME=1',
+    'HERE=1',
+    'THERE=2',
+    'BOTH=3',
+    'TWIN=9',
+    'DROP_HERE=1',
+    'NEW_THERE=1'
+  )
+
+  it('says what changed on each side, and suggests the side that changed', () => {
+    const cmp = compareEnv(local, vault, base)
+    const by = Object.fromEntries(cmp.keys.map((k) => [k.key, [k.here, k.there, k.suggested]]))
+    expect(by).toEqual({
+      HERE: ['changed', 'same', 'local'],
+      THERE: ['same', 'changed', 'vault'],
+      BOTH: ['changed', 'changed', null],
+      // Removed in the vault, untouched here: Remove.
+      DROP_THERE: ['same', 'removed', 'vault'],
+      NEW_HERE: ['added', 'same', 'local'],
+      // Removed here, untouched in the vault: Leave out.
+      DROP_HERE: ['removed', 'same', 'local'],
+      NEW_THERE: ['same', 'added', 'vault']
+    })
+    // Changed on both sides to the same value: no difference to list.
+    expect(cmp.keys.map((k) => k.key)).not.toContain('TWIN')
+    expect(cmp.hasBase).toBe(true)
+    expect(cmp.clean).toBe(false)
+  })
+
+  it('is clean when no key changed on both sides and comments on at most one', () => {
+    const b = text('# b', 'A=1', 'B=1')
+    expect(compareEnv(text('# b', 'A=2', 'B=1'), text('# b', 'A=1', 'B=2'), b)).toMatchObject({
+      clean: true,
+      layoutChanged: { local: false, vault: false }
+    })
+    expect(compareEnv(text('# mine', 'A=2', 'B=1'), text('# b', 'A=1', 'B=2'), b)).toMatchObject({
+      clean: true,
+      layoutChanged: { local: true, vault: false }
+    })
+    expect(
+      compareEnv(text('# mine', 'A=2', 'B=1'), text('# theirs', 'A=1', 'B=2'), b)
+    ).toMatchObject({
+      clean: false,
+      layoutChanged: { local: true, vault: true }
+    })
+  })
+
+  it('ignores marker lines and line endings in the layout', () => {
+    const b = text('# b', 'A=1')
+    expect(
+      compareEnv(`# b\r\n${M}\r\nA=1\r\nB=2\r\n`, text('# b', 'A=1'), b).layoutChanged
+    ).toEqual({
+      local: false,
+      vault: false
+    })
+  })
+
+  it('works without a usable base, as two-way', () => {
+    for (const b of [null, text('A=1', 'A=2')]) {
+      const cmp = compareEnv(text('A=2'), text('A=3'), b)
+      expect(cmp).toMatchObject({ hasBase: false, layoutChanged: null, clean: false })
+      expect(cmp.keys).toEqual([
+        { key: 'A', kind: 'differs', here: null, there: null, suggested: null }
+      ])
+    }
   })
 })
 

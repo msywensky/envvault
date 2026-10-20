@@ -105,10 +105,12 @@ export default defineConfig(
                 '**/vault',
                 '**/localkeys',
                 '**/secrets',
+                '**/bases',
                 '**/core/crypto',
                 '**/core/setupcode',
                 '**/core/envdiff',
-                '**/core/envedit'
+                '**/core/envedit',
+                '**/core/envmerge'
               ],
               message: 'A store moves ciphertext only; it never sees keys or plaintext.'
             }

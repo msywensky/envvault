@@ -3,6 +3,7 @@ import {
   DuplicateLocalKeyError,
   keepLocal,
   LOCAL_MARKER,
+  mergeKeys,
   markedKeys,
   mergePull,
   projectEnv,
@@ -245,5 +246,39 @@ describe('keepLocal', () => {
     expect(() => keepLocal(text('A=1'), text('PORT=1', 'PORT=2'), ['PORT'])).toThrow(
       DuplicateLocalKeyError
     )
+  })
+})
+
+describe('mergeKeys', () => {
+  it("puts the other file's lines in place, keeping the rest byte for byte", () => {
+    const layout = '# mine\r\nB=3\r\nA="1" # note\r\nC=x'
+    expect(mergeKeys(layout, text('A=2', 'B=2'), ['A'])).toBe('# mine\r\nB=3\r\nA=2\r\nC=x')
+    expect(mergeKeys(layout, text('A=2'), [])).toBe(layout)
+  })
+
+  it('drops a key the other file lacks, with its marker line', () => {
+    expect(mergeKeys(text('A=1', M, 'GONE=x', 'B=2'), text('A=1'), ['GONE'])).toBe(
+      text('A=1', 'B=2')
+    )
+  })
+
+  it("appends the other file's new keys in its order, after the layout's last line", () => {
+    expect(mergeKeys('\uFEFFA=1', text('N2=b', 'A=1', 'N1=a'), ['N1', 'N2'])).toBe(
+      '\uFEFFA=1\nN2=b\nN1=a\n'
+    )
+    expect(mergeKeys('A=1\r\n', text('PEM="x', 'y"'), ['PEM'])).toBe('A=1\r\nPEM="x\ny"\r\n')
+  })
+
+  it('combines with keepLocal for a merge in the local layout', () => {
+    const vault = text('A=2', M, 'DB=', M, 'HOME_DIR=')
+    const local = text('# here', 'A=1', 'DB=/b')
+    expect(keepLocal(vault, mergeKeys(local, vault, ['A']))).toBe(
+      text('# here', 'A=2', M, 'DB=/b', M, 'HOME_DIR=')
+    )
+  })
+
+  it('refuses a key assigned more than once in either file', () => {
+    expect(() => mergeKeys(text('A=1', 'A=2'), text('A=3'), ['A'])).toThrow(DuplicateLocalKeyError)
+    expect(() => mergeKeys(text('A=1'), text('A=3', 'A=4'), ['A'])).toThrow(DuplicateLocalKeyError)
   })
 })
