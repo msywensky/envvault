@@ -57,6 +57,8 @@ const keyCheckAad = (vaultId: string): string => `envvault:keycheck:${vaultId}`
 const entryAad = (repoName: string): string => `envvault:v1:${repoName}`
 // Its own prefix: a repo can be named like another repo's "<repo>.<tag>".
 const fileEntryAad = (repoId: string, tag: string): string => `envvault:file:v1:${repoId}/${tag}`
+// One settings document per vault: no entry opens as settings, or the other way round.
+const SETTINGS_AAD = 'envvault:settings:v1'
 const FILE_TAG_BYTES = 8
 
 async function lib(): Promise<typeof sodium> {
@@ -278,7 +280,7 @@ export function decryptPayload(
   repoName: string,
   bytes: Uint8Array
 ): Promise<Payload> {
-  return openJson(key, entryAad(repoName), bytes, PayloadSchema)
+  return openPayload(key, entryAad(repoName), bytes, PayloadSchema)
 }
 
 /**
@@ -305,12 +307,26 @@ export function decryptFilePayload(
   tag: string,
   bytes: Uint8Array
 ): Promise<FilePayload> {
-  return openJson(key, fileEntryAad(repoId, tag), bytes, FilePayloadSchema)
+  return openPayload(key, fileEntryAad(repoId, tag), bytes, FilePayloadSchema)
 }
 
-async function sealJson(key: Uint8Array, aad: string, payload: Payload): Promise<Uint8Array> {
+/** Encrypt the vault's settings (see core/vaultsettings). */
+export function encryptSettings(key: Uint8Array, settings: object): Promise<Uint8Array> {
+  return sealJson(key, SETTINGS_AAD, settings)
+}
+
+/**
+ * Decrypt the vault's settings to the JSON value they hold, still to be
+ * validated (parseSettings in core/vaultsettings). A failure to decrypt or
+ * parse the JSON is a VaultTamperError.
+ */
+export function decryptSettings(key: Uint8Array, bytes: Uint8Array): Promise<unknown> {
+  return openJson(key, SETTINGS_AAD, bytes)
+}
+
+async function sealJson(key: Uint8Array, aad: string, value: object): Promise<Uint8Array> {
   const s = await lib()
-  const plaintext = s.from_string(JSON.stringify(payload))
+  const plaintext = s.from_string(JSON.stringify(value))
   try {
     return await seal(key, aad, plaintext)
   } finally {
@@ -318,23 +334,25 @@ async function sealJson(key: Uint8Array, aad: string, payload: Payload): Promise
   }
 }
 
-async function openJson<T extends Payload>(
-  key: Uint8Array,
-  aad: string,
-  bytes: Uint8Array,
-  schema: z.ZodType<T>
-): Promise<T> {
+async function openJson(key: Uint8Array, aad: string, bytes: Uint8Array): Promise<unknown> {
   const s = await lib()
   const plaintext = await open(key, aad, bytes)
-  let json: unknown
   try {
-    json = JSON.parse(s.to_string(plaintext))
+    return JSON.parse(s.to_string(plaintext))
   } catch {
     throw new VaultTamperError('Vault file contents are malformed.')
   } finally {
     s.memzero(plaintext)
   }
-  const parsed = schema.safeParse(json)
+}
+
+async function openPayload<T extends Payload>(
+  key: Uint8Array,
+  aad: string,
+  bytes: Uint8Array,
+  schema: z.ZodType<T>
+): Promise<T> {
+  const parsed = schema.safeParse(await openJson(key, aad, bytes))
   if (!parsed.success) throw new VaultTamperError('Vault file contents are malformed.')
   if (sha256Hex(decodeEnv(parsed.data)) !== parsed.data.contentHash) {
     throw new VaultTamperError('Vault file content hash does not match.')

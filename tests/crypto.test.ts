@@ -7,9 +7,11 @@ import {
   decodeEnv,
   decryptFilePayload,
   decryptPayload,
+  decryptSettings,
   deriveKey,
   encryptFilePayload,
   encryptPayload,
+  encryptSettings,
   fileTagger,
   makeKeyCheck,
   makePayload,
@@ -215,6 +217,29 @@ describe('file entries', () => {
     const extra = { ...filePayload(), extra: 1 } as FilePayload
     const withExtra = await encryptFilePayload(k, 'platform', TAG, extra)
     await expect(decryptFilePayload(k, 'platform', TAG, withExtra)).rejects.toThrow('malformed')
+  })
+})
+
+describe('settings', () => {
+  const settings = { format: 1, defaults: { include: ['.env.local'], exclude: [] }, repos: {} }
+
+  it('round-trips the settings document', async () => {
+    const k = await key()
+    const bytes = await encryptSettings(k, settings)
+    expect(await decryptSettings(k, bytes)).toEqual(settings)
+    expect(Buffer.from(bytes).includes('.env.local')).toBe(false)
+    await expect(decryptSettings(await key(), bytes)).rejects.toBeInstanceOf(VaultTamperError)
+  })
+
+  it('never opens as an entry, or the other way round', async () => {
+    const k = await key()
+    const bytes = await encryptSettings(k, settings)
+    await expect(decryptPayload(k, 'settings', bytes)).rejects.toBeInstanceOf(VaultTamperError)
+    await expect(
+      decryptFilePayload(k, 'settings', '0123456789abcdef', bytes)
+    ).rejects.toBeInstanceOf(VaultTamperError)
+    const root = await encryptPayload(k, 'settings', makePayload(sample(), 1, 'm'))
+    await expect(decryptSettings(k, root)).rejects.toBeInstanceOf(VaultTamperError)
   })
 })
 

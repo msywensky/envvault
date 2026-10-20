@@ -17,6 +17,17 @@ export interface EnvFile {
   path: string
 }
 
+/**
+ * A repo's own settings, kept in the vault for every machine (see
+ * src/core/vaultsettings.ts). A null list means it uses the vault's defaults.
+ */
+export interface RepoRules {
+  /** EnvVault leaves the repo alone: no reads, pushes or pulls. */
+  ignored: boolean
+  include: string[] | null
+  exclude: string[] | null
+}
+
 /** Metadata about the vault copy of one repo. No values. */
 export interface VaultInfo {
   version: number
