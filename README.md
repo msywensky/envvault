@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/msywensky/envvault/actions/workflows/ci.yml/badge.svg)](https://github.com/msywensky/envvault/actions/workflows/ci.yml)
 
-A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your projects' `.env` files in sync between your machines (in a monorepo, the one in each package too), through an **encrypted** vault: a folder synced between them (such as a Google Drive folder), or a private git repository. The sync folder or the git host never sees values or key names, only ciphertext and a little metadata. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
+A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your projects' `.env` files in sync between your machines (in a monorepo, the one in each package too, and variants such as `.env.local` in the repos you choose), through an **encrypted** vault: a folder synced between them (such as a Google Drive folder), or a private git repository. The sync folder or the git host never sees values or key names, only ciphertext and a little metadata. Plaintext stays in your repos, which EnvVault checks are git-ignored before it writes anything.
 
 ![Repositories view](docs/repos.png)
 
@@ -16,6 +16,7 @@ A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your
   - [Machine-specific keys](#machine-specific-keys)
   - [`.env.example` checks](#envexample-checks)
   - [Monorepos](#monorepos)
+  - [Repo settings](#repo-settings)
   - [Editing the vault copy](#editing-the-vault-copy)
   - [Removing a vault copy](#removing-a-vault-copy)
   - [Automatic pull](#automatic-pull)
@@ -50,6 +51,7 @@ The vault can also be a **private git repository** instead of a synced folder: t
 | Vault newer | Only another machine changed it                                                              | Pull                    |
 | Conflict    | Both changed, or they differ and this machine never synced them, or the vault went backwards | Keep local / Keep vault |
 | Vault only  | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it   | Remove…                 |
+| Excluded    | In the vault, but the repo's settings no longer sync it                                      | Remove…                 |
 | No .env     | Nothing on either side                                                                       | —                       |
 
 Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in Settings). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
@@ -60,7 +62,7 @@ To see exactly what a pull would change, click **Show raw diff** in the pull dia
 
 ## Security
 
-EnvVault encrypts each `.env` with XChaCha20-Poly1305, under a key derived with Argon2id from your master password and a setup code that each of your machines keeps (on by default, always for a git vault). The sync folder or git host sees only ciphertext, your repo names, how many `.env` files each has (not their paths), file sizes and when they changed. The key never leaves EnvVault's main process and is wiped when it locks, and env values reach the app's window only when you ask to see them. EnvVault doesn't protect against malware running as you while it's unlocked, a weak password without a setup code, or the plaintext `.env` files in your repos. [Security design and threat model](docs/security.md) has the details, including the vault's file format.
+EnvVault encrypts each `.env` with XChaCha20-Poly1305, under a key derived with Argon2id from your master password and a setup code that each of your machines keeps (on by default, always for a git vault). The sync folder or git host sees only ciphertext, your repo names, how many env files each has (not their paths), file sizes and when they changed. Repo settings are encrypted too, ignored repos' names included. The key never leaves EnvVault's main process and is wiped when it locks, and env values reach the app's window only when you ask to see them. EnvVault doesn't protect against malware running as you while it's unlocked, a weak password without a setup code, or the plaintext `.env` files in your repos. [Security design and threat model](docs/security.md) has the details, including the vault's file format.
 
 ## Install
 
@@ -120,15 +122,34 @@ You can turn the checks off in Settings.
 
 ### Monorepos
 
-Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders: `apps/web/.env`, `packages/db/.env`, `supabase/functions/.env`. Only files named exactly `.env` for now.
+Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders: `apps/web/.env`, `packages/db/.env`, `supabase/functions/.env`. Variants such as `.env.local` sync too in the repos whose [settings](#repo-settings) include them.
 
-- **Found with git.** EnvVault asks git (`git ls-files`) for every `.env` it knows of in each repo: ignored ones, and also ones git would commit or has committed, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh**; automatic pull and mini mode use what it found then.
+- **Found with git.** EnvVault asks git (`git ls-files`) for every env file it knows of in each repo: ignored ones, and also ones git would commit, or a committed `.env`, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh**; automatic pull and mini mode use what it found then.
 - **Listed under their repo.** A repo with only a root `.env` is one row, as before. Otherwise its name is followed by a row per file. Files found in folders that nobody has pushed yet are listed apart, under _N .env files found in folders, not in the vault yet_, collapsed, each with a **Push** button; they don't count as needing attention.
 - **On your other machines,** a pushed file appears as Vault newer and is pulled like any other. A pull never creates a folder: if `apps/web` isn't in that machine's copy of the repo (another branch, a renamed package), the file shows as Vault only.
 - **Next to the file.** A file's backups, its `.env.example` check and its git checks are all in its own folder. **Add to .gitignore** adds the lines to the repo's root `.gitignore`, where they cover every folder.
 - **Symlinks:** a `.env` under a symlinked folder is refused. A symlinked `.env` that isn't in the vault (a shared root `.env` linked into a package, say) is skipped.
 - **In the vault,** such a file is `<repo>.<tag>.file.enc`. The tag is a keyed hash of its path, so the sync folder or git host can see how many `.env` files a repo has, but not their paths. Hover over a row to see the name its vault copy has, for finding it in Drive's version history or the repository's.
 - EnvVault 0.1.0 ignores these files and keeps syncing root `.env` files with newer versions.
+
+### Repo settings
+
+Click **Settings…** on a repo (on its row, or next to its name when it has several files) to choose what EnvVault does with it. Everything except **Sync as** is kept in the vault, encrypted, so every machine uses the same settings.
+
+- **Env files to sync** and **Env files not to sync** are patterns, one per line. By default every repo syncs each `.env`, in any folder. **Defaults…**, above the list, changes that for every repo without lists of its own.
+  - A name matches in every folder: `.env.local`, `.env.*`, `.env.*.local`. A path is from the repo root: `apps/*/.env.local`. A path whose last part isn't a file name means a folder and everything in it: `apps/legacy`, `**/fixtures`. `*` matches within a name, `**` any number of folders, and case doesn't matter.
+  - Exclude wins. A Next.js or Vite app that commits `.env` with its defaults and keeps its secrets in `.env.local` syncs `.env.local` only: include `.env.local`.
+  - Never synced, whatever the patterns say: templates (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`, also after another name, as in `.env.local.example`) and EnvVault's own backups (`.env.bak.*`). Variants git tracks, such as a committed `.env.development`, aren't listed either: git already syncs them.
+  - Variants such as `.env.local` often hold values that differ between machines. Sync them only where they don't, or mark those keys [machine-specific](#machine-specific-keys).
+  - The dialog shows which files the patterns match, from what git found at the last Refresh. Changes apply at once.
+  - A vault copy the patterns no longer include stays in the vault, listed as **Excluded** with **Remove…**. It's never pushed, pulled or edited.
+  - A variant's backups are named after it (`.env.bak.local.<timestamp>`) and kept apart from the `.env`'s. Its `.env.example` check is skipped. **Add to .gitignore** adds the file's own name.
+- **Ignore this repo:** EnvVault doesn't read its files, push them or pull into it, on any machine, and the command line refuses it. It moves to the collapsed **Ignored** list under the table, with **Stop ignoring**. Its vault copies stay.
+- **Sync as** (this machine only) is the name the folder's files have in the vault. Use it for a second checkout or a git worktree of a repo (`api-wt` syncing as `api`), or a folder you renamed. Each folder keeps its own sync status, so a push from one shows the other as Vault newer.
+
+Repos with no env files on either side are listed apart too, under **No env files**, with **Edit** (to start a vault copy), **Ignore** and **Settings…**.
+
+If the settings in the vault fail verification, EnvVault uses the built-in ones (every `.env` syncs, no repo is ignored) and offers **Reset settings…**. Settings saved by a newer EnvVault are left alone until you update this one. Update EnvVault on every machine: versions without repo settings ignore them, and show vault copies of variants as errors.
 
 ### Editing the vault copy
 
@@ -182,13 +203,14 @@ envvault push --dry-run          # only shows them, with a token...
 envvault push --expect <token>   # ...that pushes exactly what you saw, if nothing changed since
 ```
 
-- `push` uses the `.env` in the current folder, or the nearest one above it in the repo, or else the repo's root `.env`. In a monorepo, run it in the package's folder.
+- `push` uses the env file the repo syncs in the current folder, or in the nearest one above it in the repo, or else the repo's root `.env`. In a monorepo, run it in the package's folder. A folder with several (`.env` and `.env.local`) means its `.env`; with several and no `.env`, pass `--path`.
+- `status` also names the repos you've told EnvVault to ignore, and `push` refuses them.
 - Run `npm link` in this repo once to put `envvault` on your PATH, or run `node out/cli/envvault.mjs`. `npm run build` builds it. In a packaged app it's in `app.asar.unpacked/out/cli/`, and needs Node 22 or newer.
 - It shows key names only, never values.
 - It pushes only one-sided changes. If the vault copy changed on another machine, it tells you to resolve it in the app.
 - Options:
   - `--repo <name>` picks a repo by name instead of the current folder;
-  - `--path <path>`, with `push --repo`, picks a `.env` in one of its folders, such as `apps/web/.env`;
+  - `--path <path>`, with `push`, picks an env file by its path from the repo root, such as `apps/web/.env` or `.env.local`;
   - `--json` prints JSON;
   - `--yes` pushes without asking.
 - Exit codes:
@@ -228,7 +250,7 @@ There is no backdoor. If you lose the master password, or the setup code and eve
 | Command-line access | Off       | The `envvault` command and the Claude Code skill                        |
 | Mini window on top  | On        | Keeps the mini window above other windows                               |
 
-Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
+Repo settings (**Settings…** on a repo, and **Defaults…**) are kept in the vault, for every machine; only **Sync as** is this machine's. Settings are stored in Electron's `userData` folder (`config.json`). The per-machine sync state, which holds no secrets, is stored next to it in `state.json`. While command-line access is on, its socket (`cli.sock`, macOS) and token (`cli-token`) are there too, a git vault's mirror is in `git-vaults/`, and vault secrets (sealed) are in `vault-secrets.json`.
 
 ## Development
 
@@ -249,7 +271,7 @@ tests/       Vitest: unit tests for core/, integration tests for main/
 
 ## Roadmap
 
-- Other env files, such as `.env.local`, chosen per repo (they're often machine-specific).
+- Automatic pull on or off per repo, and Sync as offered for git worktrees.
 - Unlock with the Bitwarden CLI.
 - Run a command with the vault copy's values in its environment, without a `.env`.
 - Change the master password.
