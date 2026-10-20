@@ -118,6 +118,12 @@ export function registerIpc(): void {
   handle(CH.pull, (req) => exclusive(() => session.withKey((key, id) => sync.pull(key, id, req))))
   // Read-only like the previews. Returns env values when asked (see sync.pullRawDiff).
   handle(CH.pullRawDiff, (req) => session.withKey((key) => sync.pullRawDiff(key, req)))
+  // Resolving a conflict: the preview and values are read-only like the
+  // previews (values only when asked, see sync.mergeValues); merge writes both
+  // sides, like a push and a pull.
+  handle(CH.previewMerge, (file) => session.withKey((key, id) => sync.previewMerge(key, id, file)))
+  handle(CH.mergeValues, (req) => session.withKey((key) => sync.mergeValues(key, req)))
+  handle(CH.merge, (req) => exclusive(() => session.withKey((key, id) => sync.merge(key, id, req))))
   // The editor: open returns env values (read-only, like the previews); save
   // writes the vault copy (like push).
   handle(CH.openEditor, (file) => session.withKey((key) => sync.openEditor(key, file)))

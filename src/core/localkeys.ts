@@ -71,21 +71,47 @@ export interface PullMerge {
 }
 
 /**
+ * The machine-specific keys a pull keeps from the local file (marked in
+ * either file, and assigned locally), and the keys the vault marks that the
+ * local file lacks (written empty).
+ */
+export function keptKeys(v: Scanned, l: Scanned | null): { keep: Set<string>; unset: string[] } {
+  const keep = new Set([...(l?.marked ?? []), ...v.marked].filter((k) => l?.byKey.has(k)))
+  const unset = [...v.marked].filter((k) => !l?.byKey.has(k)).sort()
+  return { keep, unset }
+}
+
+/**
+ * Keys whose result comes from the local file in a merge (see mergePull):
+ * present with its local lines, or absent if the local file lacks it.
+ */
+export type LocalTakes = ReadonlyMap<string, 'local'>
+
+/**
  * What a pull writes: the vault copy, except that every key marked in either
  * file keeps its local lines (verbatim, in the vault's position). A local
  * marker the vault lacks is inserted above its key, and a kept key the vault
  * doesn't have at all is appended, so a pull never overwrites or deletes a
  * machine-specific value. Throws DuplicateLocalKeyError if a kept key appears
  * more than once in either file.
+ *
+ * Resolving a conflict is the same merge with `takes`: each of those keys
+ * gets its local lines in the vault's position, loses its vault lines if the
+ * local file lacks it, or is appended if only the local file has it. Keys not
+ * in `takes` come from the vault, and a kept key stays kept whatever `takes` says.
  */
-export function mergePull(vault: string, local: string | null): PullMerge {
+export function mergePull(
+  vault: string,
+  local: string | null,
+  takes: LocalTakes = new Map()
+): PullMerge {
   const v = scanLines(vault)
   const l = local === null ? null : scanLines(local)
-  const keep = new Set([...(l?.marked ?? []), ...v.marked].filter((k) => l?.byKey.has(k)))
-  const unset = [...v.marked].filter((k) => !l?.byKey.has(k)).sort()
-  if (!l || keep.size === 0) return { text: null, kept: [], unset }
-  requireSingle(l, keep)
-  requireSingle(v, keep)
+  const { keep, unset } = keptKeys(v, l)
+  const own = new Set([...takes.keys()].filter((k) => !keep.has(k)))
+  if (!l || (keep.size === 0 && own.size === 0)) return { text: null, kept: [], unset }
+  requireSingle(l, [...keep, ...own])
+  requireSingle(v, [...keep, ...own])
 
   const eol = v.ends.find((e) => e !== '') ?? l.ends.find((e) => e !== '') ?? '\n'
   /** The local lines of `key`'s assignment, the last one ending in `end`. */
@@ -97,23 +123,37 @@ export function mergePull(vault: string, local: string | null): PullMerge {
     return text + (l.lines[a.last] ?? '') + end
   }
 
+  // Vault keys taken from a local file that lacks them are dropped with their marker.
+  const dropped = v.assignments.filter((a) => own.has(a.key) && !l.byKey.has(a.key))
+  const droppedMarkers = new Set(
+    dropped.filter((a) => v.markerLines.has(a.first - 1)).map((a) => a.first - 1)
+  )
+
   let out = v.bom
   for (let i = 0; i < v.lines.length; i++) {
     const a = v.starts.get(i)
+    if (droppedMarkers.has(i)) continue
     if (a && keep.has(a.key)) {
       if (!v.marked.has(a.key)) out += LOCAL_MARKER + eol
       out += localLines(a.key, v.ends[a.last] ?? '')
+      i = a.last
+    } else if (a && own.has(a.key)) {
+      if (l.byKey.has(a.key)) out += localLines(a.key, v.ends[a.last] ?? '')
       i = a.last
     } else {
       out += (v.lines[i] ?? '') + (v.ends[i] ?? '')
     }
   }
 
-  // Kept keys the vault lacks are marked locally (the vault can't mark a key
-  // it doesn't have). Append them in local order.
-  const missing = l.assignments.filter((a) => keep.has(a.key) && !v.byKey.has(a.key))
+  // Local keys the vault lacks are appended in local order. Kept ones are
+  // marked locally (the vault can't mark a key it doesn't have).
+  const missing = l.assignments.filter(
+    (a) => (keep.has(a.key) || own.has(a.key)) && !v.byKey.has(a.key)
+  )
   if (missing.length > 0 && out !== v.bom && !out.endsWith('\n')) out += eol
-  for (const a of missing) out += LOCAL_MARKER + eol + localLines(a.key, eol)
+  for (const a of missing) {
+    out += (keep.has(a.key) ? LOCAL_MARKER + eol : '') + localLines(a.key, eol)
+  }
 
   return { text: out, kept: [...keep].sort(), unset }
 }

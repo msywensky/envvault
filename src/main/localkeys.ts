@@ -1,7 +1,7 @@
 // Byte-level wrappers around core/localkeys for the push/pull flows: decode,
 // apply, re-encode, and turn failures into AppErrors. Files without
 // machine-specific keys pass through as the same buffer, untouched.
-import { DuplicateLocalKeyError, mergePull, projectEnv } from '../core/localkeys'
+import { DuplicateLocalKeyError, mergePull, projectEnv, type LocalTakes } from '../core/localkeys'
 import { AppError } from './errors'
 
 function duplicateKey(): AppError {
@@ -60,15 +60,20 @@ export interface Merged {
 
 /**
  * What a pull writes: the vault copy with this machine's machine-specific
- * lines kept (see mergePull). Takes ownership of `vault`: it is returned as
- * `bytes` when nothing is kept, and wiped otherwise.
+ * lines kept, and the keys in `takes` from the local file (see mergePull).
+ * Takes ownership of `vault`: it is returned as `bytes` when nothing comes
+ * from the local file, and wiped otherwise.
  */
-export function mergedBytes(vault: Buffer, local: Buffer | null): Merged {
+export function mergedBytes(
+  vault: Buffer,
+  local: Buffer | null,
+  takes: LocalTakes = new Map()
+): Merged {
   let returned = false
   try {
     const vaultText = vault.toString('utf8')
     const localText = local?.toString('utf8') ?? null
-    const { text, kept, unset } = apply(() => mergePull(vaultText, localText))
+    const { text, kept, unset } = apply(() => mergePull(vaultText, localText, takes))
     if (text === null) {
       returned = true
       return { bytes: vault, kept, unset }

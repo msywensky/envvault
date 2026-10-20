@@ -1,7 +1,7 @@
 // Plain data types shared by main, core and the renderer. Type-only, so the
 // renderer can import them without pulling in node code. None of these carry
 // env values, except a RawDiff requested with `values: true` (see
-// sync.pullRawDiff).
+// sync.pullRawDiff), MergeValues (sync.mergeValues) and the editor's.
 import type { FileRules } from './envrules'
 import type { AppErrorInfo } from './result'
 
@@ -380,6 +380,69 @@ export interface RawDiffRequest extends PullRequest {
 }
 
 export interface PullResult {
+  backupName: string | null
+}
+
+/**
+ * How a key differs between the local file and the vault copy when resolving
+ * a conflict (see core/envmerge.ts).
+ */
+export type MergeKind = 'differs' | 'local-only' | 'vault-only'
+
+/** A key the user chooses a copy for. */
+export interface MergeKey {
+  key: string
+  kind: MergeKind
+}
+
+/** Which copy a key comes from in the merged file. */
+export type MergeTake = 'local' | 'vault'
+
+export interface MergeChoice {
+  key: string
+  take: MergeTake
+}
+
+/** The Resolve dialog's comparison. Key names only. */
+export interface MergePreview {
+  /** Keys that need a choice: local file order, then vault-only keys in vault order. */
+  keys: MergeKey[]
+  /** Keys with the same value in both copies. */
+  unchanged: number
+  /** Machine-specific keys whose local lines are kept, as on a pull. */
+  kept: string[]
+  /** Keys the vault marks machine-specific that the local file lacks: written empty. */
+  unset: string[]
+  /** No key differs: only formatting, comments or line endings do. */
+  formatOnly: boolean
+  vault: VaultInfo
+  /** This machine has never synced this file. */
+  neverSynced: boolean
+  /** The vault version is lower than the one last synced here: not merged. */
+  rollback: boolean
+  ignored: boolean
+  /** Backup and temp files (.env.bak.*) would be ignored too. */
+  backupIgnored: boolean
+  tracked: boolean
+  expected: Expected
+}
+
+/**
+ * The two values of each key the user chooses for, as dotenv reads them
+ * (null: that copy lacks it). CARRIES ENV VALUES (see sync.mergeValues).
+ */
+export interface MergeValues {
+  values: { key: string; local: string | null; vault: string | null }[]
+}
+
+/** Resolve a conflict: a copy for every key in MergePreview.keys. */
+export interface MergeRequest extends PullRequest {
+  choices: MergeChoice[]
+}
+
+export interface MergeResult {
+  /** The file's row, now in sync. */
+  row: RepoRow
   backupName: string | null
 }
 

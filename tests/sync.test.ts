@@ -2107,3 +2107,208 @@ describe('repo settings', { timeout: 30_000 }, () => {
     await save(a, 'next', { include: ['.env.local'] })
   })
 })
+
+describe('resolving a conflict', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  let mergeVault: string
+  let location: VaultLocation
+  let mpA: string
+  let mpB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? mpA : mpB, vault: location })
+  const envOf = (projects: string, repo: string): string => join(projects, repo, '.env')
+  const stored = (m: Machine, repo: string): Promise<string> =>
+    storedEnv(m, repo, '.env', mergeVault)
+
+  beforeAll(async () => {
+    mergeVault = join(root, 'merge-vault')
+    mkdirSync(mergeVault)
+    location = { kind: 'folder', path: mergeVault }
+    mpA = join(root, 'merge-a')
+    mpB = join(root, 'merge-b')
+    await (await on('a')).vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('keeps both machines’ changes, chosen key by key, and ends in sync on both', async () => {
+    makeRepo(mpA, 'mix', { '.gitignore': IGNORE, '.env': 'SAME=1\nA=1\nB=1\nDROP=x\n' })
+    makeRepo(mpB, 'mix', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'mix')
+    await pullRepo(await on('b'), 'mix')
+
+    // A changes A and adds NEWA; B changes B and removes DROP.
+    writeFileSync(envOf(mpA, 'mix'), 'SAME=1\nA=2\nB=1\nDROP=x\nNEWA=a\n')
+    await pushRepo(await on('a'), 'mix')
+    writeFileSync(envOf(mpB, 'mix'), '# mine\nSAME=1\nA=1\nB=2\n')
+
+    const b = await on('b')
+    expect((await rows(b))['mix']).toBe('conflict')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('mix'))
+    expect(preview).toMatchObject({
+      keys: [
+        { key: 'A', kind: 'differs' },
+        { key: 'B', kind: 'differs' },
+        { key: 'DROP', kind: 'vault-only' },
+        { key: 'NEWA', kind: 'vault-only' }
+      ],
+      unchanged: 1,
+      kept: [],
+      unset: [],
+      formatOnly: false,
+      neverSynced: false,
+      rollback: false,
+      ignored: true,
+      backupIgnored: true,
+      tracked: false,
+      vault: { version: 2 }
+    })
+
+    const req = { ...envFile('mix'), expected: preview.expected }
+    expect((await b.sync.mergeValues(key, req)).values).toEqual([
+      { key: 'A', local: '1', vault: '2' },
+      { key: 'B', local: '2', vault: '1' },
+      { key: 'DROP', local: null, vault: 'x' },
+      { key: 'NEWA', local: null, vault: 'a' }
+    ])
+
+    const result = await b.sync.merge(key, vaultId, {
+      ...req,
+      choices: [
+        { key: 'A', take: 'vault' },
+        { key: 'B', take: 'local' },
+        { key: 'DROP', take: 'local' },
+        { key: 'NEWA', take: 'vault' }
+      ]
+    })
+    expect(result.row).toMatchObject({ status: 'in-sync', vault: { version: 3 } })
+    // The vault's layout; B's comment goes, as on a pull.
+    const merged = 'SAME=1\nA=2\nB=2\nNEWA=a\n'
+    expect(readFileSync(envOf(mpB, 'mix'), 'utf8')).toBe(merged)
+    expect(await stored(b, 'mix')).toBe(merged)
+    expect(readFileSync(join(mpB, 'mix', result.backupName as string), 'utf8')).toBe(
+      '# mine\nSAME=1\nA=1\nB=2\n'
+    )
+    expect((await rows(b))['mix']).toBe('in-sync')
+
+    const a = await on('a')
+    expect((await rows(a))['mix']).toBe('vault-newer')
+    await pullRepo(a, 'mix')
+    expect(readFileSync(envOf(mpA, 'mix'), 'utf8')).toBe(merged)
+    expect((await rows(a))['mix']).toBe('in-sync')
+  })
+
+  it('refuses a stale review and incomplete choices, leaving both sides alone', async () => {
+    makeRepo(mpA, 'stale', { '.gitignore': IGNORE, '.env': 'A=1\n' })
+    makeRepo(mpB, 'stale', { '.gitignore': IGNORE, '.env': 'A=2\n' })
+    await pushRepo(await on('a'), 'stale')
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('stale'))
+    expect(preview.neverSynced).toBe(true)
+    const req = { ...envFile('stale'), expected: preview.expected }
+
+    expect(await errorCode(b.sync.merge(key, vaultId, { ...req, choices: [] }))).toBe(
+      'MERGE_INVALID'
+    )
+    expect(
+      await errorCode(
+        b.sync.merge(key, vaultId, {
+          ...req,
+          choices: [
+            { key: 'A', take: 'local' },
+            { key: 'OTHER', take: 'local' }
+          ]
+        })
+      )
+    ).toBe('MERGE_INVALID')
+
+    writeFileSync(envOf(mpB, 'stale'), 'A=3\n')
+    expect(await errorCode(b.sync.mergeValues(key, req))).toBe('LOCAL_CHANGED')
+    expect(
+      await errorCode(
+        b.sync.merge(key, vaultId, { ...req, choices: [{ key: 'A', take: 'local' }] })
+      )
+    ).toBe('LOCAL_CHANGED')
+    expect(await stored(b, 'stale')).toBe('A=1\n')
+    expect(readFileSync(envOf(mpB, 'stale'), 'utf8')).toBe('A=3\n')
+  })
+
+  it('checks git before writing either side', async () => {
+    makeRepo(mpA, 'open', { '.gitignore': IGNORE, '.env': 'A=1\n' })
+    makeRepo(mpB, 'open', { '.env': 'A=2\n' })
+    await pushRepo(await on('a'), 'open')
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('open'))
+    expect(preview).toMatchObject({ ignored: false, neverSynced: true })
+    const req = { ...envFile('open'), expected: preview.expected }
+    const choices = [{ key: 'A', take: 'local' as const }]
+    expect(await errorCode(b.sync.merge(key, vaultId, { ...req, choices }))).toBe('ENV_NOT_IGNORED')
+    // Nothing reached the vault.
+    expect(await stored(b, 'open')).toBe('A=1\n')
+  })
+
+  it('keeps machine-specific values and lists them apart', async () => {
+    makeRepo(mpA, 'kept', {
+      '.gitignore': IGNORE,
+      '.env': 'A=1\n# envvault:local\nDB=/a\n'
+    })
+    makeRepo(mpB, 'kept', { '.gitignore': IGNORE, '.env': 'A=2\nDB=/b\nNEW=n\n' })
+    await pushRepo(await on('a'), 'kept')
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('kept'))
+    expect(preview.keys).toEqual([
+      { key: 'A', kind: 'differs' },
+      { key: 'NEW', kind: 'local-only' }
+    ])
+    expect(preview.kept).toEqual(['DB'])
+    await b.sync.merge(key, vaultId, {
+      ...envFile('kept'),
+      expected: preview.expected,
+      choices: [
+        { key: 'A', take: 'local' },
+        { key: 'NEW', take: 'local' }
+      ]
+    })
+    expect(readFileSync(envOf(mpB, 'kept'), 'utf8')).toBe('A=2\n# envvault:local\nDB=/b\nNEW=n\n')
+    expect(await stored(b, 'kept')).toBe('A=2\n# envvault:local\nDB=\nNEW=n\n')
+    expect((await rows(b))['kept']).toBe('in-sync')
+  })
+
+  it('never merges a vault copy that went backwards', async () => {
+    makeRepo(mpA, 'back', { '.gitignore': IGNORE, '.env': 'A=1\n' })
+    makeRepo(mpB, 'back', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'back')
+    const entry = join(mergeVault, 'back.env.enc')
+    const v1 = readFileSync(entry)
+    writeFileSync(envOf(mpA, 'back'), 'A=2\n')
+    await pushRepo(await on('a'), 'back')
+    await pullRepo(await on('b'), 'back')
+    writeFileSync(entry, v1)
+    writeFileSync(envOf(mpB, 'back'), 'A=3\n')
+
+    const b = await on('b')
+    expect((await rows(b))['back']).toBe('conflict')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('back'))
+    expect(preview.rollback).toBe(true)
+    const req = { ...envFile('back'), expected: preview.expected }
+    expect(
+      await errorCode(
+        b.sync.merge(key, vaultId, { ...req, choices: [{ key: 'A', take: 'local' }] })
+      )
+    ).toBe('MERGE_INVALID')
+  })
+
+  it('refuses a file with a key assigned twice', async () => {
+    makeRepo(mpA, 'dup', { '.gitignore': IGNORE, '.env': 'A=1\n' })
+    makeRepo(mpB, 'dup', { '.gitignore': IGNORE, '.env': 'A=2\nA=3\n' })
+    await pushRepo(await on('a'), 'dup')
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    expect(await errorCode(b.sync.previewMerge(key, vaultId, envFile('dup')))).toBe(
+      'ENV_DUPLICATE_KEY'
+    )
+  })
+})
