@@ -1846,13 +1846,14 @@ describe('repo settings', { timeout: 30_000 }, () => {
     )
     const { key, vaultId } = await a.open()
     const rootEnv = envFile('next')
+    // One at a time: a call started before its turn could reject unhandled.
     for (const attempt of [
-      a.sync.previewPush(key, vaultId, rootEnv),
-      a.sync.previewPull(key, vaultId, rootEnv),
-      a.sync.openEditor(key, rootEnv),
-      a.sync.addGitignore(key, rootEnv)
+      () => a.sync.previewPush(key, vaultId, rootEnv),
+      () => a.sync.previewPull(key, vaultId, rootEnv),
+      () => a.sync.openEditor(key, rootEnv),
+      () => a.sync.addGitignore(key, rootEnv)
     ]) {
-      expect(await errorCode(attempt)).toBe('ENV_EXCLUDED')
+      expect(await errorCode(attempt())).toBe('ENV_EXCLUDED')
     }
     const excluded = (await list(a)).rows.find((r) => r.name === 'next' && r.path === '.env')
     expect(excluded).toMatchObject({ status: 'excluded', hasEnv: false, vault: { version: 1 } })
