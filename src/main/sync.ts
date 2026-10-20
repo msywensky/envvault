@@ -66,7 +66,9 @@ import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { mergedBytes, syncedBytes } from './localkeys'
 import {
   MAX_ENV_BYTES,
+  envFilesIn,
   listFolders,
+  repoAt,
   readEnvFile,
   readRepoFile,
   resolveEnvDir,
@@ -1069,6 +1071,51 @@ export async function addGitignore(key: Uint8Array, req: EnvFile): Promise<Gitig
     envDir,
     envFileName(file.path)
   )
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The env file the envvault command means in `dir`, its working directory:
+ * `path` in the repo that contains it, or else the env file the repo syncs in
+ * the nearest folder at or above `dir` (.env if there are several, and
+ * ENV_AMBIGUOUS if none of them is .env), or else the repo's root .env.
+ * REPO_IGNORED for an ignored repo.
+ */
+export async function envTargetAt(key: Uint8Array, dir: string, path?: string): Promise<EnvFile> {
+  const cfg = await configured()
+  const at = await repoAt(cfg.projectsPath, dir)
+  const vaultName = entryId(vaultNameOf(cfg, at.name))
+  const settings = await withEntryKeys(
+    key,
+    async (keys) => (await (await cfg.vault.snapshot()).settings(keys)).settings
+  )
+  if (repoRules(settings, vaultName).ignored) {
+    throw new AppError('REPO_IGNORED', `${at.name} is ignored in EnvVault.`)
+  }
+  if (path !== undefined) return { repoName: at.name, path }
+  const rules = effectiveRules(settings, vaultName)
+  for (let n = at.folders.length; n >= 0; n--) {
+    const synced = (await envFilesIn(at.dir, at.folders.slice(0, n))).filter((p) =>
+      isIncluded(p, rules)
+    )
+    const plain = synced.find((p) => envFileName(p) === ROOT_ENV)
+    const only = synced.length === 1 ? synced[0] : undefined
+    const found = plain ?? only
+    if (found) return { repoName: at.name, path: found }
+    if (synced.length > 1) {
+      throw new AppError(
+        'ENV_AMBIGUOUS',
+        `This folder has ${synced.map(envFileName).join(', ')}. Pick one with --path, as in --path ${synced[0]}.`
+      )
+    }
+  }
+  return { repoName: at.name, path: ROOT_ENV }
+}
+
+/** The name of the repo that contains `dir` (see envTargetAt). */
+export async function repoNameAt(dir: string): Promise<string> {
+  return (await repoAt((await configured()).projectsPath, dir)).name
 }
 
 // ---------------------------------------------------------------------------

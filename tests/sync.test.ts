@@ -1098,10 +1098,12 @@ describe('command line', () => {
     const { m, cli } = await unlocked('a')
     try {
       for (const dir of [join(projA, 'cl1'), join(projA, 'cl1', 'src', 'deep')]) {
-        expect(await cli.status.run({ dir })).toMatchObject([{ name: 'cl1', status: 'local-only' }])
+        expect((await cli.status.run({ dir })).rows).toMatchObject([
+          { name: 'cl1', status: 'local-only' }
+        ])
       }
-      expect(await cli.status.run({ repo: 'CL1' })).toMatchObject([{ name: 'cl1' }])
-      expect((await cli.status.run({ all: true })).map((r) => r.name)).toContain('cl1')
+      expect((await cli.status.run({ repo: 'CL1' })).rows).toMatchObject([{ name: 'cl1' }])
+      expect((await cli.status.run({ all: true })).rows.map((r) => r.name)).toContain('cl1')
       for (const dir of [root, projA, join(projA, 'not-a-repo'), join(projA, 'cl1', 'missing')]) {
         expect(await errorCode(cli.status.run({ dir }))).toBe('REPO_NOT_FOUND')
       }
@@ -1133,7 +1135,7 @@ describe('command line', () => {
       expect(named.preview.diff.added).toEqual(['A'])
       // Status lists every .env of the repo, found by git.
       expect(
-        (await cli.status.run({ dir: join(dir, 'packages', 'a', 'src') })).map((r) => r.path)
+        (await cli.status.run({ dir: join(dir, 'packages', 'a', 'src') })).rows.map((r) => r.path)
       ).toEqual(['.env', 'packages/a/.env'])
     } finally {
       m.session.lock()
@@ -2042,6 +2044,46 @@ describe('repo settings', { timeout: 30_000 }, () => {
     expect(await errorCode(a.sync.setVaultName({ repoName: 'nope', vaultName: 'x' }))).toBe(
       'REPO_NOT_FOUND'
     )
+  })
+
+  it("picks the env file the command means among a folder's", async () => {
+    const cl = makeRepo(spA, 'cl', { '.gitignore': '.env*\n', '.env.local': 'L=1\n' })
+    mkdirSync(join(cl, 'one', 'src'), { recursive: true })
+    writeFileSync(join(cl, 'one', '.env'), 'O=1\n')
+    writeFileSync(join(cl, 'one', '.env.local'), 'OL=1\n')
+    mkdirSync(join(cl, 'two'))
+    writeFileSync(join(cl, 'two', '.env.local'), 'TL=1\n')
+    writeFileSync(join(cl, 'two', '.env.test'), 'TT=1\n')
+    // A template is never picked, even as the only file there.
+    mkdirSync(join(cl, 'tpl'))
+    writeFileSync(join(cl, 'tpl', '.env.example'), 'X=\n')
+    const a = await on('a')
+    await save(a, 'cl', { include: ['.env', '.env.*'] })
+    const { key, vaultId } = await a.open()
+    a.session.unlock(key, vaultId, 5)
+    const cli = a.clicommands.cliCommands(() => undefined)
+    try {
+      const at = async (...folders: string[]): Promise<string> =>
+        (await cli.previewPush.run({ dir: join(cl, ...folders) })).path
+      // The root has only .env.local; one has .env and .env.local.
+      expect(await at()).toBe('.env.local')
+      expect(await at('one', 'src')).toBe('one/.env')
+      expect(await at('tpl')).toBe('.env.local')
+      expect(await errorCode(at('two'))).toBe('ENV_AMBIGUOUS')
+      const picked = await cli.previewPush.run({ dir: join(cl, 'two'), path: 'two/.env.test' })
+      expect(picked).toMatchObject({ repo: 'cl', path: 'two/.env.test' })
+      // Only what the repo syncs: with .env.test excluded, two has one file.
+      await save(a, 'cl', { include: ['.env', '.env.*'], exclude: ['.env.test'] })
+      expect(await at('two')).toBe('two/.env.local')
+
+      await save(a, 'cl', { ignored: true })
+      expect(await errorCode(at())).toBe('REPO_IGNORED')
+      expect(await errorCode(cli.status.run({ repo: 'cl' }))).toBe('REPO_IGNORED')
+      expect((await cli.status.run({ all: true })).ignored).toEqual(['cl'])
+    } finally {
+      a.session.lock({ notify: false })
+    }
+    await save(a, 'cl', {})
   })
 
   it('falls back to the built-in rules when the settings are tampered with, until reset', async () => {

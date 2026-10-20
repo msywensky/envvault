@@ -22,17 +22,17 @@ ${SKILL_MARKER}
 
 # EnvVault
 
-EnvVault syncs \`.env\` files between the user's machines through an encrypted vault: each repo's root \`.env\`, and in a monorepo the \`.env\` in each package's folder. The \`envvault\` command below talks to the EnvVault app, which must be running and unlocked, with command-line access turned on in its Settings. The command reports key names only, never values.
+EnvVault syncs env files between the user's machines through an encrypted vault: each repo's root \`.env\`, in a monorepo the \`.env\` in each package's folder, and variants such as \`.env.local\` in repos whose settings include them. The \`envvault\` command below talks to the EnvVault app, which must be running and unlocked, with command-line access turned on in its Settings. The command reports key names only, never values.
 
-**Never read, print, search, copy or edit \`.env\` or \`.env.bak.*\` files, and never put an env value in a command.** Nothing here needs the values.
+**Never read, print, search, copy or edit \`.env\`, \`.env.*\` or \`.env.bak.*\` files, and never put an env value in a command.** Nothing here needs the values.
 
 Run each command from inside the repo, always with \`--json\`. The output is \`{"ok": true, "data": ...}\` or \`{"ok": false, "error": {"code": ..., "message": ...}}\`.
 
-\`push\` uses the \`.env\` in the current folder or the nearest one above it in the repo, or else the repo's root \`.env\`. In a monorepo, run it from the package's folder. Instead of the current folder, \`--repo <name>\` names a repo in the user's projects folder, and with \`push\`, \`--path <path>\` names a \`.env\` in one of its folders (for example \`--path apps/web/.env\`).
+\`push\` uses the env file the repo syncs in the current folder or the nearest one above it in the repo (\`.env\` if there are several), or else the repo's root \`.env\`. In a monorepo, run it from the package's folder. \`--path <path>\` names an env file by its path from the repo root instead (for example \`--path apps/web/.env\` or \`--path .env.local\`), and \`--repo <name>\` names a repo in the user's projects folder instead of the current folder's.
 
 ## Check the status
 
-\`${command} status --json\`, or \`${command} status --all --json\` for every repo. \`data\` is a list of rows, one per \`.env\` file, with \`name\` (the repo), \`path\` (the file in it: \`.env\` for the repo's root), \`status\` and \`vault\` (\`version\`, \`updatedBy\`, \`updatedAt\`):
+\`${command} status --json\`, or \`${command} status --all --json\` for every repo. \`data.rows\` has a row per env file, with \`name\` (the repo), \`path\` (the file in it: \`.env\` for the repo's root), \`status\` and \`vault\` (\`version\`, \`updatedBy\`, \`updatedAt\`); \`data.ignored\` names the repos the user has told EnvVault to leave alone:
 
 - \`in-sync\`: nothing to do.
 - \`local-newer\`: the local .env changed since the last sync. Push it.
@@ -40,6 +40,7 @@ Run each command from inside the repo, always with \`--json\`. The output is \`{
 - \`vault-newer\`: another machine pushed. EnvVault pulls it automatically (if that's turned on), or the user pulls it in the app.
 - \`conflict\`: both sides changed. The user resolves it in the app.
 - \`vault-only\` or \`no-env\`: there is no local .env (for \`vault-only\`, its folder may not be in this copy of the repo).
+- \`excluded\`: the vault has a copy, but the repo's settings no longer sync this file. The user removes it in the app.
 - \`error\`: see the row's \`error.message\`.
 
 ## Push
@@ -62,6 +63,8 @@ Run each command from inside the repo, always with \`--json\`. The output is \`{
 - \`CLI_UNAVAILABLE\` (exit code 4): EnvVault isn't running, or command-line access is off in its Settings. Ask the user.
 - \`OVERWRITE_NOT_CONFIRMED\`: the vault copy changed on another machine. The user resolves it in EnvVault.
 - \`REPO_NOT_FOUND\`: this folder isn't inside a repo in the user's projects folder. Ask which repo, and pass \`--repo <name>\`.
+- \`ENV_AMBIGUOUS\`: this folder has several env files the repo syncs, none of them \`.env\`. Ask which one, and pass \`--path\`.
+- \`REPO_IGNORED\`, \`ENV_EXCLUDED\`: the user has told EnvVault not to sync this repo or file. Don't work around it.
 - Anything else: tell the user \`error.message\`.
 `
 }

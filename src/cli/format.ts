@@ -44,8 +44,16 @@ function when(iso: string): string {
 const vaultLine = (v: VaultInfo): string =>
   `vault v${v.version}, by ${v.updatedBy}, ${when(v.updatedAt)}`
 
+/** A row's file, and the name its folder syncs as if that's another. */
+function rowLabel(r: RepoRow): string {
+  const label = fileLabel(r.name, r.path, r.storedName)
+  return r.local && r.vaultName.toLowerCase() !== r.name.toLowerCase()
+    ? `${label} (as ${r.vaultName})`
+    : label
+}
+
 export function formatRows(rows: RepoRow[]): string {
-  const labels = rows.map((r) => fileLabel(r.name, r.path, r.storedName))
+  const labels = rows.map(rowLabel)
   const width = Math.max(0, ...labels.map((label) => label.length))
   return rows
     .map((r, i) => {
@@ -58,6 +66,12 @@ export function formatRows(rows: RepoRow[]): string {
 }
 
 const list = (keys: string[]): string => keys.join(', ')
+
+/** `status`: the rows, then the repos EnvVault leaves alone. */
+export function formatStatus(rows: RepoRow[], ignored: string[]): string {
+  const left = ignored.length ? `Ignored in EnvVault: ${list(ignored)}\n` : ''
+  return formatRows(rows) + left
+}
 
 export function formatPreview(repo: string, p: PushPreview): string {
   if (p.sameContent) {

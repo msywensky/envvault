@@ -9,7 +9,6 @@ import { ROOT_ENV, envFileName, envFolders, isEnvPath } from '../core/envpath'
 import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
 import { isIncluded, type FileRules } from '../shared/envrules'
-import type { EnvFile } from '../shared/types'
 import { AppError } from './errors'
 import { isErrno } from './fsutil'
 import { findEnvFiles } from './git'
@@ -92,13 +91,17 @@ export async function resolveRepo(projectsPath: string, name: string): Promise<s
   return dir
 }
 
+/** A folder inside a repo: the repo, and the folders from its root down to it. */
+export interface RepoPlace extends RepoFolder {
+  folders: string[]
+}
+
 /**
- * The env file the envvault command means in `dir`, its working directory:
- * the .env in the nearest folder at or above `dir` within the repo that
- * contains it, or else that repo's root .env. The path is used only to work
- * out the names; no file is read.
+ * The repo that contains `dir` (the envvault command's working directory),
+ * and where in it `dir` is. The path is used only to work out the names; no
+ * file is read.
  */
-export async function envTargetAt(projectsPath: string, dir: string): Promise<EnvFile> {
+export async function repoAt(projectsPath: string, dir: string): Promise<RepoPlace> {
   const root = await projectsRoot(projectsPath)
   const notFound = (): AppError =>
     new AppError(
@@ -115,16 +118,24 @@ export async function envTargetAt(projectsPath: string, dir: string): Promise<En
   const [name, ...folders] = relative(root, real).split(sep)
   const repoDir = name ? await findRepo(root, name) : null
   if (!name || !repoDir) throw notFound()
-  for (let n = folders.length; n > 0; n--) {
-    const path = [...folders.slice(0, n), ROOT_ENV].join('/')
-    // Folders EnvVault wouldn't sync from (see isEnvPath) are passed over.
-    if (!isEnvPath(path)) continue
-    const envDir = await resolveEnvDir(repoDir, path).catch(() => null)
-    if (envDir && (await lstat(resolveInside(envDir, envFileName(path))).catch(() => null))) {
-      return { repoName: name, path }
-    }
-  }
-  return { repoName: name, path: ROOT_ENV }
+  return { name, dir: repoDir, folders }
+}
+
+/**
+ * The paths of the env files in one folder of a repo (`folders` from its
+ * root): the names isEnvFileName allows, whatever they are on disk. Empty if
+ * the folder isn't there, is a symlink, or isn't one EnvVault syncs from.
+ */
+export async function envFilesIn(repoDir: string, folders: string[]): Promise<string[]> {
+  const pathOf = (name: string): string => [...folders, name].join('/')
+  if (!isEnvPath(pathOf(ROOT_ENV))) return []
+  const envDir = await resolveEnvDir(repoDir, pathOf(ROOT_ENV)).catch(() => null)
+  if (!envDir) return []
+  const names = await readdir(envDir).catch(() => [])
+  return names
+    .filter((name) => isEnvPath(pathOf(name)))
+    .sort()
+    .map(pathOf)
 }
 
 /**

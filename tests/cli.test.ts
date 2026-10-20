@@ -55,6 +55,8 @@ let locked = false
 let nextPreview = preview()
 // The file the app finds from the working directory (see envTargetAt).
 let nearest = '.env'
+// The ignored repos status reports.
+let statusIgnored: string[] = []
 
 const any = <T>(): z.ZodType<T> => z.custom<T>(() => true)
 const record = <C extends CliCommand>(command: C, args: CliArgs[C]): void => {
@@ -66,14 +68,14 @@ const table: CliTable = {
     schema: any(),
     run: async (args) => {
       record('status', args)
-      return [ROW]
+      return { rows: [ROW], ignored: statusIgnored }
     }
   },
   previewPush: {
     schema: any(),
     run: async (args) => {
       record('previewPush', args)
-      if ('dir' in args) return { repo: 'web', path: nearest, preview: nextPreview }
+      if ('dir' in args) return { repo: 'web', path: args.path ?? nearest, preview: nextPreview }
       return { repo: args.repo, path: args.path ?? '.env', preview: nextPreview }
     }
   },
@@ -153,6 +155,7 @@ beforeEach(() => {
   locked = false
   nextPreview = preview()
   nearest = '.env'
+  statusIgnored = []
 })
 
 describe('envvault status', () => {
@@ -168,7 +171,19 @@ describe('envvault status', () => {
     await cli(['status', '--all'])
     expect(calls.map((c) => c.args)).toEqual([{ repo: 'web' }, { all: true }])
     const r = await cli(['status', '--json'])
-    expect(JSON.parse(r.out)).toEqual({ ok: true, data: [ROW] })
+    expect(JSON.parse(r.out)).toEqual({ ok: true, data: { rows: [ROW], ignored: [] } })
+  })
+
+  it('says which repos are ignored, and the name a folder syncs as', async () => {
+    statusIgnored = ['old', 'scratch']
+    const r = await cli(['status', '--all'])
+    expect(r.out.split('\n').at(-2)).toBe('Ignored in EnvVault: old, scratch')
+    expect(
+      formatRows([
+        { ...ROW, name: 'web-wt', vaultName: 'web' },
+        { ...ROW, vaultName: 'WEB' }
+      ])
+    ).toMatch(/^web-wt \(as web\) {2}local newer: .*\nweb {14}local newer: /)
   })
 })
 
@@ -219,6 +234,15 @@ describe('envvault push', () => {
       command: 'push',
       args: { repo: 'web', path: 'apps/web/.env', expected: { localHash: H1, vaultHash: H2 } }
     })
+  })
+
+  it('names an env file of the repo it runs in with --path', async () => {
+    const dry = await cli(['push', '--dry-run', '--path', '.env.local'])
+    expect(dry.code).toBe(0)
+    expect(calls.map((c) => c.args)).toEqual([{ dir: '/work/web/src', path: '.env.local' }])
+    expect(dry.out).toContain(
+      `To push this: envvault push --path .env.local --expect ${H1}.${H2}\n`
+    )
   })
 
   it('names a .env in a folder of a repo with --path', async () => {
@@ -276,8 +300,8 @@ describe('exit codes', () => {
       ['status', 'extra'],
       ['status', '--profile', 'no spaces'],
       ['status', '--bogus'],
-      ['push', '--yes', '--path', 'apps/web/.env'],
       ['status', '--repo', 'web', '--path', '.env'],
+      ['status', '--path', '.env'],
       ['push', '--yes', '--repo', 'web', '--path', '../.env'],
       ['push', '--yes', '--repo', 'web', '--path', 'apps/web/.env.example'],
       ['push', '--yes', '--repo', 'web', '--path', 'apps\\web\\.env']
