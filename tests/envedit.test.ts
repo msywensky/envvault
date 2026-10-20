@@ -8,8 +8,9 @@ import {
   encodeValue,
   type Edits
 } from '../src/core/envedit'
+import { projectEnv } from '../src/core/localkeys'
 
-const none: Edits = { set: [], add: [], remove: [] }
+const none: Edits = { set: [], add: [], remove: [], mark: [] }
 const setA = (value: string, text = 'A=1\n'): string =>
   applyEdits(text, { ...none, set: [{ key: 'A', value }] })
 
@@ -201,6 +202,18 @@ describe('applyEdits', () => {
     expect(applyEdits('\uFEFF', { ...none, add })).toBe('\uFEFFC=3\nD=\n')
   })
 
+  it('marks a key machine-specific directly above it, below any comment', () => {
+    expect(applyEdits('# port\nPORT=3000\nA=1', { ...none, mark: ['PORT', 'A'] })).toBe(
+      '# port\n# envvault:local\nPORT=3000\n# envvault:local\nA=1'
+    )
+    expect(applyEdits('A=1\r\nPEM="x\r\ny"\r\n', { ...none, mark: ['PEM'] })).toBe(
+      'A=1\r\n# envvault:local\r\nPEM="x\r\ny"\r\n'
+    )
+    // The value stays in the text; what is uploaded blanks it.
+    const marked = applyEdits('export PORT = 3000 # dev\n', { ...none, mark: ['PORT'] })
+    expect(projectEnv(marked)).toBe('# envvault:local\nPORT=\n')
+  })
+
   it("refuses edits that don't fit the text", () => {
     const text = 'A=1\n# envvault:local\nDB=\n'
     for (const edits of [
@@ -210,7 +223,11 @@ describe('applyEdits', () => {
       { ...none, add: [{ key: 'A', value: '2' }] },
       { ...none, add: [{ key: '1BAD', value: '2' }] },
       { ...none, set: [{ key: 'A', value: '2' }], remove: ['A'] },
-      { ...none, set: [{ key: 'A', value: `' " \`` }] }
+      { ...none, set: [{ key: 'A', value: `' " \`` }] },
+      { ...none, mark: ['DB'] },
+      { ...none, mark: ['MISSING'] },
+      { ...none, set: [{ key: 'A', value: '2' }], mark: ['A'] },
+      { ...none, remove: ['A'], mark: ['A'] }
     ]) {
       expect(() => applyEdits(text, edits), JSON.stringify(edits)).toThrow(EditError)
     }

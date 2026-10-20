@@ -944,14 +944,19 @@ export function previewMerge(
     ])
     const vaultBytes = decodeEnv(s.payload)
     try {
-      const local = s.local
-      const cmp = merging(() => compareEnv(local.toString('utf8'), vaultBytes.toString('utf8')))
+      const localText = s.local.toString('utf8')
+      const vaultText = vaultBytes.toString('utf8')
+      const cmp = merging(() => compareEnv(localText, vaultText))
+      const unmarked = unmarkedKeys(localText, vaultText)
       return {
         keys: cmp.keys,
         unchanged: cmp.unchanged,
         kept: cmp.kept,
         unset: cmp.unset,
-        formatOnly: cmp.keys.length === 0 && s.syncedHash !== s.vault.contentHash,
+        unmarked,
+        // A key the vault marks is a difference too: merging marks it here.
+        formatOnly:
+          cmp.keys.length === 0 && unmarked.length === 0 && s.syncedHash !== s.vault.contentHash,
         vault: s.vault,
         neverSynced: last === null,
         rollback: rolledBack(s.vault, last),

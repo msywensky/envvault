@@ -91,6 +91,25 @@ describe('takesFor', () => {
     expect([...takes.keys()]).toEqual(['A', 'GONE'])
   })
 
+  it('takes machine-specific keys this machine has, and only those', () => {
+    const takes = takesFor(cmp, [
+      { key: 'A', take: 'machine' },
+      { key: 'NEW', take: 'machine' },
+      { key: 'GONE', take: 'vault' }
+    ])
+    expect([...takes]).toEqual([
+      ['A', 'machine'],
+      ['NEW', 'machine']
+    ])
+    expect(() =>
+      takesFor(cmp, [
+        { key: 'A', take: 'local' },
+        { key: 'NEW', take: 'local' },
+        { key: 'GONE', take: 'machine' }
+      ])
+    ).toThrow(MergeError)
+  })
+
   it('refuses missing, repeated and unknown keys', () => {
     const all = [
       { key: 'A', take: 'local' as const },

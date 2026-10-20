@@ -796,7 +796,8 @@ describe('editing the vault copy', () => {
       expectedVaultHash,
       set: [{ key: 'SECRET', value: 'new # secret' }],
       add: [{ key: 'NEW_KEY', value: 'line1\nline2' }],
-      remove: ['OLD']
+      remove: ['OLD'],
+      mark: []
     })
     expect(result).toMatchObject({ changed: true, vault: { version: 2 } })
     const edited =
@@ -826,7 +827,8 @@ describe('editing the vault copy', () => {
       expectedVaultHash: opened.expectedVaultHash,
       set: [],
       add: [{ key: 'X', value: '1' }],
-      remove: []
+      remove: [],
+      mark: []
     })
     expect(await errorCode(save)).toBe('VAULT_CHANGED')
   })
@@ -841,7 +843,8 @@ describe('editing the vault copy', () => {
       expectedVaultHash: opened.expectedVaultHash,
       set: [{ key: 'FROM_B', value: '1' }],
       add: [],
-      remove: []
+      remove: [],
+      mark: []
     })
     expect(result).toEqual({ vault: opened.vault, changed: false })
   })
@@ -861,7 +864,8 @@ describe('editing the vault copy', () => {
       expectedVaultHash: null,
       set: [],
       add: [],
-      remove: []
+      remove: [],
+      mark: []
     }
     expect(await a.sync.saveEdit(key, vaultId, empty)).toEqual({ vault: null, changed: false })
     const result = await a.sync.saveEdit(key, vaultId, {
@@ -889,7 +893,8 @@ describe('editing the vault copy', () => {
         expectedVaultHash: opened.expectedVaultHash,
         set: [{ key: 'MISSING_SECRET_KEY', value: 'hunter2-secret' }],
         add: [],
-        remove: []
+        remove: [],
+        mark: []
       })
       .catch((e: unknown) => e as { code?: string; message?: string })
     expect(err).toMatchObject({ code: 'EDIT_INVALID' })
@@ -1328,7 +1333,8 @@ describe('git vault', { timeout: 30_000 }, () => {
       expectedVaultHash: editor.expectedVaultHash,
       set: [{ key: 'A', value: '2' }],
       add: [],
-      remove: []
+      remove: [],
+      mark: []
     })
     expect(saved).toMatchObject({
       changed: true,
@@ -1605,7 +1611,8 @@ describe('monorepo', { timeout: 30_000 }, () => {
       expectedVaultHash: opened.expectedVaultHash,
       set: [{ key: 'WEB', value: '3' }],
       add: [],
-      remove: []
+      remove: [],
+      mark: []
     })
     expect(await storedEnv(a, 'platform', WEB.path, monoVault)).toBe('WEB=3\n')
     expect((await rows(a))['platform/apps/web/.env']).toBe('vault-newer')
@@ -2310,5 +2317,141 @@ describe('resolving a conflict', { timeout: 30_000 }, () => {
     expect(await errorCode(b.sync.previewMerge(key, vaultId, envFile('dup')))).toBe(
       'ENV_DUPLICATE_KEY'
     )
+  })
+})
+
+describe('marking a key machine-specific', { timeout: 30_000 }, () => {
+  const IGNORE = '.env\n.env.bak.*\n'
+  const M = '# envvault:local'
+  let markVault: string
+  let location: VaultLocation
+  let kpA: string
+  let kpB: string
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? kpA : kpB, vault: location })
+  const envOf = (projects: string, repo: string): string => join(projects, repo, '.env')
+  const stored = (m: Machine, repo: string): Promise<string> =>
+    storedEnv(m, repo, '.env', markVault)
+  /** Resolve with `choices`, or nothing to choose. */
+  const resolve = async (
+    m: Machine,
+    repo: string,
+    choices: { key: string; take: 'local' | 'vault' | 'machine' }[] = []
+  ): Promise<void> => {
+    const { key, vaultId } = await m.open()
+    const preview = await m.sync.previewMerge(key, vaultId, envFile(repo))
+    await m.sync.merge(key, vaultId, { ...envFile(repo), expected: preview.expected, choices })
+  }
+
+  beforeAll(async () => {
+    markVault = join(root, 'mark-vault')
+    mkdirSync(markVault)
+    location = { kind: 'folder', path: markVault }
+    kpA = join(root, 'mark-a')
+    kpB = join(root, 'mark-b')
+    await (await on('a')).vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('marks a key from the editor; each machine then keeps its own value', async () => {
+    makeRepo(kpA, 'ports', { '.gitignore': IGNORE, '.env': 'A=1\nPORT=3000\n' })
+    makeRepo(kpB, 'ports', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'ports')
+    await pullRepo(await on('b'), 'ports')
+    // B changes its port before it hears about the marker.
+    writeFileSync(envOf(kpB, 'ports'), 'A=1\nPORT=4000\n')
+
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const { expectedVaultHash } = await a.sync.openEditor(key, envFile('ports'))
+    const saved = await a.sync.saveEdit(key, vaultId, {
+      ...envFile('ports'),
+      expectedVaultHash,
+      set: [],
+      add: [],
+      remove: [],
+      mark: ['PORT']
+    })
+    expect(saved.changed).toBe(true)
+    expect(await stored(a, 'ports')).toBe(`A=1\n${M}\nPORT=\n`)
+    expect((await a.sync.openEditor(key, envFile('ports'))).entries).toContainEqual({
+      key: 'PORT',
+      value: '',
+      marked: true
+    })
+
+    // A pulls as usual: its value stays, now marked.
+    expect((await rows(a))['ports']).toBe('vault-newer')
+    await pullRepo(a, 'ports')
+    expect(readFileSync(envOf(kpA, 'ports'), 'utf8')).toBe(`A=1\n${M}\nPORT=3000\n`)
+    expect((await rows(a))['ports']).toBe('in-sync')
+
+    // B changed PORT meanwhile: a conflict with nothing to choose, which marks B's value.
+    const b = await on('b')
+    expect((await rows(b))['ports']).toBe('conflict')
+    const k = await b.open()
+    const preview = await b.sync.previewMerge(k.key, k.vaultId, envFile('ports'))
+    expect(preview).toMatchObject({
+      keys: [],
+      kept: ['PORT'],
+      unmarked: ['PORT'],
+      formatOnly: false
+    })
+    await resolve(b, 'ports')
+    expect(readFileSync(envOf(kpB, 'ports'), 'utf8')).toBe(`A=1\n${M}\nPORT=4000\n`)
+    expect(await stored(b, 'ports')).toBe(`A=1\n${M}\nPORT=\n`)
+    expect((await rows(b))['ports']).toBe('in-sync')
+
+    // From now on, a different port on either machine is no change at all.
+    writeFileSync(envOf(kpB, 'ports'), `A=1\n${M}\nPORT=4001\n`)
+    expect((await rows(b))['ports']).toBe('in-sync')
+  })
+
+  it('refuses to mark a key the editor finds already marked or gone', async () => {
+    const a = await on('a')
+    const { key, vaultId } = await a.open()
+    const { expectedVaultHash } = await a.sync.openEditor(key, envFile('ports'))
+    const edit = (mark: string[]): Promise<unknown> =>
+      a.sync.saveEdit(key, vaultId, {
+        ...envFile('ports'),
+        expectedVaultHash,
+        set: [],
+        add: [],
+        remove: [],
+        mark
+      })
+    expect(await errorCode(edit(['PORT']))).toBe('EDIT_INVALID')
+    expect(await errorCode(edit(['NOPE']))).toBe('EDIT_INVALID')
+  })
+
+  it('resolves a conflict by making a key machine-specific', async () => {
+    makeRepo(kpA, 'svc', { '.gitignore': IGNORE, '.env': 'A=1\nPORT=3000\n' })
+    makeRepo(kpB, 'svc', { '.gitignore': IGNORE })
+    await pushRepo(await on('a'), 'svc')
+    await pullRepo(await on('b'), 'svc')
+    writeFileSync(envOf(kpA, 'svc'), 'A=1\nPORT=3001\n')
+    await pushRepo(await on('a'), 'svc')
+    writeFileSync(envOf(kpB, 'svc'), 'A=1\nPORT=4000\nDEV=b\n')
+
+    const b = await on('b')
+    const { key, vaultId } = await b.open()
+    const preview = await b.sync.previewMerge(key, vaultId, envFile('svc'))
+    expect(preview.keys).toEqual([
+      { key: 'PORT', kind: 'differs' },
+      { key: 'DEV', kind: 'local-only' }
+    ])
+    await resolve(b, 'svc', [
+      { key: 'PORT', take: 'machine' },
+      { key: 'DEV', take: 'machine' }
+    ])
+    expect(readFileSync(envOf(kpB, 'svc'), 'utf8')).toBe(`A=1\n${M}\nPORT=4000\n${M}\nDEV=b\n`)
+    expect(await stored(b, 'svc')).toBe(`A=1\n${M}\nPORT=\n${M}\nDEV=\n`)
+    expect((await rows(b))['svc']).toBe('in-sync')
+
+    // A keeps its own port and gets DEV empty.
+    const a = await on('a')
+    expect((await rows(a))['svc']).toBe('vault-newer')
+    await pullRepo(a, 'svc')
+    expect(readFileSync(envOf(kpA, 'svc'), 'utf8')).toBe(`A=1\n${M}\nPORT=3001\n${M}\nDEV=\n`)
+    expect((await rows(a))['svc']).toBe('in-sync')
   })
 })

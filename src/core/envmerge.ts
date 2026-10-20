@@ -81,20 +81,25 @@ export function differingValues(local: string, vault: string): MergeValues['valu
 
 /**
  * The keys taken from the local file, for mergePull. Throws MergeError
- * unless `choices` names every key in `cmp` exactly once, and nothing else.
+ * unless `choices` names every key in `cmp` exactly once, and nothing else,
+ * and marks only keys the local file has.
  */
 export function takesFor(cmp: EnvComparison, choices: MergeChoice[]): LocalTakes {
-  const listed = new Set(cmp.keys.map((k) => k.key))
-  const takes = new Map<string, 'local'>()
+  const kinds = new Map(cmp.keys.map((k) => [k.key, k.kind]))
+  const takes = new Map<string, 'local' | 'machine'>()
   const seen = new Set<string>()
   for (const { key, take } of choices) {
-    if (!listed.has(key)) {
+    const kind = kinds.get(key)
+    if (!kind) {
       throw new MergeError('The copies no longer differ the way you reviewed. Review again.')
     }
     if (seen.has(key)) throw new MergeError('A key was chosen more than once.')
+    if (take === 'machine' && kind === 'vault-only') {
+      throw new MergeError('Only a key this machine has can be made machine-specific.')
+    }
     seen.add(key)
-    if (take === 'local') takes.set(key, 'local')
+    if (take !== 'vault') takes.set(key, take)
   }
-  if (seen.size !== listed.size) throw new MergeError('Choose a copy for every key that differs.')
+  if (seen.size !== kinds.size) throw new MergeError('Choose a copy for every key that differs.')
   return takes
 }

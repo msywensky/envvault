@@ -5,6 +5,7 @@
 import type { EditorEntry, SaveEditRequest } from '../shared/types'
 import { KEY_RE, type Assignment } from './envdiff'
 import { scanLines, type Scanned } from './envlines'
+import { LOCAL_MARKER } from './localkeys'
 
 /** A key is assigned more than once, so a table row would be ambiguous. */
 export class DuplicateKeyError extends Error {
@@ -22,7 +23,7 @@ export class EditError extends Error {
   }
 }
 
-export type Edits = Pick<SaveEditRequest, 'set' | 'add' | 'remove'>
+export type Edits = Pick<SaveEditRequest, 'set' | 'add' | 'remove' | 'mark'>
 
 /**
  * The value dotenv reads for `a`: quotes are stripped, `\n` and `\r` are
@@ -80,14 +81,20 @@ export function editorEntries(text: string): EditorEntry[] {
 /**
  * `text` with the edits applied, everything else unchanged: a changed value
  * keeps its line's prefix (indent, `export`, spacing) and trailing comment,
- * a removed key loses its marker line too, and added keys are appended.
- * Throws EditError if the edits don't fit the text, and DuplicateKeyError if
- * a key is assigned twice.
+ * a removed key loses its marker line too, a marked key gets LOCAL_MARKER
+ * directly above it (its value stays: projectEnv blanks it), and added keys
+ * are appended. Throws EditError if the edits don't fit the text, and
+ * DuplicateKeyError if a key is assigned twice.
  */
 export function applyEdits(text: string, edits: Edits): string {
   const s = scanLines(text)
   requireUnique(s)
-  const keys = [...edits.set.map((c) => c.key), ...edits.add.map((c) => c.key), ...edits.remove]
+  const keys = [
+    ...edits.set.map((c) => c.key),
+    ...edits.add.map((c) => c.key),
+    ...edits.remove,
+    ...edits.mark
+  ]
   if (new Set(keys).size !== keys.length) throw new EditError('A key was edited more than once.')
   const gone = (): EditError => new EditError('A key you edited is no longer in the vault copy.')
   for (const { key } of edits.set) {
@@ -97,6 +104,10 @@ export function applyEdits(text: string, edits: Edits): string {
     }
   }
   for (const key of edits.remove) if (!s.byKey.has(key)) throw gone()
+  for (const key of edits.mark) {
+    if (!s.byKey.has(key)) throw gone()
+    if (s.marked.has(key)) throw new EditError('A key you marked is already machine-specific.')
+  }
   for (const { key } of edits.add) {
     if (!KEY_RE.test(key)) throw new EditError('A key name is not valid.')
     if (s.byKey.has(key)) throw new EditError('A key you added is already in the vault copy.')
@@ -105,6 +116,7 @@ export function applyEdits(text: string, edits: Edits): string {
   const eol = s.ends.find((e) => e !== '') ?? '\n'
   const set = new Map(edits.set.map((c) => [c.key, c.value]))
   const remove = new Set(edits.remove)
+  const mark = new Set(edits.mark)
   const markersToDrop = new Set(
     s.assignments
       .filter((a) => remove.has(a.key) && s.markerLines.has(a.first - 1))
@@ -119,6 +131,7 @@ export function applyEdits(text: string, edits: Edits): string {
       i = a.last
       continue
     }
+    if (a && mark.has(a.key)) out += LOCAL_MARKER + eol
     const value = a ? set.get(a.key) : undefined
     if (a && value !== undefined) {
       const line = s.lines[i] ?? ''
