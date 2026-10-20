@@ -5,7 +5,8 @@
 // warns (never blocks) about differences from .env.example. A pull
 // can also show the raw line diff, values masked; the values are fetched only
 // when asked for, live only in `rawValues`, and are dropped when hidden or
-// reloaded.
+// reloaded. A pull can mark changed keys machine-specific (pull and mark):
+// they keep this machine's values, and the vault copy is written too.
 import { computed, onMounted, ref, watch } from 'vue'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, store, toast } from '../store'
@@ -28,6 +29,9 @@ const rawValues = ref<RawDiffLine[] | null>(null)
 const rawLoading = ref(false)
 // Bumped whenever raw lines are dropped, so a response still in flight is discarded.
 let rawGen = 0
+// Pull and mark: changed keys to keep with this machine's values, marked machine-specific.
+const marks = ref<string[]>([])
+const markListOpen = ref(false)
 
 const title = computed(() => {
   if (props.conflict) return props.mode === 'push' ? 'Keep local copy' : 'Keep vault copy'
@@ -55,6 +59,15 @@ const exampleTracked = computed(() => {
   if (example.value?.tracked === false) return "isn't committed yet, but usually is"
   return 'is usually committed to git'
 })
+// Keys whose values differ can be marked; never on a rollback.
+const canMark = computed(() => {
+  const p = pullPreview.value
+  return p !== null && p.hasLocal && !p.rollback && p.diff.changed.length > 0
+})
+const changedShown = computed(() =>
+  (diff.value?.changed ?? []).filter((k) => !marks.value.includes(k))
+)
+const keptShown = computed(() => [...(preview.value?.kept ?? []), ...marks.value].sort())
 const pullBlocked = computed(() => {
   const p = pullPreview.value
   return p !== null && (!p.ignored || !p.backupIgnored || p.tracked)
@@ -65,6 +78,18 @@ const canConfirm = computed(() => {
   return !pullBlocked.value
 })
 
+function dropRaw(): void {
+  rawGen++
+  rawMasked.value = null
+  rawValues.value = null
+}
+
+function toggleMark(key: string, on: boolean): void {
+  marks.value = on ? [...marks.value, key] : marks.value.filter((k) => k !== key)
+  // The raw diff showed the pull without this change.
+  dropRaw()
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = null
@@ -72,9 +97,7 @@ async function load(): Promise<void> {
   // Never leave an old preview confirmable if this reload fails.
   pushPreview.value = null
   pullPreview.value = null
-  rawGen++
-  rawMasked.value = null
-  rawValues.value = null
+  dropRaw()
   const res =
     props.mode === 'push'
       ? await call(() => window.envvault.previewPush(fileOf(props.repo)))
@@ -86,6 +109,10 @@ async function load(): Promise<void> {
   }
   if (props.mode === 'push') pushPreview.value = res.data as PushPreview
   else pullPreview.value = res.data as PullPreview
+  // Keep the marks that still apply to the fresh comparison.
+  marks.value = canMark.value
+    ? marks.value.filter((k) => pullPreview.value?.diff.changed.includes(k))
+    : []
 }
 
 async function confirm(): Promise<void> {
@@ -107,14 +134,18 @@ async function confirm(): Promise<void> {
       emit('done')
     } else await failed(res.error.code, res.error.message)
   } else {
-    const res = await call(() => window.envvault.pull({ ...file, expected }))
+    const mark = [...marks.value]
+    const res = await call(() => window.envvault.pull({ ...file, expected, mark }))
     busy.value = false
     if (res.ok) {
+      const marked = mark.length
+        ? ` and made ${mark.length === 1 ? '1 key' : `${mark.length} keys`} machine-specific (v${res.data.vault.version})`
+        : ''
       toast(
         'success',
         res.data.backupName
-          ? `Pulled ${name}. Previous .env saved as ${res.data.backupName}.`
-          : `Pulled ${name}.`
+          ? `Pulled ${name}${marked}. Previous .env saved as ${res.data.backupName}.`
+          : `Pulled ${name}${marked}.`
       )
       emit('done')
     } else await failed(res.error.code, res.error.message)
@@ -130,7 +161,8 @@ async function fetchRaw(values: boolean): Promise<void> {
   // A plain copy: pullPreview.value.expected is a reactive proxy, which IPC can't clone.
   const { localHash, vaultHash } = pullPreview.value.expected
   const expected = { localHash, vaultHash }
-  const res = await call(() => window.envvault.pullRawDiff({ ...file, expected, values }))
+  const mark = [...marks.value]
+  const res = await call(() => window.envvault.pullRawDiff({ ...file, expected, values, mark }))
   rawLoading.value = false
   if (!res.ok) return failed(res.error.code, res.error.message)
   // Hidden or reloaded meanwhile, or the window was hidden: don't show stale values.
@@ -218,20 +250,46 @@ watch(
           </div>
         </div>
         <div v-if="diff.changed.length" class="diff-group">
-          <h3>Changed ({{ diff.changed.length }})</h3>
-          <div class="chips">
-            <code v-for="k in diff.changed" :key="k" class="chip chip-changed">{{ k }}</code>
+          <h3>Changed ({{ changedShown.length }})</h3>
+          <div v-if="changedShown.length" class="chips">
+            <code v-for="k in changedShown" :key="k" class="chip chip-changed">{{ k }}</code>
           </div>
+          <!-- Pull and mark. -->
+          <template v-if="canMark">
+            <button
+              v-if="!markListOpen"
+              type="button"
+              class="btn-link small"
+              :disabled="busy"
+              @click="markListOpen = true"
+            >
+              Should any of these differ on each machine?
+            </button>
+            <fieldset v-else class="mark-list">
+              <legend class="muted small">
+                Machine-specific: keep this machine's value, and each machine keeps its own
+              </legend>
+              <label v-for="k in diff.changed" :key="k" class="checkbox">
+                <input
+                  type="checkbox"
+                  :checked="marks.includes(k)"
+                  :disabled="busy"
+                  @change="toggleMark(k, ($event.target as HTMLInputElement).checked)"
+                />
+                <code>{{ k }}</code>
+              </label>
+            </fieldset>
+          </template>
         </div>
         <p v-if="keyChanges > 0 && diff.unchanged > 0" class="muted small">
           {{ diff.unchanged }} other key{{ diff.unchanged === 1 ? '' : 's' }} unchanged.
         </p>
 
         <!-- Machine-specific keys (# envvault:local). -->
-        <div v-if="preview.kept.length" class="diff-group">
-          <h3>Kept on this machine ({{ preview.kept.length }})</h3>
+        <div v-if="keptShown.length" class="diff-group">
+          <h3>Kept on this machine ({{ keptShown.length }})</h3>
           <div class="chips">
-            <code v-for="k in preview.kept" :key="k" class="chip chip-kept">{{ k }}</code>
+            <code v-for="k in keptShown" :key="k" class="chip chip-kept">{{ k }}</code>
           </div>
           <p class="muted small">
             Marked <code class="marker"># envvault:local</code>:
@@ -242,6 +300,14 @@ watch(
             }}
           </p>
         </div>
+        <p v-if="marks.length" class="notice notice-info">
+          <strong>The vault copy is updated too.</strong>
+          {{ marks.join(', ') }} {{ marks.length === 1 ? 'becomes' : 'become' }} machine-specific:
+          your .env keeps your {{ marks.length === 1 ? 'value' : 'values' }} with the
+          <code class="marker"># envvault:local</code> marker, and a new version of the vault copy
+          keeps {{ marks.length === 1 ? 'the key' : 'the keys' }} without a value. Your other
+          machines keep their own values when they pull.
+        </p>
         <div v-if="pullPreview?.unset.length" class="diff-group">
           <h3>No value on this machine ({{ pullPreview.unset.length }})</h3>
           <div class="chips">
@@ -374,7 +440,7 @@ watch(
       <button type="button" class="btn" @click="emit('close')">Cancel</button>
       <button type="button" class="btn btn-primary" :disabled="!canConfirm" @click="confirm">
         <span v-if="busy" class="spinner" />
-        {{ mode === 'push' ? 'Push' : 'Pull' }}
+        {{ mode === 'push' ? 'Push' : marks.length ? 'Pull and mark' : 'Pull' }}
       </button>
     </div>
   </dialog>
