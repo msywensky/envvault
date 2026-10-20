@@ -6,11 +6,21 @@ import { z } from 'zod'
 import type { Settings } from '../shared/types'
 import { atomicWrite, isErrno } from './fsutil'
 import { createSerial } from './mutex'
-import { AutoLockMinutes, BackupCount, MachineName, VaultLocation } from './schemas'
+import { AutoLockMinutes, BackupCount, MachineName, RepoName, VaultLocation } from './schemas'
 
 const FILE = 'config.json'
 // Updates are read-modify-write on the cache, so they must not interleave.
 const serial = createSerial()
+
+/** At most this many folders sync under another name. */
+export const MAX_REPO_NAMES = 500
+
+const RepoNames = z
+  .record(
+    RepoName.refine((id) => id === id.toLowerCase()),
+    RepoName
+  )
+  .refine((names) => Object.keys(names).length <= MAX_REPO_NAMES)
 
 const ConfigSchema = z.strictObject({
   projectsPath: z.string().min(1).nullable(),
@@ -23,7 +33,8 @@ const ConfigSchema = z.strictObject({
   backups: z.boolean(),
   backupCount: BackupCount,
   cliAccess: z.boolean(),
-  miniOnTop: z.boolean()
+  miniOnTop: z.boolean(),
+  repoNames: RepoNames
 })
 
 // Loading is forgiving: a bad or missing field falls back to its default.
@@ -40,7 +51,8 @@ const LoadSchema = z.object({
   backups: z.boolean().catch(true),
   backupCount: BackupCount.catch(3),
   cliAccess: z.boolean().catch(false),
-  miniOnTop: z.boolean().catch(true)
+  miniOnTop: z.boolean().catch(true),
+  repoNames: RepoNames.catch({})
 })
 
 /**

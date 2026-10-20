@@ -5,18 +5,19 @@
 import type { Expected, PushPreview, RepoRow } from './types'
 
 /** Bumped whenever a request or response changes shape. */
-export const CLI_PROTOCOL = 2
+export const CLI_PROTOCOL = 3
 
 /** Dev profile names (ENVVAULT_PROFILE, --profile). scripts/dev-profile.mjs keeps a copy. */
 export const PROFILE_RE = /^[A-Za-z0-9-]{1,20}$/
 
 /**
- * Which env file: from the command's working directory, the .env in the
- * nearest folder at or above it within its repo (else the repo's root .env);
- * or a repo by name, with the file's path in it (its root .env if left out).
- * `status` uses only the repo.
+ * Which env file: in the repo the command's working directory is in, or a
+ * repo by name; there, the file at `path` from the repo root, or else (from a
+ * working directory) the env file the repo syncs in the nearest folder at or
+ * above it (.env if there are several; the repo's root .env if there are
+ * none), or (by name) its root .env. `status` uses only the repo.
  */
-export type RepoTarget = { dir: string } | { repo: string; path?: string }
+export type RepoTarget = { dir: string; path?: string } | { repo: string; path?: string }
 
 export interface CliArgs {
   status: RepoTarget | { all: true }
@@ -25,8 +26,8 @@ export interface CliArgs {
 }
 
 export interface CliResponses {
-  /** A row per env file of the repo, or of every repo with `all`. */
-  status: RepoRow[]
+  /** A row per env file of the repo, or of every repo with `all`, and the ignored repos' names. */
+  status: { rows: RepoRow[]; ignored: string[] }
   previewPush: { repo: string; path: string; preview: PushPreview }
   push: RepoRow
 }

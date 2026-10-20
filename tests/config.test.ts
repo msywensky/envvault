@@ -66,6 +66,28 @@ describe('config.json', () => {
     expect((await (await load()).getConfig()).miniOnTop).toBe(false)
   })
 
+  it('syncs every folder under its own name unless told otherwise', async () => {
+    expect((await (await load()).getConfig()).repoNames).toEqual({})
+    vi.resetModules()
+    writeFileSync(
+      join(h.userData, 'config.json'),
+      JSON.stringify({ repoNames: { 'app-wt': 'app' } })
+    )
+    const config = await load()
+    expect((await config.getConfig()).repoNames).toEqual({ 'app-wt': 'app' })
+    // Saved as it was loaded.
+    await config.updateConfig({ machineName: 'm' })
+    vi.resetModules()
+    expect((await (await load()).getConfig()).repoNames).toEqual({ 'app-wt': 'app' })
+
+    // A folder id must be lowercase, and both must be repo names: else nothing is kept.
+    for (const repoNames of [{ App: 'app' }, { app: '../x' }, ['app'], 'app']) {
+      vi.resetModules()
+      writeFileSync(join(h.userData, 'config.json'), JSON.stringify({ repoNames }))
+      expect((await (await load()).getConfig()).repoNames).toEqual({})
+    }
+  })
+
   it('has auto-lock on unless turned off', async () => {
     const config = await load()
     const cfg = await config.getConfig()

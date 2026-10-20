@@ -13,7 +13,11 @@ let checker: Promise<ZxcvbnFactory> | null = null
 
 // Loaded on first use: the dictionaries are a few MB, and only creating a
 // vault needs them. Levenshtein matching is left off: it made one check take
-// up to a second on the main thread, for the same scores.
+// up to a second on the main thread, for the same scores. Only the first
+// MAX_SCORED characters are scored (zxcvbn's default is 256, which takes
+// seconds on a slow machine): a password whose start is that strong is
+// strong, and a weak start is still caught.
+const MAX_SCORED = 128
 function load(): Promise<ZxcvbnFactory> {
   checker ??= (async () => {
     const [{ ZxcvbnFactory }, common, en] = await Promise.all([
@@ -23,6 +27,7 @@ function load(): Promise<ZxcvbnFactory> {
     ])
     const { translations } = en
     return new ZxcvbnFactory({
+      maxLength: MAX_SCORED,
       translations: {
         ...translations,
         warnings: {

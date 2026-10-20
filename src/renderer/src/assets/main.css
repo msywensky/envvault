@@ -475,6 +475,43 @@ code,
   text-align: center;
 }
 
+/* No env files and Ignored: collapsed lists under the repo table. */
+.repo-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.repo-section > .btn-link {
+  align-self: flex-start;
+}
+
+.settings-error {
+  margin-bottom: 16px;
+}
+
+/* ---------- repo settings ---------- */
+
+.repo-settings h3 {
+  font-size: 13px;
+}
+
+.pattern-text {
+  height: auto;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.pattern-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ---------- badges ---------- */
 
 .badge {

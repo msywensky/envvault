@@ -14,7 +14,7 @@ import {
   fileLabel,
   formatPreview,
   formatPushed,
-  formatRows
+  formatStatus
 } from './format'
 
 export interface Io extends Machine {
@@ -28,18 +28,19 @@ export interface Io extends Machine {
 }
 
 export const USAGE = `Usage:
-  envvault status [--all]          the sync status of this repo's .env files, or every repo's
-  envvault push                    show what would change, ask, then push the nearest .env
+  envvault status [--all]          the sync status of this repo's env files, or every repo's
+  envvault push                    show what would change, ask, then push the nearest env file
   envvault push --dry-run          only show what would change, with a token for --expect
   envvault push --expect <token>   push, if nothing changed since that dry run
   envvault push --yes              push without asking
 
-push uses the .env in the current folder or the nearest one above it in the repo
-(in a monorepo, run it in the package's folder), or else the repo's root .env.
+push uses the env file the repo syncs in the current folder or the nearest one
+above it (in a monorepo, run it in the package's folder; .env if there are
+several), or else the repo's root .env.
 
 Options:
   --repo <name>      a repo in your projects folder, instead of the current folder
-  --path <path>      with push --repo: a .env in a folder of that repo, like apps/web/.env
+  --path <path>      with push: an env file by its path in the repo, like apps/web/.env.local
   --json             print the result as JSON
   --profile <name>   use a dev profile's EnvVault (npm run dev:profile)
 
@@ -95,11 +96,11 @@ function parseOptions(argv: string[], isTTY: boolean): Options {
   if (v.all && command !== 'status') throw new UsageError('--all works only with status.')
   if (v.all && v.repo !== undefined) throw new UsageError('Use --all or --repo, not both.')
   if (v.path !== undefined) {
-    if (command !== 'push' || v.repo === undefined) {
-      throw new UsageError('--path works only with push --repo.')
-    }
+    if (command !== 'push') throw new UsageError('--path works only with push.')
     if (!isEnvPath(v.path)) {
-      throw new UsageError("That isn't a .env in the repo. Use its path, like apps/web/.env.")
+      throw new UsageError(
+        "That isn't an env file in the repo. Use its path from the repo root, like apps/web/.env."
+      )
     }
   }
   const modes = [v['dry-run'], v.expect !== undefined, v.yes].filter(Boolean).length
@@ -155,10 +156,9 @@ export async function main(io: Io): Promise<number> {
   }
 
   const send = client(cliEndpoint(appUserData(io, opts.profile), io.platform))
+  const withPath = opts.path !== null ? { path: opts.path } : {}
   const target: RepoTarget =
-    opts.repo === null
-      ? { dir: io.cwd }
-      : { repo: opts.repo, ...(opts.path !== null ? { path: opts.path } : {}) }
+    opts.repo === null ? { dir: io.cwd, ...withPath } : { repo: opts.repo, ...withPath }
   const fail = (error: AppErrorInfo): number => {
     if (opts.json) io.out(json({ ok: false, error }))
     else io.err(`envvault: ${error.message}\n`)
@@ -168,7 +168,7 @@ export async function main(io: Io): Promise<number> {
   if (opts.command === 'status') {
     const res = await send('status', opts.all ? { all: true } : target)
     if (!res.ok) return fail(res.error)
-    io.out(opts.json ? json(res) : formatRows(res.data))
+    io.out(opts.json ? json(res) : formatStatus(res.data.rows, res.data.ignored))
     return 0
   }
 

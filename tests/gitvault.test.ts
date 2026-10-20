@@ -17,6 +17,8 @@ describe('holdsOtherFiles', () => {
           'meta.json',
           'web.env.enc',
           'api-2.env.enc',
+          'platform.0123456789abcdef.file.enc',
+          'settings.enc',
           'README.md',
           'readme',
           'LICENSE',

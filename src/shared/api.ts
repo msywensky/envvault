@@ -1,3 +1,4 @@
+import type { FileRules } from './envrules'
 import type { Result } from './result'
 import type {
   AppState,
@@ -15,11 +16,14 @@ import type {
   RawDiff,
   RawDiffRequest,
   RemoveRequest,
+  RepoList,
   RepoRow,
+  RepoSettingsRequest,
   SaveEditRequest,
   SaveEditResult,
   Settings,
-  SkillInfo
+  SkillInfo,
+  VaultNameRequest
 } from './types'
 
 // Response payload for each channel. main's `handle()` and the preload's
@@ -39,7 +43,7 @@ export interface Responses {
   'session:unlock': null
   'session:lock': null
   'vault:showSetupCode': { setupCode: string }
-  'repos:list': RepoRow[]
+  'repos:list': RepoList
   'repo:previewPush': PushPreview
   'repo:push': RepoRow
   'repo:previewPull': PullPreview
@@ -49,6 +53,10 @@ export interface Responses {
   'repo:saveEdit': SaveEditResult
   'repo:removeFromVault': null
   'repo:addGitignore': GitignoreResult
+  'repo:saveSettings': null
+  'repo:setVaultName': null
+  'vault:saveDefaults': null
+  'vault:resetSettings': null
   'skill:status': SkillInfo
   'skill:install': SkillInfo
   'skill:remove': SkillInfo
@@ -100,8 +108,9 @@ export interface EnvVaultApi {
   /** This machine's setup code for the vault, after checking the password. Unlocked only. */
   showSetupCode(password: string): R<'vault:showSetupCode'>
   /**
-   * A row per env file. `rescan` asks git again which env files each repo has;
-   * without it, the files found last time are used.
+   * Every repo, a row per env file of those that aren't ignored, and the repo
+   * settings. `rescan` asks git again which env files each repo has; without
+   * it, the files found last time are used.
    */
   listRepos(rescan: boolean): R<'repos:list'>
   previewPush(file: EnvFile): R<'repo:previewPush'>
@@ -117,6 +126,14 @@ export interface EnvVaultApi {
   /** Delete an env file's vault copy, if it is still at `expectedVaultHash`. Local files stay. */
   removeFromVault(request: RemoveRequest): R<'repo:removeFromVault'>
   addGitignore(file: EnvFile): R<'repo:addGitignore'>
+  /** Save a repo's settings in the vault, for every machine, by its vault name. */
+  saveRepoSettings(request: RepoSettingsRequest): R<'repo:saveSettings'>
+  /** Sync a folder as another name in the vault, on this machine only. */
+  setVaultName(request: VaultNameRequest): R<'repo:setVaultName'>
+  /** Save the env file rules repos without their own use, for every machine. */
+  saveDefaults(rules: FileRules): R<'vault:saveDefaults'>
+  /** Replace repo settings that failed verification with empty ones. */
+  resetSettings(): R<'vault:resetSettings'>
   skillStatus(): R<'skill:status'>
   /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
   installSkill(replace: boolean): R<'skill:install'>

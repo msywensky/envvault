@@ -26,6 +26,12 @@ describe('passwordProblem', () => {
     expect(problem).not.toContain('xqvortamlin')
   })
 
+  it('scores a long password by its start, which must be strong on its own', async () => {
+    const strong = 'gravel-orbit-lantern-mosaic'
+    expect(await passwordProblem(`${'a'.repeat(200)}${strong}`, [])).not.toBeNull()
+    expect(await passwordProblem(`${strong}${'a'.repeat(200)}`, [])).toBeNull()
+  })
+
   it('stays fast on the longest password a request allows', async () => {
     const started = performance.now()
     await passwordProblem('!@#$%^&*()1lI0Oo'.repeat(64), [])

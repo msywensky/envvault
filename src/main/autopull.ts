@@ -26,8 +26,9 @@ export async function runAutoPull(): Promise<RepoRow[]> {
   const pulled: RepoRow[] = []
   try {
     if (!(await getConfig()).autoPull) return []
-    // Without asking git: only files the vault has a copy of can be newer there.
-    const rows = await session.withKey((key, id) => listRepos(key, id))
+    // Without asking git: only files the vault has a copy of can be newer
+    // there. Ignored repos and excluded files are never vault-newer.
+    const { rows } = await session.withKey((key, id) => listRepos(key, id))
     for (const { name, path } of rows.filter((r) => r.status === 'vault-newer')) {
       if (path === null) continue
       const file = { repoName: name, path }

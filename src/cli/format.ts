@@ -1,20 +1,21 @@
 // Text output for the envvault command, and the --expect token.
 import { ROOT_ENV, envLabel } from '../shared/envfile'
-import type { Expected, PushPreview, RepoRow, SyncStatus, VaultInfo } from '../shared/types'
+import type { Expected, PushPreview, RepoRow, RowStatus, VaultInfo } from '../shared/types'
 
 /** A file as the command names it: "web" for a repo's root .env, else "platform/apps/web/.env". */
 export function fileLabel(name: string, path: string | null, storedName?: string | null): string {
   return path === ROOT_ENV ? name : `${name}/${path ?? storedName ?? 'an unreadable vault copy'}`
 }
 
-const STATUS: Record<SyncStatus, string> = {
+const STATUS: Record<Exclude<RowStatus, 'error'>, string> = {
   'in-sync': 'in sync',
   'local-newer': 'local newer: push to update the vault',
   'local-only': 'local only: push to add it to the vault',
   'vault-newer': 'vault newer: another machine pushed',
   conflict: 'conflict: resolve it in EnvVault',
   'vault-only': 'vault only: its repo or folder is not in your projects folder',
-  'no-env': 'no .env here or in the vault'
+  'no-env': 'no .env here or in the vault',
+  excluded: "excluded by the repo's settings: remove its vault copy in EnvVault"
 }
 
 const HASH = '[0-9a-f]{64}'
@@ -43,8 +44,16 @@ function when(iso: string): string {
 const vaultLine = (v: VaultInfo): string =>
   `vault v${v.version}, by ${v.updatedBy}, ${when(v.updatedAt)}`
 
+/** A row's file, and the name its folder syncs as if that's another. */
+function rowLabel(r: RepoRow): string {
+  const label = fileLabel(r.name, r.path, r.storedName)
+  return r.local && r.vaultName.toLowerCase() !== r.name.toLowerCase()
+    ? `${label} (as ${r.vaultName})`
+    : label
+}
+
 export function formatRows(rows: RepoRow[]): string {
-  const labels = rows.map((r) => fileLabel(r.name, r.path, r.storedName))
+  const labels = rows.map(rowLabel)
   const width = Math.max(0, ...labels.map((label) => label.length))
   return rows
     .map((r, i) => {
@@ -57,6 +66,12 @@ export function formatRows(rows: RepoRow[]): string {
 }
 
 const list = (keys: string[]): string => keys.join(', ')
+
+/** `status`: the rows, then the repos EnvVault leaves alone. */
+export function formatStatus(rows: RepoRow[], ignored: string[]): string {
+  const left = ignored.length ? `Ignored in EnvVault: ${list(ignored)}\n` : ''
+  return formatRows(rows) + left
+}
 
 export function formatPreview(repo: string, p: PushPreview): string {
   if (p.sameContent) {

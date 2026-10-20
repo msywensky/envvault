@@ -7,6 +7,7 @@ import { isBranchName } from '../core/gitremote'
 import { REPO_NAME_RE } from './gh'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
+import { MAX_PATTERNS, MAX_PATTERN_LENGTH, patternProblem } from '../shared/envrules'
 
 const NoArgs = z.undefined()
 /** A sha256 hex digest. */
@@ -21,6 +22,15 @@ export const Expected = z.strictObject({ localHash: Hash.nullable(), vaultHash: 
 const PullReq = z.strictObject({ ...File, expected: Expected })
 const EnvKey = z.string().max(200).regex(KEY_RE)
 const EnvChange = z.strictObject({ key: EnvKey, value: z.string().max(1024 * 1024) })
+/** Env file patterns (see shared/envrules): chosen among the files found in a repo, never a path. */
+const Patterns = z
+  .array(
+    z
+      .string()
+      .max(MAX_PATTERN_LENGTH)
+      .refine((p) => patternProblem(p) === null)
+  )
+  .max(MAX_PATTERNS)
 
 /** Shown in the UI and stored (encrypted) as `updatedBy`. No control characters. */
 export const MachineName = z
@@ -101,8 +111,21 @@ export const requestSchemas = {
     add: z.array(EnvChange).max(1000),
     remove: z.array(EnvKey).max(1000)
   }),
-  [CH.removeFromVault]: z.strictObject({ ...File, expectedVaultHash: Hash }),
+  [CH.removeFromVault]: z.strictObject({
+    vaultName: RepoName,
+    path: EnvPath,
+    expectedVaultHash: Hash
+  }),
   [CH.addGitignore]: z.strictObject(File),
+  [CH.saveRepoSettings]: z.strictObject({
+    vaultName: RepoName,
+    ignored: z.boolean(),
+    include: Patterns.nullable(),
+    exclude: Patterns.nullable()
+  }),
+  [CH.setVaultName]: z.strictObject({ repoName: RepoName, vaultName: RepoName }),
+  [CH.saveDefaults]: z.strictObject({ include: Patterns, exclude: Patterns }),
+  [CH.resetSettings]: NoArgs,
   [CH.skillStatus]: NoArgs,
   [CH.installSkill]: z.strictObject({ replace: z.boolean() }),
   [CH.removeSkill]: NoArgs,

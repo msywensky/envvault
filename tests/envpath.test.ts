@@ -1,10 +1,60 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT_ENV, envFileName, envFolders, envPathId, isEnvPath } from '../src/core/envpath'
+import {
+  ROOT_ENV,
+  envFileName,
+  envFolders,
+  envPathId,
+  isEnvFileName,
+  isEnvPath
+} from '../src/core/envpath'
+
+describe('isEnvFileName', () => {
+  it.each([
+    '.env',
+    '.env.local',
+    '.env.production.local',
+    '.env.Local',
+    '.env.keys',
+    '.env.e2e_test',
+    '.env.my-app',
+    '.env.backup',
+    `.env.${'x'.repeat(95)}`
+  ])('accepts %s', (name) => expect(isEnvFileName(name)).toBe(true))
+
+  it.each([
+    '',
+    'env',
+    '.ENV',
+    '.envrc',
+    '.env.',
+    '.env..local',
+    '.env.local.',
+    '.env/local',
+    '.env.lo cal',
+    'prod.env',
+    '.env.example',
+    '.env.EXAMPLE',
+    '.env.sample',
+    '.env.template',
+    '.env.dist',
+    '.env.defaults',
+    '.env.local.example',
+    '.env.bak',
+    '.env.BAK',
+    '.env.bak.20261016T000000Z',
+    '.env.bak.local.20261016T000000Z',
+    '.env.bak.tmp-0123456789abcdef',
+    `.env.${'x'.repeat(96)}`
+  ])('rejects %j', (name) => expect(isEnvFileName(name)).toBe(false))
+})
 
 describe('isEnvPath', () => {
   it.each([
     '.env',
+    '.env.local',
     'apps/web/.env',
+    'apps/web/.env.local',
+    'apps/web/.env.production.local',
     'packages/db/.env',
     'supabase/functions/.env',
     '.devcontainer/.env',
@@ -25,10 +75,11 @@ describe('isEnvPath', () => {
     '.env/',
     'env',
     '.ENV',
-    '.env.local',
     '.env.example',
-    'apps/web/.env.local',
+    'apps/web/.env.example',
+    'apps/web/.env.bak.20261016T000000Z',
     'apps/web/prod.env',
+    'apps/web/.env.',
     './.env',
     'apps/./.env',
     '../.env',
@@ -59,6 +110,8 @@ describe('path helpers', () => {
     expect(envFolders('apps/web/.env')).toEqual(['apps', 'web'])
     expect(envFileName(ROOT_ENV)).toBe('.env')
     expect(envFileName('apps/web/.env')).toBe('.env')
+    expect(envFolders('apps/web/.env.local')).toEqual(['apps', 'web'])
+    expect(envFileName('apps/web/.env.local')).toBe('.env.local')
   })
 
   it('compares paths case-insensitively, like the filesystems', () => {

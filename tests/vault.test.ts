@@ -1,8 +1,15 @@
 // The vault's policy (src/main/vault.ts) on an in-memory store: states,
 // create and open, and entries, with no filesystem involved.
 import { describe, expect, it, vi } from 'vitest'
-import { decodeEnv, encryptFilePayload, makePayload, type Payload } from '../src/core/crypto'
+import {
+  decodeEnv,
+  encryptFilePayload,
+  encryptSettings,
+  makePayload,
+  type Payload
+} from '../src/core/crypto'
 import { ROOT_ENV } from '../src/core/envpath'
+import { emptySettings, withRepo, type VaultSettings } from '../src/core/vaultsettings'
 import { AppError } from '../src/main/errors'
 import { MemorySecrets } from '../src/main/secrets'
 import { MemoryStore } from '../src/main/store/memory'
@@ -305,6 +312,45 @@ describe('env files in subfolders', () => {
     })
   })
 
+  it('tells a file this version does not sync from a tampered one', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      // What a newer EnvVault might sync: its tag matches, so it was written with the key.
+      const path = 'apps/web/.env.example'
+      const tag = keys.tagger.tag('platform', path)
+      const ref: EntryRef = { kind: 'file', repoId: 'platform', tag }
+      const bytes = await encryptFilePayload(key, 'platform', tag, { ...payload('A=1\n'), path })
+      await put(store, entryName(ref), bytes)
+      const read = (await vault.snapshot()).read(keys, ref)
+      expect(await errorCode(read)).toBe('VAULT_NEEDS_UPDATE')
+
+      // The same entry under another tag is still tampering.
+      const other: EntryRef = { kind: 'file', repoId: 'platform', tag: '0123456789abcdef' }
+      const moved = { ...payload('A=1\n'), path }
+      await put(
+        store,
+        entryName(other),
+        await encryptFilePayload(key, 'platform', other.tag, moved)
+      )
+      expect(await errorCode((await vault.snapshot()).read(keys, other))).toBe('VAULT_TAMPERED')
+    })
+  })
+
+  it('accepts env file variants', async () => {
+    const vault = vaultOn(new MemoryStore())
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      for (const path of ['.env.local', 'apps/web/.env.production.local']) {
+        const file = { repoName: 'platform', path }
+        await vault.write(keys, file, payload('A=1\n'), null)
+        const entry = await (await vault.snapshot()).read(keys, entryFor(keys, file))
+        expect(entry?.path).toBe(path)
+      }
+    })
+  })
+
   it('removes an entry only at the version it was read at', async () => {
     const store = new MemoryStore()
     const vault = vaultOn(store)
@@ -337,12 +383,88 @@ describe('env files in subfolders', () => {
     await withEntryKeys(key, async (keys) => {
       for (const file of [
         { repoName: 'platform', path: '../.env' },
-        { repoName: 'platform', path: 'apps/web/.env.local' },
+        { repoName: 'platform', path: 'apps/web/.env.example' },
         { repoName: '../x', path: ROOT_ENV }
       ]) {
         expect(() => entryFor(keys, file)).toThrow('Not an env file.')
       }
     })
+  })
+})
+
+describe('repo settings', () => {
+  const ignoring = (doc: VaultSettings, repoId: string): VaultSettings =>
+    withRepo(doc, repoId, { ignored: true, include: null, exclude: null })
+
+  it('starts with the built-in settings, then reads back what it wrote', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const first = await (await vault.snapshot()).settings(keys)
+      expect(first).toEqual({ settings: emptySettings(), version: null, error: null })
+
+      const written = ignoring(first.settings, 'web')
+      const version = await vault.writeSettings(keys, written, null)
+      const read = await (await vault.snapshot()).settings(keys)
+      expect(read).toEqual({ settings: written, version, error: null })
+      expect((await store.snapshot()).names).toEqual(['meta.json', 'settings.enc'])
+      expect(isVaultFile('settings.enc')).toBe(true)
+      // Not an entry, so never listed as a repo.
+      expect((await vault.snapshot()).entries).toEqual([])
+    })
+  })
+
+  it('refuses to write over settings that changed since they were read', async () => {
+    const vault = vaultOn(new MemoryStore())
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const v1 = await vault.writeSettings(keys, ignoring(emptySettings(), 'web'), null)
+      expect(await errorCode(vault.writeSettings(keys, emptySettings(), null))).toBe(
+        'VAULT_CHANGED'
+      )
+      await vault.writeSettings(keys, ignoring(emptySettings(), 'api'), v1)
+      expect(await errorCode(vault.writeSettings(keys, emptySettings(), v1))).toBe('VAULT_CHANGED')
+    })
+  })
+
+  it('falls back to the built-in settings when they cannot be read', async () => {
+    const store = new MemoryStore()
+    const vault = vaultOn(store)
+    const { key } = await vault.create(PASSWORD)
+    await withEntryKeys(key, async (keys) => {
+      const read = async (): Promise<{ code: string | null; version: string | null }> => {
+        const r = await (await vault.snapshot()).settings(keys)
+        expect(r.settings).toEqual(emptySettings())
+        return { code: r.error?.code ?? null, version: r.version }
+      }
+
+      // An entry copied over the settings.
+      await vault.write(keys, { repoName: 'web', path: ROOT_ENV }, payload('A=1\n'), null)
+      await put(store, 'settings.enc', await stored(store, 'web.env.enc'))
+      const tampered = await read()
+      expect(tampered.code).toBe('VAULT_TAMPERED')
+      // Its version is known, so a reset can write over it.
+      await vault.writeSettings(keys, emptySettings(), tampered.version)
+
+      // Encrypted with the key but not settings this version can read.
+      await put(store, 'settings.enc', await encryptSettings(key, { format: 1, repos: [] }))
+      expect((await read()).code).toBe('VAULT_TAMPERED')
+      await put(
+        store,
+        'settings.enc',
+        await encryptSettings(key, { ...emptySettings(), format: 2 })
+      )
+      expect((await read()).code).toBe('VAULT_NEEDS_UPDATE')
+      await put(store, 'settings.enc', new Uint8Array(400 * 1024))
+      expect((await read()).code).toBe('VAULT_TAMPERED')
+    })
+  })
+
+  it('counts settings without meta.json as a vault missing its meta.json', async () => {
+    const store = new MemoryStore()
+    await store.write('settings.enc', new Uint8Array([1]), null)
+    expect(await vaultOn(store).state()).toBe('meta-missing')
   })
 })
 
