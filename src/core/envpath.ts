@@ -60,3 +60,22 @@ export function envFileName(path: string): string {
 
 /** How paths are compared, and named in the vault: case-insensitively, like the filesystems. */
 export const envPathId = (path: string): string => path.toLowerCase()
+
+// A backup's timestamp (see backupStamp in main/sync.ts), with -<4 hex> if
+// that name was taken.
+const STAMP_RE = /^\d{8}T\d{6}Z(?:-[0-9a-f]{4})?$/
+
+/**
+ * What a pull backs up the env file `fileName` as: .env.bak.<stamp> for .env,
+ * .env.bak.local.<stamp> for .env.local. Always .env.bak.*, so the one ignore
+ * line covers them all, and reserved (isEnvFileName), so they never sync.
+ */
+export function backupName(fileName: string, stamp: string): string {
+  return fileName === ROOT_ENV ? `.env.bak.${stamp}` : `.env.bak.${fileName.slice(5)}.${stamp}`
+}
+
+/** True if `name` is one of `fileName`'s backups (and nobody else's, or a temp file). */
+export function isBackupOf(fileName: string, name: string): boolean {
+  const prefix = backupName(fileName, '')
+  return name.startsWith(prefix) && STAMP_RE.test(name.slice(prefix.length))
+}

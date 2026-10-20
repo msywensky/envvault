@@ -76,8 +76,8 @@ export function applyMiniOnTop(onTop: boolean): void {
 /** True if `a` and `b` are the same env file (see sameFile). */
 const isFile = (a: EnvFile, b: EnvFile): boolean =>
   sameFile(
-    { name: a.repoName, path: a.path, storedName: null },
-    { name: b.repoName, path: b.path, storedName: null }
+    { name: a.repoName, local: true, path: a.path, storedName: null },
+    { name: b.repoName, local: true, path: b.path, storedName: null }
   )
 
 async function enter(win: BrowserWindow, file: EnvFile): Promise<void> {
@@ -216,10 +216,10 @@ async function sendRow(): Promise<void> {
   if (!current || !session.isUnlocked()) return
   const file = current.file
   try {
-    const rows = await session.withKey((key, id) => listRepos(key, id, { only: file.repoName }))
+    const { rows } = await session.withKey((key, id) => listRepos(key, id, { only: file.repoName }))
     // The repo's rows: one per env file. Never just the first.
     const row = rows.find((r) =>
-      sameFile(r, { name: file.repoName, path: file.path, storedName: null })
+      sameFile(r, { name: file.repoName, local: true, path: file.path, storedName: null })
     )
     if (row && mini === current && current.file === file && !current.win.isDestroyed()) {
       current.win.webContents.send(EV.repoStatus, row)

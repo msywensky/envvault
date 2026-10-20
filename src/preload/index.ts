@@ -39,8 +39,14 @@ const api: EnvVaultApi = {
   pullRawDiff: (request) => invoke(CH.pullRawDiff, request),
   openEditor: ({ repoName, path }) => invoke(CH.openEditor, { repoName, path }),
   saveEdit: (request) => invoke(CH.saveEdit, request),
-  removeFromVault: (request) => invoke(CH.removeFromVault, request),
+  removeFromVault: ({ vaultName, path, expectedVaultHash }) =>
+    invoke(CH.removeFromVault, { vaultName, path, expectedVaultHash }),
   addGitignore: ({ repoName, path }) => invoke(CH.addGitignore, { repoName, path }),
+  saveRepoSettings: ({ vaultName, ignored, include, exclude }) =>
+    invoke(CH.saveRepoSettings, { vaultName, ignored, include, exclude }),
+  setVaultName: ({ repoName, vaultName }) => invoke(CH.setVaultName, { repoName, vaultName }),
+  saveDefaults: ({ include, exclude }) => invoke(CH.saveDefaults, { include, exclude }),
+  resetSettings: () => invoke(CH.resetSettings),
   skillStatus: () => invoke(CH.skillStatus),
   installSkill: (replace) => invoke(CH.installSkill, { replace }),
   removeSkill: () => invoke(CH.removeSkill),

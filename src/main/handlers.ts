@@ -130,7 +130,29 @@ export function registerIpc(): void {
   handle(CH.removeFromVault, (req) =>
     exclusive(() => session.withKey((key, id) => sync.removeFromVault(key, id, req)))
   )
-  handle(CH.addGitignore, (file) => exclusive(() => session.withKey(() => sync.addGitignore(file))))
+  handle(CH.addGitignore, (file) =>
+    exclusive(() => session.withKey((key) => sync.addGitignore(key, file)))
+  )
+  // Settings can bring files into sync (a repo no longer ignored, a new
+  // include), so automatic pull runs once they are saved.
+  handle(CH.saveRepoSettings, async (req) => {
+    await exclusive(() => session.withKey((key) => sync.saveRepoSettings(key, req)))
+    kickAutoPull()
+    return null
+  })
+  handle(CH.saveDefaults, async (rules) => {
+    await exclusive(() => session.withKey((key) => sync.saveDefaults(key, rules)))
+    kickAutoPull()
+    return null
+  })
+  handle(CH.resetSettings, () => exclusive(() => session.withKey((key) => sync.resetSettings(key))))
+  // This machine's config only, but it changes what a folder syncs with:
+  // unlocked only, and never in the middle of a push or pull.
+  handle(CH.setVaultName, async (req) => {
+    await exclusive(() => session.withKey(() => sync.setVaultName(req)))
+    kickAutoPull()
+    return null
+  })
 
   // The Claude Code skill holds no secrets, so these work while locked.
   handle(CH.skillStatus, () => skill.skillStatus())

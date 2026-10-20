@@ -26,7 +26,9 @@ import {
 } from '../status'
 
 const shown = computed(() =>
-  store.mini ? { name: store.mini.repoName, path: store.mini.path, storedName: null } : null
+  store.mini
+    ? { name: store.mini.repoName, local: true, path: store.mini.path, storedName: null }
+    : null
 )
 const name = computed(() => (shown.value ? fileTitle(shown.value) : ''))
 // Matched by file: a repo has a row per env file.

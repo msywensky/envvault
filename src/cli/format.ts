@@ -1,20 +1,21 @@
 // Text output for the envvault command, and the --expect token.
 import { ROOT_ENV, envLabel } from '../shared/envfile'
-import type { Expected, PushPreview, RepoRow, SyncStatus, VaultInfo } from '../shared/types'
+import type { Expected, PushPreview, RepoRow, RowStatus, VaultInfo } from '../shared/types'
 
 /** A file as the command names it: "web" for a repo's root .env, else "platform/apps/web/.env". */
 export function fileLabel(name: string, path: string | null, storedName?: string | null): string {
   return path === ROOT_ENV ? name : `${name}/${path ?? storedName ?? 'an unreadable vault copy'}`
 }
 
-const STATUS: Record<SyncStatus, string> = {
+const STATUS: Record<Exclude<RowStatus, 'error'>, string> = {
   'in-sync': 'in sync',
   'local-newer': 'local newer: push to update the vault',
   'local-only': 'local only: push to add it to the vault',
   'vault-newer': 'vault newer: another machine pushed',
   conflict: 'conflict: resolve it in EnvVault',
   'vault-only': 'vault only: its repo or folder is not in your projects folder',
-  'no-env': 'no .env here or in the vault'
+  'no-env': 'no .env here or in the vault',
+  excluded: "excluded by the repo's settings: remove its vault copy in EnvVault"
 }
 
 const HASH = '[0-9a-f]{64}'

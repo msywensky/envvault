@@ -2,6 +2,7 @@
 // renderer can import them without pulling in node code. None of these carry
 // env values, except a RawDiff requested with `values: true` (see
 // sync.pullRawDiff).
+import type { FileRules } from './envrules'
 import type { AppErrorInfo } from './result'
 
 export type SyncStatus =
@@ -133,6 +134,11 @@ export interface Settings {
   cliAccess: boolean
   /** Keep the mini window above other windows. */
   miniOnTop: boolean
+  /**
+   * Folders this machine syncs under another name in the vault, by folder id
+   * (lowercased name). Set with repo:setVaultName, never settings:save.
+   */
+  repoNames: Record<string, string>
 }
 
 /**
@@ -201,10 +207,19 @@ export interface AppState {
   locked: boolean
 }
 
+/**
+ * - excluded: a vault copy of a file the repo's rules don't sync (only removing it is offered)
+ */
+export type RowStatus = SyncStatus | 'error' | 'excluded'
+
 /** One env file of one repo (see EnvFile). Match rows with sameFile (src/shared/envfile.ts). */
 export interface RepoRow {
-  /** The repo. */
+  /** The repo: its folder in the projects folder, or its vault name if it is only in the vault. */
   name: string
+  /** The repo is a folder in the projects folder (false: only in the vault). */
+  local: boolean
+  /** The name its env files are under in the vault (see RepoInfo.vaultName). */
+  vaultName: string
   /**
    * The file's path in the repo. Null only for a vault entry that couldn't be
    * read, whose path is inside its ciphertext (see `storedName`).
@@ -212,10 +227,55 @@ export interface RepoRow {
   path: string | null
   /** The file's name in the vault (folder or repository), or null if it has no vault copy. */
   storedName: string | null
-  status: SyncStatus | 'error'
+  status: RowStatus
   hasEnv: boolean
   vault: VaultInfo | null
   error: AppErrorInfo | null
+}
+
+/** One repo, in the projects folder or only in the vault. */
+export interface RepoInfo {
+  /** Its folder, or its vault name if it is only in the vault: its rows' `name`. */
+  name: string
+  local: boolean
+  /**
+   * The name its env files are under in the vault: the folder's own, unless
+   * this machine syncs it as another (Settings.repoNames).
+   */
+  vaultName: string
+  ignored: boolean
+  /** The env files git found in it at the last rescan, whatever its rules; null if unknown. */
+  found: string[] | null
+  /** How many env files the vault has under its vault name. */
+  copies: number
+}
+
+/** The repo settings in the vault, as the list read them. */
+export interface RepoSettingsView {
+  defaults: FileRules
+  /** Each repo's own settings, by vault id (its lowercased vault name). */
+  repos: Record<string, RepoRules>
+  /** Set if the vault's settings couldn't be read: the built-in ones are in use. */
+  error: AppErrorInfo | null
+}
+
+export interface RepoList {
+  /** One per env file of every repo that isn't ignored. */
+  rows: RepoRow[]
+  /** Every repo: the projects folder's, then those only in the vault. */
+  repos: RepoInfo[]
+  settings: RepoSettingsView
+}
+
+/** Save a repo's settings, by its vault name (for every machine that syncs it). */
+export interface RepoSettingsRequest extends RepoRules {
+  vaultName: string
+}
+
+/** Sync a folder (`repoName`) as another name in the vault; its own name stops that. */
+export interface VaultNameRequest {
+  repoName: string
+  vaultName: string
 }
 
 /** The content the user reviewed; push/pull refuse if it has changed since. */
@@ -290,8 +350,13 @@ export interface PullRequest extends EnvFile {
   expected: Expected
 }
 
-/** Remove an env file's vault copy, if it is still the one the user saw. */
-export interface RemoveRequest extends EnvFile {
+/**
+ * Remove an env file's vault copy, if it is still the one the user saw. By
+ * its vault name: the repo may be only in the vault.
+ */
+export interface RemoveRequest {
+  vaultName: string
+  path: string
   expectedVaultHash: string
 }
 

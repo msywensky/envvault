@@ -26,6 +26,8 @@ const VAULT = {
 }
 const ROW: RepoRow = {
   name: 'web',
+  local: true,
+  vaultName: 'web',
   path: '.env',
   storedName: 'web.env.enc',
   status: 'local-newer',

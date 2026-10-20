@@ -19,8 +19,13 @@ async function remove(): Promise<void> {
   if (!vault || busy.value) return
   busy.value = true
   error.value = null
-  // Plain values only: props.repo is reactive, which IPC can't clone.
-  const request = { ...fileOf(props.repo), expectedVaultHash: vault.contentHash }
+  // Plain values only: props.repo is reactive, which IPC can't clone. By the
+  // vault name: the folder may sync as another name, or not be here at all.
+  const request = {
+    vaultName: props.repo.vaultName,
+    path: fileOf(props.repo).path,
+    expectedVaultHash: vault.contentHash
+  }
   const res = await call(() => window.envvault.removeFromVault(request))
   busy.value = false
   if (res.ok) {

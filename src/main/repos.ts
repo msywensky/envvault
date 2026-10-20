@@ -8,6 +8,7 @@ import { relative, sep } from 'node:path'
 import { ROOT_ENV, envFileName, envFolders, isEnvPath } from '../core/envpath'
 import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
+import { isIncluded, type FileRules } from '../shared/envrules'
 import type { EnvFile } from '../shared/types'
 import { AppError } from './errors'
 import { isErrno } from './fsutil'
@@ -16,9 +17,11 @@ import { syncedBytes } from './localkeys'
 import { createLimit } from './mutex'
 
 export const MAX_ENV_BYTES = 1024 * 1024
-/** Env files kept per repo from what git finds, besides its root .env. */
-const MAX_FOUND = 50
-/** Repos asked for their env files at once (two git processes each). */
+/** Env files remembered per repo from what git finds, whatever its rules. */
+const MAX_FOUND = 200
+/** Env files listed per repo from what git found, after its rules. */
+const MAX_FILES = 50
+/** Repos asked for their env files at once (three git processes each). */
 const FINDING_AT_ONCE = 8
 
 /** One env file of a scanned repo, as it is on disk now. */
@@ -32,15 +35,23 @@ export interface ScannedFile {
   envError: AppError | null
 }
 
-export interface ScannedRepo {
+/** A repo folder in the projects folder. */
+export interface RepoFolder {
   name: string
   dir: string
-  /** Its root .env first, then the other env files git found in it. */
+}
+
+export interface ScannedRepo extends RepoFolder {
+  /** Its root .env first if its rules include it, then the other env files they include. */
   files: ScannedFile[]
+  /** What git found in it at the last rescan, whatever the rules; null if unknown. */
+  found: string[] | null
 }
 
 // What git found in each repo (by folder) when last asked, so background
-// work never runs git in every repo. Lost on restart; refilled by a rescan.
+// work never runs git in every repo: every env file, whatever the repo's
+// rules, so that a change of rules needs no rescan. Lost on restart; refilled
+// by a rescan.
 const found = new Map<string, string[]>()
 
 async function projectsRoot(projectsPath: string): Promise<string> {
@@ -229,39 +240,50 @@ export async function scanEnvFile(repoDir: string, path: string): Promise<Scanne
   }
 }
 
-/**
- * The repos in the projects folder (or only the one named `only`), each with
- * its root .env and the env files git found in it. With `find`, git is asked
- * again; without it, the files it found last time are used, so background
- * work runs no git. A repo git can't answer for gets its root .env only.
- */
-export async function scanRepos(
-  projectsPath: string,
-  opts: { find?: boolean; only?: string } = {}
-): Promise<ScannedRepo[]> {
+/** The git repos in the projects folder, in folder order. Reads no files. */
+export async function listFolders(projectsPath: string): Promise<RepoFolder[]> {
   const root = await projectsRoot(projectsPath)
   const entries = await readdir(root, { withFileTypes: true })
-  const only = opts.only?.toLowerCase()
-  const limit = createLimit(FINDING_AT_ONCE)
-  const scanned = await Promise.all(
+  const folders = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-      .filter((entry) => only === undefined || entry.name.toLowerCase() === only)
-      .map(async (entry): Promise<ScannedRepo | null> => {
+      .map(async (entry): Promise<RepoFolder | null> => {
         const dir = await findRepo(root, entry.name)
-        if (!dir) return null
-        if (opts.find) {
-          const paths = await limit(() => findEnvFiles(dir))
-          if (paths) found.set(dir, paths.filter((p) => p !== ROOT_ENV).slice(0, MAX_FOUND))
-          else found.delete(dir)
-        }
-        const paths = [ROOT_ENV, ...(found.get(dir) ?? [])]
-        return {
-          name: entry.name,
-          dir,
-          files: await Promise.all(paths.map((path) => scanEnvFile(dir, path)))
-        }
+        return dir ? { name: entry.name, dir } : null
       })
   )
-  return scanned.filter((r): r is ScannedRepo => r !== null)
+  return folders.filter((f): f is RepoFolder => f !== null)
+}
+
+/**
+ * Each repo's env files as they are now: its root .env and the files git
+ * found in it, those its rules (`rulesFor`) include. With `find`, git is
+ * asked again; without it, the files it found last time are used, so
+ * background work runs no git. A repo git can't answer for gets its root
+ * .env only.
+ */
+export async function scanRepos(
+  repos: RepoFolder[],
+  opts: { find?: boolean; rulesFor: (repo: RepoFolder) => FileRules }
+): Promise<ScannedRepo[]> {
+  const limit = createLimit(FINDING_AT_ONCE)
+  return Promise.all(
+    repos.map(async (repo): Promise<ScannedRepo> => {
+      if (opts.find) {
+        const paths = await limit(() => findEnvFiles(repo.dir))
+        if (paths) found.set(repo.dir, paths.slice(0, MAX_FOUND))
+        else found.delete(repo.dir)
+      }
+      const rules = opts.rulesFor(repo)
+      const others = (found.get(repo.dir) ?? []).filter(
+        (path) => path !== ROOT_ENV && isIncluded(path, rules)
+      )
+      const paths = [...(isIncluded(ROOT_ENV, rules) ? [ROOT_ENV] : []), ...others]
+      return {
+        ...repo,
+        files: await Promise.all(paths.slice(0, MAX_FILES).map((p) => scanEnvFile(repo.dir, p))),
+        found: found.get(repo.dir) ?? null
+      }
+    })
+  )
 }

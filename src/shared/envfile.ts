@@ -6,15 +6,17 @@ import type { RepoRow } from './types'
 /** Every repo's own .env, at its root. */
 export const ROOT_ENV = '.env'
 
-type FileOf = Pick<RepoRow, 'name' | 'path' | 'storedName'>
+type FileOf = Pick<RepoRow, 'name' | 'local' | 'path' | 'storedName'>
 
 /**
  * True if two rows, or a row and a file, are the same env file: compared
- * case-insensitively, like the vault's entry ids. A row without a path (an
- * unreadable vault entry) is only ever the same as itself.
+ * case-insensitively, like the vault's entry ids. A folder and a repo only in
+ * the vault are never the same, even by name (the folder can sync as another
+ * name). A row without a path (an unreadable vault entry) is only ever the
+ * same as itself.
  */
 export function sameFile(a: FileOf, b: FileOf): boolean {
-  if (a.name.toLowerCase() !== b.name.toLowerCase()) return false
+  if (a.local !== b.local || a.name.toLowerCase() !== b.name.toLowerCase()) return false
   if (a.path === null || b.path === null) return a.path === b.path && a.storedName === b.storedName
   return a.path.toLowerCase() === b.path.toLowerCase()
 }

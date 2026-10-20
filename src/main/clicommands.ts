@@ -40,7 +40,7 @@ export function cliCommands(onPushed: (row: RepoRow) => void): CliTable {
         session.withKey(async (key, id) => {
           const name = 'all' in args ? null : (await fileOf(args)).repoName
           // Asked for by the user, so git is asked too.
-          const rows = await sync.listRepos(key, id, {
+          const { rows } = await sync.listRepos(key, id, {
             find: true,
             ...(name ? { only: name } : {})
           })

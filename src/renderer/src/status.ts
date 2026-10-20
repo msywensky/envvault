@@ -13,9 +13,13 @@ export function fileOf(row: Pick<RepoRow, 'name' | 'path'>): EnvFile {
   return { repoName: row.name, path: row.path }
 }
 
+/** A key for v-for and :key, unique per repo: a folder, or a repo only in the vault. */
+export const repoKey = (repo: Pick<RepoRow, 'name' | 'local'>): string =>
+  `${repo.local ? 'folder' : 'vault'}\n${repo.name.toLowerCase()}`
+
 /** A key for v-for and :key, unique per env file (see sameFile). */
 export const rowKey = (row: RepoRow): string =>
-  `${row.name.toLowerCase()}\n${row.path?.toLowerCase() ?? row.storedName ?? ''}`
+  `${repoKey(row)}\n${row.path?.toLowerCase() ?? row.storedName ?? ''}`
 
 /** How a file is named in titles and toasts: "webapp", or "platform/apps/web/.env". */
 export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
@@ -25,10 +29,10 @@ export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
 /**
  * An env file found in a folder of a repo that nobody has pushed yet: listed
  * quietly, apart from the files that sync, and never counted as needing
- * attention. A repo's root .env is never quiet.
+ * attention. A file at the repo's root (.env, .env.local) is never quiet.
  */
 export const isQuiet = (row: RepoRow): boolean =>
-  row.path !== null && row.path !== ROOT_ENV && row.status === 'local-only'
+  row.path !== null && row.path.includes('/') && row.status === 'local-only'
 export type RowAction = 'push' | 'pull' | 'keep-local' | 'keep-vault'
 
 export const STATUS_LABEL: Record<RowStatus, string> = {
@@ -39,7 +43,8 @@ export const STATUS_LABEL: Record<RowStatus, string> = {
   'vault-only': 'Vault only',
   'no-env': 'No .env',
   conflict: 'Conflict',
-  error: 'Error'
+  error: 'Error',
+  excluded: 'Excluded'
 }
 
 export const STATUS_HINT: Record<RowStatus, string> = {
@@ -50,7 +55,9 @@ export const STATUS_HINT: Record<RowStatus, string> = {
   'vault-only': 'In the vault, but this repo is not in your projects folder.',
   'no-env': 'No .env here and none in the vault.',
   conflict: 'Both sides changed, or they differ and were never synced here.',
-  error: 'Something is wrong with this repo or its vault copy.'
+  error: 'Something is wrong with this repo or its vault copy.',
+  excluded:
+    "In the vault, but this repo's settings don't sync it. Remove the vault copy, or change the settings."
 }
 
 /** Which buttons a row offers (see the status table in the README). */

@@ -10,12 +10,31 @@ import { lstat, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { decodeEnv, makePayload, sha256Hex, type Payload } from '../core/crypto'
 import { diffKeys, parseEnv } from '../core/envdiff'
-import { ROOT_ENV, envFileName, envFolders, envPathId } from '../core/envpath'
+import {
+  ROOT_ENV,
+  backupName,
+  envFileName,
+  envFolders,
+  envPathId,
+  isBackupOf
+} from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys } from '../core/localkeys'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
+import {
+  allRepoRules,
+  effectiveRules,
+  emptySettings,
+  repoRules,
+  sameFileRules,
+  sameRepoRules,
+  withDefaults,
+  withRepo,
+  type VaultSettings
+} from '../core/vaultsettings'
+import { isIncluded, type FileRules } from '../shared/envrules'
 import type {
   EditorData,
   EnvFile,
@@ -30,19 +49,24 @@ import type {
   RawDiff,
   RawDiffRequest,
   RemoveRequest,
+  RepoInfo,
+  RepoList,
   RepoRow,
+  RepoSettingsRequest,
   SaveEditRequest,
   SaveEditResult,
   Settings,
-  VaultInfo
+  VaultInfo,
+  VaultNameRequest
 } from '../shared/types'
-import { getConfig } from './config'
+import { MAX_REPO_NAMES, getConfig, updateConfig } from './config'
 import { AppError, errnoCode } from './errors'
 import { atomicWrite, isErrno, randomHex, writeNew } from './fsutil'
 import { addToGitignore, checkIgnored, ignoreStatus, isTracked } from './git'
 import { mergedBytes, syncedBytes } from './localkeys'
 import {
   MAX_ENV_BYTES,
+  listFolders,
   readEnvFile,
   readRepoFile,
   resolveEnvDir,
@@ -62,6 +86,7 @@ import {
   withEntryKeys,
   type EntryKeys,
   type EntryRef,
+  type SettingsRead,
   type Vault,
   type VaultEntry,
   type VaultSnapshot
@@ -100,10 +125,48 @@ function parseAndWipe(bytes: Buffer | null): Map<string, string> {
 /** Just the file, from a request that names one. */
 const fileOf = (req: EnvFile): EnvFile => ({ repoName: req.repoName, path: req.path })
 
+/**
+ * The name this machine's folder `folder` syncs as in the vault: its own,
+ * unless Settings.repoNames says otherwise.
+ */
+function vaultNameOf(cfg: Pick<Settings, 'repoNames'>, folder: string): string {
+  const id = entryId(folder)
+  return Object.hasOwn(cfg.repoNames, id) ? (cfg.repoNames[id] ?? folder) : folder
+}
+
+/**
+ * An entry's key in state.json for this machine's folder `folder` (null: a
+ * repo only in the vault). A folder syncing under its own name uses the
+ * entry's own key, as before folders could sync as another name; one syncing
+ * as another gets its own, so two checkouts of one repo each keep their last
+ * sync. A repo id can't contain "@".
+ */
+function lastKey(ref: EntryRef, folder: string | null): string {
+  const id = folder === null ? ref.repoId : entryId(folder)
+  return id === ref.repoId ? stateKey(ref) : `${stateKey(ref)}@${id}`
+}
+
+/** REPO_IGNORED or ENV_EXCLUDED unless the repo's settings sync `stored` (a vault-side file). */
+function requireSynced(settings: VaultSettings, stored: EnvFile, label: string): void {
+  const id = entryId(stored.repoName)
+  if (repoRules(settings, id).ignored) {
+    throw new AppError(
+      'REPO_IGNORED',
+      `${label} is ignored in EnvVault. Stop ignoring it in its settings first.`
+    )
+  }
+  if (!isIncluded(stored.path, effectiveRules(settings, id))) {
+    throw new AppError('ENV_EXCLUDED', `${stored.path} is excluded by ${label}'s settings.`)
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 export interface ListOptions {
-  /** Only this repo's rows (none if it is neither in the projects folder nor the vault). */
+  /**
+   * Only this repo: the folder of that name, or else the repo of that name
+   * that is only in the vault. Nothing if there is neither.
+   */
   only?: string
   /** Ask git again which env files each repo has (see scanRepos). */
   find?: boolean
@@ -118,44 +181,119 @@ interface Listed {
   error: AppError | null
 }
 
-/** One row per env file, of every repo, sorted by repo with each root .env first. */
+/** A repo as the list sees it: a folder (`dir`), or only in the vault (`dir` null). */
+interface Listing {
+  name: string
+  dir: string | null
+  vaultName: string
+  /** entryId(vaultName). */
+  vaultId: string
+}
+
+/**
+ * Every repo, and a row per env file of those that aren't ignored, sorted by
+ * repo with each root .env first. A repo is a folder in the projects folder,
+ * whose files sync under its vault name, or a vault name no folder syncs as.
+ */
 export async function listRepos(
   key: Uint8Array,
   vaultId: string,
   opts: ListOptions = {}
-): Promise<RepoRow[]> {
+): Promise<RepoList> {
   const cfg = await configured()
-  const onlyId = opts.only === undefined ? null : entryId(opts.only)
   // One snapshot for every row, so the list is one consistent view of the vault.
-  const [scanned, snapshot] = await Promise.all([
-    scanRepos(cfg.projectsPath, { find: opts.find, only: opts.only }),
+  const [folders, snapshot] = await Promise.all([
+    listFolders(cfg.projectsPath),
     cfg.vault.snapshot()
   ])
   return withEntryKeys(key, async (keys) => {
-    // Every entry is read for its status anyway, which is also how a file
-    // entry's path is learnt.
-    const listed = await Promise.all(
-      snapshot.entries
-        .filter((ref) => onlyId === null || ref.repoId === onlyId)
-        .map((ref) => listEntry(snapshot, keys, ref))
-    )
-    const inVault = new Map<string, Listed[]>()
-    for (const l of listed) inVault.set(l.ref.repoId, [...(inVault.get(l.ref.repoId) ?? []), l])
+    const read = await snapshot.settings(keys)
+    const { settings } = read
 
     // Two folders differing only by case map to one repo id; keep the first.
     const seen = new Set<string>()
-    const jobs: Promise<RepoRow[]>[] = []
-    for (const repo of scanned) {
-      const id = entryId(repo.name)
-      if (seen.has(id)) continue
-      seen.add(id)
-      jobs.push(repoRows(keys, vaultId, repo.name, repo, inVault.get(id) ?? []))
+    const locals: (Listing & { dir: string })[] = []
+    for (const f of folders) {
+      if (seen.has(entryId(f.name))) continue
+      seen.add(entryId(f.name))
+      const vaultName = vaultNameOf(cfg, f.name)
+      locals.push({ name: f.name, dir: f.dir, vaultName, vaultId: entryId(vaultName) })
     }
-    for (const [id, entries] of inVault) {
-      if (!seen.has(id)) jobs.push(repoRows(keys, vaultId, id, null, entries))
+    const claimed = new Set(locals.map((l) => l.vaultId))
+    const unclaimed = [...new Set(snapshot.entries.map((ref) => ref.repoId))].filter(
+      (id) => !claimed.has(id)
+    )
+    const onlyId = opts.only === undefined ? null : entryId(opts.only)
+    const repos: Listing[] = [
+      ...locals.filter((l) => onlyId === null || entryId(l.name) === onlyId),
+      ...unclaimed
+        .filter((id) => onlyId === null || (id === onlyId && !seen.has(onlyId)))
+        .map((id) => ({ name: id, dir: null, vaultName: id, vaultId: id }))
+    ]
+    const ignored = (r: Listing): boolean => repoRules(settings, r.vaultId).ignored
+
+    const synced = repos.filter((r) => !ignored(r))
+    const scanned = await scanRepos(
+      synced.flatMap((r) => (r.dir === null ? [] : [{ name: r.name, dir: r.dir }])),
+      {
+        find: opts.find,
+        rulesFor: (f) => effectiveRules(settings, entryId(vaultNameOf(cfg, f.name)))
+      }
+    )
+    const scanOf = new Map(scanned.map((s) => [s.dir, s]))
+
+    // Every entry is read for its status anyway, which is also how a file
+    // entry's path is learnt. Once per vault name, however many folders sync
+    // as it; never for an ignored repo.
+    const listedFor = new Map<string, Promise<Listed[]>>()
+    const listedOf = (id: string): Promise<Listed[]> => {
+      let listed = listedFor.get(id)
+      if (!listed) {
+        listed = Promise.all(
+          snapshot.entries
+            .filter((ref) => ref.repoId === id)
+            .map((ref) => listEntry(snapshot, keys, ref))
+        )
+        listedFor.set(id, listed)
+      }
+      return listed
     }
-    return (await Promise.all(jobs)).flat().sort(byFile)
+    const rows = await Promise.all(
+      synced.map(async (r) =>
+        repoRows(
+          keys,
+          vaultId,
+          r,
+          r.dir === null ? null : (scanOf.get(r.dir) ?? null),
+          await listedOf(r.vaultId),
+          effectiveRules(settings, r.vaultId)
+        )
+      )
+    )
+    return {
+      rows: rows.flat().sort(byFile),
+      repos: repos.map((r): RepoInfo => ({
+        name: r.name,
+        local: r.dir !== null,
+        vaultName: r.vaultName,
+        ignored: ignored(r),
+        found: r.dir === null ? null : (scanOf.get(r.dir)?.found ?? null),
+        copies: snapshot.entries.filter((ref) => ref.repoId === r.vaultId).length
+      })),
+      settings: settingsView(read)
+    }
   })
+}
+
+function settingsView(read: SettingsRead): RepoList['settings'] {
+  return {
+    defaults: {
+      include: [...read.settings.defaults.include],
+      exclude: [...read.settings.defaults.exclude]
+    },
+    repos: allRepoRules(read.settings),
+    error: read.error ? { code: read.error.code, message: read.error.message } : null
+  }
 }
 
 async function listEntry(snapshot: VaultSnapshot, keys: EntryKeys, ref: EntryRef): Promise<Listed> {
@@ -176,24 +314,29 @@ interface FileState {
 }
 
 /**
- * One repo's rows: each env file it has or the vault has a copy of, and its
- * root .env if that exists on either side or there is nothing else (so every
- * repo is listed, and Edit can start its vault copy). `repo` is null for a
- * repo that is only in the vault.
+ * One repo's rows: each env file its rules include that it has or the vault
+ * has a copy of, and its root .env if the rules include it and it exists on
+ * either side or there is nothing else (so the repo is listed, and Edit can
+ * start its vault copy). Vault copies the rules exclude are listed as such,
+ * to be removed. `scan` is null for a repo that is only in the vault.
  */
 async function repoRows(
   keys: EntryKeys,
   vaultId: string,
-  name: string,
-  repo: ScannedRepo | null,
-  listed: Listed[]
+  repo: Listing,
+  scan: ScannedRepo | null,
+  listed: Listed[],
+  rules: FileRules
 ): Promise<RepoRow[]> {
+  const { name, vaultName } = repo
+  const local = repo.dir !== null
   const files = new Map<string, FileState>()
-  for (const scan of repo?.files ?? []) {
-    const id = envPathId(scan.path)
-    if (!files.has(id)) files.set(id, { path: scan.path, scan, listed: null })
+  for (const s of scan?.files ?? []) {
+    const id = envPathId(s.path)
+    if (!files.has(id)) files.set(id, { path: s.path, scan: s, listed: null })
   }
   const unreadable: Listed[] = []
+  const excluded: Listed[] = []
   for (const l of listed) {
     // A file entry that couldn't be read has no path to go by. (One that
     // vanished since the snapshot was taken has neither entry nor error.)
@@ -201,17 +344,21 @@ async function repoRows(
       if (l.error) unreadable.push(l)
       continue
     }
+    if (!isIncluded(l.path, rules)) {
+      if (l.entry || l.error) excluded.push(l)
+      continue
+    }
     const file = files.get(envPathId(l.path))
     if (file) file.listed = l
     else files.set(envPathId(l.path), { path: l.path, scan: null, listed: l })
   }
   // Vault copies of files git didn't report (or wasn't asked about this time).
-  if (repo) {
+  if (scan) {
     await Promise.all(
       [...files.values()]
         .filter((f) => f.scan === null)
         .map(async (f) => {
-          f.scan = await scanEnvFile(repo.dir, f.path)
+          f.scan = await scanEnvFile(scan.dir, f.path)
         })
     )
   }
@@ -228,14 +375,18 @@ async function repoRows(
         (hasLocal(f) && f.scan?.envError?.code !== 'ENV_SYMLINK'))
   )
   const root = files.get(envPathId(ROOT_ENV))
-  const showRoot =
-    root !== undefined &&
-    (inVault(root) || hasLocal(root) || (others.length === 0 && unreadable.length === 0))
+  const nothingElse = others.length === 0 && unreadable.length === 0 && excluded.length === 0
+  const showRoot = root !== undefined && (inVault(root) || hasLocal(root) || nothingElse)
+
+  const base = { name, local, vaultName }
+  const errorInfo = (err: AppError | null): RepoRow['error'] =>
+    err ? { code: err.code, message: err.message } : null
 
   const row = async (f: FileState): Promise<RepoRow> => {
-    const ref = f.listed?.ref ?? entryFor(keys, { repoName: name, path: f.path })
-    const base = {
-      name,
+    const ref = f.listed?.ref ?? entryFor(keys, { repoName: vaultName, path: f.path })
+    const key = lastKey(ref, local ? name : null)
+    const fields = {
+      ...base,
       path: f.path,
       storedName: inVault(f) ? entryName(ref) : null,
       hasEnv: hasLocal(f)
@@ -244,9 +395,9 @@ async function repoRows(
       if (f.scan?.envError) throw f.scan.envError
       if (f.listed?.error) throw f.listed.error
       const vault = f.listed?.entry ? toInfo(f.listed.entry.payload) : null
-      const last = await getLast(vaultId, stateKey(ref))
+      const last = await getLast(vaultId, key)
       const status = computeStatus({
-        repoExists: repo !== null && (f.scan?.folderExists ?? false),
+        repoExists: local && (f.scan?.folderExists ?? false),
         localHash: f.scan?.localHash ?? null,
         vault,
         last
@@ -259,34 +410,36 @@ async function repoRows(
         vault &&
         (last?.version !== vault.version || last.contentHash !== vault.contentHash)
       ) {
-        await setLast(vaultId, stateKey(ref), {
-          version: vault.version,
-          contentHash: vault.contentHash
-        })
+        await setLast(vaultId, key, { version: vault.version, contentHash: vault.contentHash })
       }
-      return { ...base, status, vault, error: null }
+      return { ...fields, status, vault, error: null }
     } catch (err) {
       if (!(err instanceof AppError)) throw err
-      return {
-        ...base,
-        status: 'error',
-        vault: null,
-        error: { code: err.code, message: err.message }
-      }
+      return { ...fields, status: 'error', vault: null, error: errorInfo(err) }
     }
   }
 
   const rows = await Promise.all([...(showRoot ? [root] : []), ...others].map(row))
   return [
     ...rows,
+    // Not read locally, never pushed or pulled: only there to be removed.
+    ...excluded.map((l): RepoRow => ({
+      ...base,
+      path: l.path,
+      storedName: entryName(l.ref),
+      status: l.error ? 'error' : 'excluded',
+      hasEnv: false,
+      vault: l.entry ? toInfo(l.entry.payload) : null,
+      error: errorInfo(l.error)
+    })),
     ...unreadable.map((l): RepoRow => ({
-      name,
+      ...base,
       path: null,
       storedName: entryName(l.ref),
       status: 'error',
       hasEnv: false,
       vault: null,
-      error: l.error ? { code: l.error.code, message: l.error.message } : null
+      error: errorInfo(l.error)
     }))
   ]
 }
@@ -296,6 +449,8 @@ const fileRank = (row: RepoRow): number => (row.path === ROOT_ENV ? 0 : row.path
 function byFile(a: RepoRow, b: RepoRow): number {
   return (
     a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) ||
+    // A folder before a repo of the same name that is only in the vault.
+    Number(b.local) - Number(a.local) ||
     fileRank(a) - fileRank(b) ||
     (a.path ?? a.storedName ?? '').localeCompare(b.path ?? b.storedName ?? '')
   )
@@ -306,7 +461,10 @@ function byFile(a: RepoRow, b: RepoRow): number {
 interface Snapshot {
   cfg: Configured
   keys: EntryKeys
+  /** The file in this machine's folder. */
   file: EnvFile
+  /** The same file in the vault: under the name the folder syncs as. */
+  stored: EnvFile
   ref: EntryRef
   repoDir: string
   /** The file's folder, or null if it doesn't exist (see resolveEnvDir). */
@@ -327,7 +485,17 @@ interface Snapshot {
   vaultVersion: string | null
 }
 
-/** Read the current local and vault state of one env file, run `fn`, then wipe the plaintext. */
+/** The vault-side file for `file`, in this machine's folder. */
+const storedFile = (cfg: Configured, file: EnvFile): EnvFile => ({
+  repoName: vaultNameOf(cfg, file.repoName),
+  path: file.path
+})
+
+/**
+ * Read the current local and vault state of one env file, run `fn`, then
+ * wipe the plaintext. REPO_IGNORED or ENV_EXCLUDED if the repo's settings
+ * don't sync it.
+ */
 async function withSnapshot<T>(
   key: Uint8Array,
   req: EnvFile,
@@ -337,22 +505,26 @@ async function withSnapshot<T>(
   const cfg = await configured()
   const repoDir = await resolveRepo(cfg.projectsPath, file.repoName)
   const envDir = await resolveEnvDir(repoDir, file.path)
+  const stored = storedFile(cfg, file)
   return withEntryKeys(key, async (keys) => {
-    const ref = entryFor(keys, file)
+    const snapshot = await cfg.vault.snapshot()
+    requireSynced((await snapshot.settings(keys)).settings, stored, file.repoName)
+    const ref = entryFor(keys, stored)
     const local = envDir ? await readEnvFile(envDir, file.path) : null
     let synced: Buffer | null = null
     try {
       synced = local ? syncedBytes(local) : null
-      const entry = await (await cfg.vault.snapshot()).read(keys, ref)
+      const entry = await snapshot.read(keys, ref)
       const payload = entry?.payload ?? null
       return await fn({
         cfg,
         keys,
         file,
+        stored,
         ref,
         repoDir,
         envDir,
-        id: stateKey(ref),
+        id: lastKey(ref, file.repoName),
         local,
         localHash: local ? sha256Hex(local) : null,
         synced,
@@ -391,6 +563,8 @@ const expectedOf = (s: Snapshot): Expected => ({
 /** The row of a file that is now in sync with `vault`. */
 const syncedRow = (s: Snapshot, vault: VaultInfo): RepoRow => ({
   name: s.file.repoName,
+  local: true,
+  vaultName: s.stored.repoName,
   path: s.file.path,
   storedName: entryName(s.ref),
   status: 'in-sync',
@@ -400,6 +574,10 @@ const syncedRow = (s: Snapshot, vault: VaultInfo): RepoRow => ({
 })
 
 const EXAMPLE = '.env.example'
+
+/** The .env.example check applies to files named .env only, not to .env.local and the like. */
+const checksExample = (s: Snapshot): boolean =>
+  s.cfg.checkExample && envFileName(s.file.path) === ROOT_ENV
 
 /**
  * How `env` compares with the .env.example next to it (in `envDir`), or null
@@ -444,7 +622,7 @@ export function previewPush(key: Uint8Array, vaultId: string, file: EnvFile): Pr
     if (!s.local || !s.synced || !s.envDir) throw noLocalEnv()
     const last = await getLast(vaultId, s.id)
     // The raw file: machine-specific values don't belong in the example either.
-    const example = s.cfg.checkExample
+    const example = checksExample(s)
       ? await checkExample(s.envDir, parseAndWipe(Buffer.from(s.local)))
       : null
     const vaultBytes = s.payload ? decodeEnv(s.payload) : null
@@ -479,7 +657,7 @@ export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promis
       const payload = makePayload(s.synced, nextVersion(vault, last), s.cfg.machineName)
       // `expected` above is what the user reviewed; the version makes the
       // write itself fail if the vault copy changed after this snapshot.
-      await s.cfg.vault.write(s.keys, s.file, payload, s.vaultVersion)
+      await s.cfg.vault.write(s.keys, s.stored, payload, s.vaultVersion)
       vault = toInfo(payload)
     }
     await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
@@ -493,12 +671,15 @@ export function previewPull(key: Uint8Array, vaultId: string, file: EnvFile): Pr
   return withSnapshot(key, file, async (s) => {
     if (!s.payload || !s.vault) throw noVaultCopy()
     const envDir = folderFor(s)
-    const [last, git] = await Promise.all([getLast(vaultId, s.id), ignoreStatus(envDir)])
+    const [last, git] = await Promise.all([
+      getLast(vaultId, s.id),
+      ignoreStatus(envDir, envFileName(s.file.path))
+    ])
     const merged = mergedBytes(decodeEnv(s.payload), s.local)
     const mergedHash = sha256Hex(merged.bytes)
     // Both compare what the pull writes, so kept keys don't show as changed.
     const mergedEnv = parseAndWipe(merged.bytes)
-    const example = s.cfg.checkExample ? await checkExample(envDir, mergedEnv) : null
+    const example = checksExample(s) ? await checkExample(envDir, mergedEnv) : null
     return {
       diff: diffKeys(mergedEnv, parseAndWipe(s.local ? Buffer.from(s.local) : null)),
       vault: s.vault,
@@ -587,7 +768,7 @@ export function autoPull(key: Uint8Array, vaultId: string, file: EnvFile): Promi
       last
     })
     if (status !== 'vault-newer') return null
-    const git = await ignoreStatus(s.envDir)
+    const git = await ignoreStatus(s.envDir, envFileName(s.file.path))
     if (!git.ignored || !git.backupIgnored || git.tracked) return null
     await applyPull(s, s.envDir, s.payload, s.vault, vaultId)
     return syncedRow(s, s.vault)
@@ -608,7 +789,8 @@ async function applyPull(
   vault: VaultInfo,
   vaultId: string
 ): Promise<string | null> {
-  let backupName: string | null = null
+  let backup: string | null = null
+  const fileName = envFileName(s.file.path)
   const bytes = mergedBytes(decodeEnv(payload), s.local).bytes
   try {
     if (sha256Hex(bytes) !== s.localHash) {
@@ -616,7 +798,8 @@ async function applyPull(
       // and checked like the backup: a crash must never leave secrets in an
       // un-ignored file.
       const tmpName = `.env.bak.tmp-${randomHex(8)}`
-      const wantBackup = s.local && s.cfg.backups ? `.env.bak.${backupStamp(new Date())}` : null
+      const wantBackup =
+        s.local && s.cfg.backups ? backupName(fileName, backupStamp(new Date())) : null
       for (const name of [tmpName, wantBackup]) {
         if (name && !(await checkIgnored(envDir, name))) {
           throw new AppError(
@@ -625,16 +808,16 @@ async function applyPull(
           )
         }
       }
-      if (s.local && wantBackup) backupName = await writeBackup(envDir, wantBackup, s.local)
-      await atomicWrite(envDir, envFileName(s.file.path), bytes, { tmpName, mode: 0o600 })
-      // Only once .env is written: a failed pull never costs an older backup.
-      if (backupName) await pruneBackups(envDir, s.cfg.backupCount)
+      if (s.local && wantBackup) backup = await writeBackup(envDir, wantBackup, s.local)
+      await atomicWrite(envDir, fileName, bytes, { tmpName, mode: 0o600 })
+      // Only once the file is written: a failed pull never costs an older backup.
+      if (backup) await pruneBackups(envDir, fileName, s.cfg.backupCount)
     }
   } finally {
     bytes.fill(0)
   }
   await setLast(vaultId, s.id, { version: vault.version, contentHash: vault.contentHash })
-  return backupName
+  return backup
 }
 
 /**
@@ -653,19 +836,17 @@ async function writeBackup(dir: string, name: string, bytes: Buffer): Promise<st
   throw new AppError('FS_ERROR', 'Could not create a unique backup file name.')
 }
 
-// What writeBackup names a backup: .env.bak.<stamp>, with -<4 hex> if that
-// was taken. Never the pull's temp file (.env.bak.tmp-<hex>) or anyone else's.
-const BACKUP_RE = /^\.env\.bak\.\d{8}T\d{6}Z(?:-[0-9a-f]{4})?$/
-
 /**
- * Delete all but the newest `keep` backups in `dir` (the names sort by
- * time). Best effort: the pull has succeeded, and what can't be deleted now
- * is tried again after the next backup.
+ * Delete all but the newest `keep` backups of the env file `fileName` in
+ * `dir` (the names sort by time). Only writeBackup's names (see isBackupOf):
+ * never the pull's temp file, another env file's backups or anyone else's.
+ * Best effort: the pull has succeeded, and what can't be deleted now is tried
+ * again after the next backup.
  */
-async function pruneBackups(dir: string, keep: number): Promise<void> {
+async function pruneBackups(dir: string, fileName: string, keep: number): Promise<void> {
   let names: string[]
   try {
-    names = (await readdir(dir)).filter((name) => BACKUP_RE.test(name)).sort()
+    names = (await readdir(dir)).filter((name) => isBackupOf(fileName, name)).sort()
   } catch (err) {
     console.error(`[envvault] listing backups failed: ${errnoCode(err) ?? 'unknown'}`)
     return
@@ -738,14 +919,28 @@ async function requireFolder(cfg: Configured, file: EnvFile): Promise<string> {
   )
 }
 
+/**
+ * A snapshot of the vault for a file the repo's settings sync (see
+ * requireSynced), with the file's entry.
+ */
+async function syncedEntry(
+  cfg: Configured,
+  keys: EntryKeys,
+  file: EnvFile
+): Promise<{ stored: EnvFile; ref: EntryRef; entry: VaultEntry | null }> {
+  const stored = storedFile(cfg, file)
+  const snapshot = await cfg.vault.snapshot()
+  requireSynced((await snapshot.settings(keys)).settings, stored, file.repoName)
+  const ref = entryFor(keys, stored)
+  return { stored, ref, entry: await snapshot.read(keys, ref) }
+}
+
 /** The vault copy of an env file in the projects folder, as editor rows. */
 export async function openEditor(key: Uint8Array, req: EnvFile): Promise<EditorData> {
   const file = fileOf(req)
   const cfg = await configured()
   await requireFolder(cfg, file)
-  const entry = await withEntryKeys(key, async (keys) =>
-    (await cfg.vault.snapshot()).read(keys, entryFor(keys, file))
-  )
+  const { entry } = await withEntryKeys(key, (keys) => syncedEntry(cfg, keys, file))
   const payload = entry?.payload ?? null
   const entries = editing(() => editorEntries(editableText(payload)))
   return {
@@ -769,8 +964,7 @@ export async function saveEdit(
   const cfg = await configured()
   await requireFolder(cfg, file)
   return withEntryKeys(key, async (keys) => {
-    const ref = entryFor(keys, file)
-    const entry = await (await cfg.vault.snapshot()).read(keys, ref)
+    const { stored, ref, entry } = await syncedEntry(cfg, keys, file)
     const payload = entry?.payload ?? null
     const vault = payload ? toInfo(payload) : null
     if ((vault?.contentHash ?? null) !== req.expectedVaultHash) throw editorStale()
@@ -789,11 +983,11 @@ export async function saveEdit(
       if (unchanged) return { vault, changed: false }
       const next = makePayload(
         synced,
-        nextVersion(vault, await getLast(vaultId, stateKey(ref))),
+        nextVersion(vault, await getLast(vaultId, lastKey(ref, file.repoName))),
         cfg.machineName
       )
       try {
-        await cfg.vault.write(keys, file, next, entry?.version ?? null)
+        await cfg.vault.write(keys, stored, next, entry?.version ?? null)
       } catch (err) {
         if (err instanceof AppError && err.code === 'VAULT_CHANGED') throw editorStale()
         throw err
@@ -809,21 +1003,31 @@ export async function saveEdit(
 // ---------------------------------------------------------------------------
 
 /**
- * Delete an env file's vault copy, if it is still the one the user saw. The
- * repo doesn't need to be in the projects folder (a Vault only row), and no
- * local file is touched, here or on any other machine. The copy must decrypt;
- * a broken one shows its stored name, to be deleted by hand.
+ * Delete an env file's vault copy, by its vault name, if it is still the one
+ * the user saw. The repo doesn't need to be in the projects folder (a Vault
+ * only row), and no local file is touched, here or on any other machine. A
+ * copy the repo's rules exclude can be removed; an ignored repo's can't. The
+ * copy must decrypt; a broken one shows its stored name, to be deleted by
+ * hand.
  */
 export async function removeFromVault(
   key: Uint8Array,
   vaultId: string,
   req: RemoveRequest
 ): Promise<null> {
-  const file = fileOf(req)
+  const stored = { repoName: req.vaultName, path: req.path }
   const cfg = await configured()
   return withEntryKeys(key, async (keys) => {
-    const ref = entryFor(keys, file)
-    const entry = await (await cfg.vault.snapshot()).read(keys, ref)
+    const snapshot = await cfg.vault.snapshot()
+    const { settings } = await snapshot.settings(keys)
+    if (repoRules(settings, entryId(stored.repoName)).ignored) {
+      throw new AppError(
+        'REPO_IGNORED',
+        `${stored.repoName} is ignored in EnvVault. Stop ignoring it in its settings first.`
+      )
+    }
+    const ref = entryFor(keys, stored)
+    const entry = await snapshot.read(keys, ref)
     if (!entry) throw noVaultCopy()
     if (entry.payload.contentHash !== req.expectedVaultHash) {
       throw new AppError(
@@ -832,23 +1036,132 @@ export async function removeFromVault(
       )
     }
     await cfg.vault.remove(ref, entry.version)
-    // A floor for the file's versions on this machine: pushed again from
-    // here, it continues above the removed copy, so a machine that synced
-    // that copy doesn't take the new one for a rollback.
-    const last = await getLast(vaultId, stateKey(ref))
-    if (!last || last.version < entry.payload.version) {
-      await setLast(vaultId, stateKey(ref), {
-        version: entry.payload.version,
-        contentHash: entry.payload.contentHash
-      })
+    // A floor for the file's versions on this machine, for every folder that
+    // syncs it: pushed again from here, it continues above the removed copy,
+    // so a machine that synced that copy doesn't take the new one for a
+    // rollback.
+    const folders = Object.entries(cfg.repoNames)
+      .filter(([, name]) => entryId(name) === ref.repoId)
+      .map(([folder]) => folder)
+    for (const id of [stateKey(ref), ...folders.map((f) => lastKey(ref, f))]) {
+      const last = await getLast(vaultId, id)
+      if (!last || last.version < entry.payload.version) {
+        await setLast(vaultId, id, {
+          version: entry.payload.version,
+          contentHash: entry.payload.contentHash
+        })
+      }
     }
     return null
   })
 }
 
-export async function addGitignore(req: EnvFile): Promise<GitignoreResult> {
+export async function addGitignore(key: Uint8Array, req: EnvFile): Promise<GitignoreResult> {
   const file = fileOf(req)
   const cfg = await configured()
   const envDir = await requireFolder(cfg, file)
-  return addToGitignore(await resolveRepo(cfg.projectsPath, file.repoName), envDir)
+  await withEntryKeys(key, async (keys) => {
+    const snapshot = await cfg.vault.snapshot()
+    requireSynced((await snapshot.settings(keys)).settings, storedFile(cfg, file), file.repoName)
+  })
+  return addToGitignore(
+    await resolveRepo(cfg.projectsPath, file.repoName),
+    envDir,
+    envFileName(file.path)
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Repo settings: in the vault for every machine, except the name a folder
+// syncs as, which is this machine's (Settings.repoNames).
+
+const SETTINGS_ATTEMPTS = 3
+
+/**
+ * Change the vault's settings with `change` (null: nothing to change) and
+ * write them. Two machines changing them at once: the later one reads them
+ * again and makes its change on top, so neither change is lost. Settings that
+ * can't be read can't be changed (see resetSettings).
+ */
+async function changeSettings(
+  key: Uint8Array,
+  change: (settings: VaultSettings) => VaultSettings | null
+): Promise<null> {
+  const cfg = await configured()
+  return withEntryKeys(key, async (keys) => {
+    for (let attempt = 1; ; attempt++) {
+      const read = await (await cfg.vault.snapshot()).settings(keys)
+      if (read.error) throw read.error
+      const next = change(read.settings)
+      if (next === null) return null
+      try {
+        await cfg.vault.writeSettings(keys, stamped(next, cfg.machineName), read.version)
+        return null
+      } catch (err) {
+        const conflict = err instanceof AppError && err.code === 'VAULT_CHANGED'
+        if (!conflict || attempt >= SETTINGS_ATTEMPTS) throw err
+      }
+    }
+  })
+}
+
+const stamped = (settings: VaultSettings, machineName: string): VaultSettings => ({
+  ...settings,
+  updatedBy: machineName,
+  updatedAt: new Date().toISOString()
+})
+
+/** Save a repo's settings, by its vault name, for every machine. */
+export function saveRepoSettings(key: Uint8Array, req: RepoSettingsRequest): Promise<null> {
+  const id = entryId(req.vaultName)
+  const rules = { ignored: req.ignored, include: req.include, exclude: req.exclude }
+  return changeSettings(key, (settings) =>
+    sameRepoRules(repoRules(settings, id), rules) ? null : withRepo(settings, id, rules)
+  )
+}
+
+/** Save the rules repos without their own use, for every machine. */
+export function saveDefaults(key: Uint8Array, rules: FileRules): Promise<null> {
+  return changeSettings(key, (settings) =>
+    sameFileRules(settings.defaults, rules) ? null : withDefaults(settings, rules)
+  )
+}
+
+/**
+ * Replace settings that failed verification with empty ones. Settings from a
+ * newer EnvVault are never replaced: updating this one is the fix.
+ */
+export async function resetSettings(key: Uint8Array): Promise<null> {
+  const cfg = await configured()
+  return withEntryKeys(key, async (keys) => {
+    const read = await (await cfg.vault.snapshot()).settings(keys)
+    if (!read.error) return null
+    if (read.error.code !== 'VAULT_TAMPERED') throw read.error
+    await cfg.vault.writeSettings(keys, stamped(emptySettings(), cfg.machineName), read.version)
+    return null
+  })
+}
+
+/**
+ * Sync the folder `repoName` as `vaultName` in the vault, on this machine
+ * only. Its own name (in any case) syncs it as itself again.
+ */
+export async function setVaultName(req: VaultNameRequest): Promise<null> {
+  const cfg = await configured()
+  await resolveRepo(cfg.projectsPath, req.repoName)
+  const folder = entryId(req.repoName)
+  const repoNames = Object.fromEntries(
+    Object.entries(cfg.repoNames).filter(([id]) => id !== folder)
+  )
+  if (entryId(req.vaultName) !== folder) {
+    if (Object.keys(repoNames).length >= MAX_REPO_NAMES) {
+      throw new AppError(
+        'BAD_REQUEST',
+        `At most ${MAX_REPO_NAMES} folders can sync under another name.`
+      )
+    }
+    repoNames[folder] = req.vaultName
+  }
+  await updateConfig({ repoNames })
+  return null
 }

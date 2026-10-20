@@ -5,7 +5,14 @@ import { reactive } from 'vue'
 import { sameFile } from '../../shared/envfile'
 import { autoPullMessage, cliPushMessage } from '../../shared/messages'
 import type { Result } from '../../shared/result'
-import type { AppState, EnvFile, RepoRow, Settings } from '../../shared/types'
+import type {
+  AppState,
+  EnvFile,
+  RepoInfo,
+  RepoRow,
+  RepoSettingsView,
+  Settings
+} from '../../shared/types'
 import { fileOf } from './status'
 
 export type View = 'loading' | 'setup' | 'lock' | 'repos' | 'settings'
@@ -20,7 +27,12 @@ export const store = reactive({
   view: 'loading' as View,
   app: null as AppState | null,
   settings: null as Settings | null,
+  /** A row per env file of the repos that aren't ignored. */
   repos: [] as RepoRow[],
+  /** Every repo, ignored ones included (see RepoInfo). */
+  repoInfo: [] as RepoInfo[],
+  /** The repo settings in the vault, as of the last list. */
+  repoSettings: null as RepoSettingsView | null,
   reposLoaded: false,
   toasts: [] as Toast[],
   /** Set if the first state load failed, so the loading screen can offer Retry. */
@@ -103,6 +115,8 @@ function applyView(app: AppState): void {
 /** Main locked the session (button, idle timer, sleep, folder change). */
 export async function handleLocked(): Promise<void> {
   store.repos = []
+  store.repoInfo = []
+  store.repoSettings = null
   store.reposLoaded = false
   store.lockEpoch++
   if (store.view === 'repos' || store.view === 'settings') store.view = 'lock'
@@ -162,10 +176,12 @@ export async function exitMini(): Promise<void> {
  */
 export async function loadRepos(rescan = false): Promise<void> {
   const epoch = store.lockEpoch
-  const rows = await run(() => window.envvault.listRepos(rescan))
+  const list = await run(() => window.envvault.listRepos(rescan))
   // A reply that raced a lock must not repopulate the cleared store.
-  if (rows && epoch === store.lockEpoch) {
-    store.repos = rows
+  if (list && epoch === store.lockEpoch) {
+    store.repos = list.rows
+    store.repoInfo = list.repos
+    store.repoSettings = list.settings
     store.reposLoaded = true
   }
 }
