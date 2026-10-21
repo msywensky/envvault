@@ -5,7 +5,8 @@ argument-hint: '[--no-test] [vitest file or -t filter]'
 allowed-tools: Bash(npm run check:*), Bash(npx vitest:*)
 ---
 
-Run `npm run check -- $ARGUMENTS` (just `npm run check` when there are no arguments).
+Run `npm run check`. If arguments were given (`$ARGUMENTS`), pass them after `--`:
+`npm run check -- <arguments>`.
 
 Report the summary lines. For each failure, give the command, the first useful error and the file
 to inspect. Do not paste passing output.
