@@ -28,6 +28,12 @@ export interface Toast {
   text: string
 }
 
+/** What mini mode shows: one env file, or every env file of one repo. */
+export interface MiniTarget {
+  repoName: string
+  paths: string[]
+}
+
 export const store = reactive({
   view: 'loading' as View,
   app: null as AppState | null,
@@ -46,8 +52,8 @@ export const store = reactive({
   startupError: null as string | null,
   /** Bumped whenever the session locks, so open dialogs close themselves. */
   lockEpoch: 0,
-  /** Mini mode's env file (see MiniView), or null for the full window. */
-  mini: null as EnvFile | null,
+  /** Mini mode's target (see MiniView), or null for the full window. */
+  mini: null as MiniTarget | null,
   /** A conflict to open the Resolve dialog for once the full window is back (see MiniView). */
   resolveFile: null as EnvFile | null
 })
@@ -187,17 +193,28 @@ export function applyCliPushed(row: RepoRow): void {
   toast('success', cliPushMessage(row))
 }
 
-/** Mini mode's env file, rechecked by main. No toast: the badge shows it. */
-export function applyRepoStatus(row: RepoRow): void {
-  patchRepos([row])
+/** Mini mode's rows, rechecked by main. No toast: the badges show them. */
+export function applyRepoStatus(rows: RepoRow[]): void {
+  patchRepos(rows)
 }
 
 /** Shrink the window to one env file. The view switches first, so it never shows squeezed. */
 export async function enterMini(row: RepoRow): Promise<void> {
-  const file = fileOf(row)
-  store.mini = file
+  await enterMiniTarget(row.name, [fileOf(row).path], !row.error)
+}
+
+/** Shrink the window to all of a repo's env files. */
+export async function enterMiniRepo(rows: RepoRow[]): Promise<void> {
+  const repoName = rows[0]?.name
+  const paths = rows.flatMap((row) => (row.path === null ? [] : [row.path]))
+  if (repoName === undefined || paths.length === 0) return
+  await enterMiniTarget(repoName, paths, false)
+}
+
+async function enterMiniTarget(repoName: string, paths: string[], compact: boolean): Promise<void> {
+  store.mini = { repoName, paths }
   const res = await call(() =>
-    window.envvault.setLayout({ layout: 'mini', ...file, reviewing: false })
+    window.envvault.setLayout({ layout: 'mini', repoName, paths, reviewing: false, compact })
   )
   if (!res.ok) {
     store.mini = null

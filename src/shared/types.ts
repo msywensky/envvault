@@ -165,11 +165,21 @@ export type SettingsRequest = Pick<
 >
 
 /**
- * The window's layout: the full app, or mini mode on one repo (src/main/mini.ts).
- * `reviewing` makes the mini window big enough for the push or pull dialog.
+ * The window's layout: the full app, or mini mode on one env file or all of a
+ * repo's files (src/main/mini.ts). `reviewing` makes the mini window big enough
+ * for the push or pull dialog; `compact` leaves out the second row when there's
+ * nothing to show in it.
  */
 export type Layout =
-  { layout: 'full' } | { layout: 'mini'; repoName: string; path: string; reviewing: boolean }
+  | { layout: 'full' }
+  | {
+      layout: 'mini'
+      repoName: string
+      /** One file for a single-file mini, or every file of the repo. */
+      paths: string[]
+      reviewing: boolean
+      compact: boolean
+    }
 
 /** The GitHub CLI, as Setup sees it (see src/main/gh.ts). */
 export interface GhStatus {

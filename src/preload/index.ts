@@ -77,7 +77,7 @@ const api: EnvVaultApi = {
     }
   },
   onRepoStatus: (callback) => {
-    const listener = (_event: Electron.IpcRendererEvent, row: RepoRow): void => callback(row)
+    const listener = (_event: Electron.IpcRendererEvent, rows: RepoRow[]): void => callback(rows)
     ipcRenderer.on(EV.repoStatus, listener)
     return () => {
       ipcRenderer.removeListener(EV.repoStatus, listener)

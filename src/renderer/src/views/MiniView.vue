@@ -1,12 +1,12 @@
 <script setup lang="ts">
-// Mini mode: one env file in a small window, two rows tall. The header holds its
-// Push (or Pull) button with the window's controls, and the row below its
-// status. Main keeps the row fresh (EV.repoStatus, see src/main/mini.ts), so
-// nothing here polls. A push or pull still goes through SyncDialog's review;
-// the window grows while it's open. The Merge and Resolve dialog doesn't fit,
-// so Merge… and Resolve… go back to the full window and open it there. When the vault locks, a compact
-// unlock form takes over; anything it can't handle (a setup code, no vault
-// yet) goes back to the full window too.
+// Mini mode: one env file, or all of a repo's env files, in a small window. A
+// single file's name, status chip and Push (or Pull) button sit in the header;
+// a repo's files get a row each. Main keeps the rows fresh (EV.repoStatus, see
+// src/main/mini.ts), so nothing here polls. A push or pull still goes through
+// SyncDialog's review; the window grows while it's open. The Merge and Resolve
+// dialog doesn't fit, so Merge… and Resolve… go back to the full window and open
+// it there. When the vault locks, a compact unlock form takes over; anything it
+// can't handle (a setup code, no vault yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { sameFile } from '../../../shared/envfile'
 import type { RepoRow } from '../../../shared/types'
@@ -15,7 +15,6 @@ import SyncDialog from '../components/SyncDialog.vue'
 import { call, exitMini, loadRepos, refreshState, run, store } from '../store'
 import {
   ACTION_LABEL,
-  STATUS_HINT,
   absoluteTime,
   actionsFor,
   fileOf,
@@ -25,31 +24,67 @@ import {
   type RowAction
 } from '../status'
 
-const shown = computed(() =>
-  store.mini
-    ? { name: store.mini.repoName, local: true, path: store.mini.path, storedName: null }
-    : null
-)
-const name = computed(() => (shown.value ? fileTitle(shown.value) : ''))
-// Matched by file: a repo has a row per env file.
-const row = computed(() => {
-  const file = shown.value
-  return file ? (store.repos.find((r) => sameFile(r, file)) ?? null) : null
+const target = computed(() => store.mini)
+const single = computed(() => target.value?.paths.length === 1)
+const name = computed(() => {
+  const t = target.value
+  if (!t) return ''
+  const path = t.paths[0]
+  return path === undefined ? t.repoName : fileTitle({ name: t.repoName, path })
 })
+// Matched by file, in the target's order: a repo has a row per env file.
+const rows = computed(() => {
+  const t = target.value
+  if (!t) return []
+  return t.paths.flatMap((path) => {
+    const file = { name: t.repoName, local: true, path, storedName: null }
+    const row = store.repos.find((r) => sameFile(r, file))
+    return row ? [row] : []
+  })
+})
+const row = computed(() => rows.value[0] ?? null)
 const locked = computed(() => store.view === 'lock')
 // The compact form only takes a password; a setup code needs the full lock screen.
 const canUnlockHere = computed(
   () => store.app?.vault === 'ready' && store.app.setupCode !== 'needed'
 )
 const onTop = computed(() => store.settings?.miniOnTop ?? true)
-const actions = computed(() => (row.value ? actionsFor(row.value) : []))
+// One row when the single file is unlocked and fine: the second row is only for
+// a message, the unlock form or the loading state. A repo's list always has it.
+const compact = computed(
+  () => single.value && !locked.value && store.reposLoaded && row.value !== null && !row.value.error
+)
+const actions = computed(() => (single.value && row.value ? actionsFor(row.value) : []))
 // Merge… or Resolve…: the dialog opens in the full window.
 const merging = computed(() => actions.value.find((a) => a === 'merge' || a === 'resolve') ?? null)
-const vaultInfo = computed(() => {
-  const v = row.value?.vault
+
+interface RowView {
+  row: RepoRow
+  /** The buttons this row offers, apart from Merge…/Resolve… (see `merging`). */
+  actions: RowAction[]
+  merging: RowAction | null
+  mergingLabel: string
+}
+
+const rowViews = computed<RowView[]>(() =>
+  rows.value.map((row) => {
+    const all = actionsFor(row)
+    const merging = all.find((a) => a === 'merge' || a === 'resolve') ?? null
+    return {
+      row,
+      actions: merging ? [] : all,
+      merging,
+      mergingLabel: merging ? ACTION_LABEL[merging] : ''
+    }
+  })
+)
+
+/** The vault copy's details for a row's tooltip, if it has one. */
+function vaultInfo(row: RepoRow | null): string {
+  const v = row?.vault
   if (!v) return ''
   return `Vault copy v${v.version} from ${v.updatedBy}, ${relativeTime(v.updatedAt)} (${absoluteTime(v.updatedAt)})`
-})
+}
 
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
 const busy = ref(false)
@@ -59,10 +94,17 @@ const error = ref<string | null>(null)
 const passwordInput = ref<HTMLInputElement | null>(null)
 
 async function review(repo: RepoRow, action: RowAction): Promise<void> {
-  const file = fileOf(repo)
+  const t = target.value
+  if (!t) return
   // Grow first, so the dialog opens at its full size.
   const res = await call(() =>
-    window.envvault.setLayout({ layout: 'mini', ...file, reviewing: true })
+    window.envvault.setLayout({
+      layout: 'mini',
+      repoName: t.repoName,
+      paths: [...t.paths],
+      reviewing: true,
+      compact: compact.value
+    })
   )
   if (!res.ok) return
   const mode = action === 'push' || action === 'keep-local' ? 'push' : 'pull'
@@ -75,16 +117,26 @@ async function resolve(file: RepoRow): Promise<void> {
   await exitMini()
 }
 
+/** Resize to the current state: the header, a message, or the review dialog. */
+async function applyLayout(reviewing: boolean): Promise<void> {
+  const t = store.mini
+  if (!t) return
+  // Plain copies: store.mini is reactive, which IPC can't clone.
+  const { repoName, paths } = t
+  await call(() =>
+    window.envvault.setLayout({
+      layout: 'mini',
+      repoName,
+      paths: [...paths],
+      reviewing,
+      compact: compact.value
+    })
+  )
+}
+
 async function closeReview(done: boolean): Promise<void> {
   open.value = null
-  const mini = store.mini
-  if (mini) {
-    // A plain copy: store.mini is reactive, which IPC can't clone.
-    const { repoName, path } = mini
-    await call(() =>
-      window.envvault.setLayout({ layout: 'mini', repoName, path, reviewing: false })
-    )
-  }
+  await applyLayout(false)
   if (done) await loadRepos()
 }
 
@@ -154,6 +206,14 @@ watch(locked, async (now) => {
     password.value = ''
     await refresh()
   }
+  if (!open.value) await applyLayout(false)
+})
+
+// The second row comes and goes with the message, the loading state or the
+// unlock form. Leave it alone while the review dialog owns the window's size.
+watch(compact, async () => {
+  if (open.value) return
+  await applyLayout(false)
 })
 </script>
 
@@ -164,8 +224,11 @@ watch(locked, async (now) => {
       <span v-if="locked && error" class="mini-error truncate grow" role="alert" :title="error">
         {{ error }}
       </span>
-      <span v-else class="repo-name truncate grow" :title="name">{{ name }}</span>
-      <template v-if="!locked && row">
+      <div v-else class="mini-title grow" :title="single ? vaultInfo(row) : ''">
+        <span class="repo-name truncate" :title="name">{{ name }}</span>
+        <StatusBadge v-if="single && !locked && row" :status="row.status" />
+      </div>
+      <template v-if="!locked && single && row">
         <button
           v-if="merging"
           type="button"
@@ -233,18 +296,52 @@ watch(locked, async (now) => {
       <span class="row muted"><span class="spinner" /> Loading…</span>
     </div>
 
-    <div v-else-if="!row" class="mini-body">
+    <div v-else-if="single && !row" class="mini-body">
       <span class="muted small">This .env is no longer in the projects folder.</span>
     </div>
 
-    <div v-else class="mini-body" :title="vaultInfo">
-      <StatusBadge :status="row.status" />
-      <span v-if="row.error" class="mini-error truncate" :title="row.error.message">
+    <div v-else-if="single && row && row.error" class="mini-body" :title="vaultInfo(row)">
+      <span class="mini-error truncate" :title="row.error.message">
         {{ row.error.message }}
       </span>
-      <span v-else class="muted small truncate" :title="STATUS_HINT[row.status]">
-        {{ STATUS_HINT[row.status] }}
-      </span>
+    </div>
+
+    <div v-else-if="!single" class="mini-files">
+      <div
+        v-for="line in rowViews"
+        :key="rowKey(line.row)"
+        class="mini-row"
+        :title="vaultInfo(line.row)"
+      >
+        <span class="file-path truncate grow">{{ line.row.path }}</span>
+        <StatusBadge :status="line.row.status" />
+        <button
+          v-if="line.merging"
+          type="button"
+          class="btn btn-sm"
+          :class="{ 'btn-primary': line.merging === 'merge' }"
+          :title="
+            line.merging === 'merge'
+              ? 'Review the merge, in the full window'
+              : 'Choose which copy each key comes from, in the full window'
+          "
+          @click="resolve(line.row)"
+        >
+          {{ line.mergingLabel }}
+        </button>
+        <button
+          v-for="action in line.actions"
+          :key="action"
+          type="button"
+          class="btn btn-sm btn-primary"
+          @click="review(line.row, action)"
+        >
+          {{ ACTION_LABEL[action] }}
+        </button>
+      </div>
+      <div v-if="rowViews.length === 0" class="mini-row muted small">
+        These env files are no longer in the projects folder.
+      </div>
     </div>
 
     <SyncDialog

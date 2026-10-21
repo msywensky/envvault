@@ -25,6 +25,7 @@ defineEmits<{
   action: [row: RepoRow, action: RowAction]
   edit: [row: RepoRow]
   mini: [row: RepoRow]
+  miniRepo: [rows: RepoRow[]]
   remove: [row: RepoRow]
   settings: [repo: RepoInfo]
 }>()
@@ -67,6 +68,12 @@ const removable = (row: RepoRow): boolean =>
   (row.status === 'vault-only' || row.status === 'excluded') &&
   row.vault !== null &&
   row.path !== null
+
+/** The group's files that mini mode can show: the local ones with a path. */
+const miniFiles = (g: Group): RepoRow[] =>
+  g.files.filter(
+    (row) => row.path !== null && row.status !== 'vault-only' && row.status !== 'excluded'
+  )
 </script>
 
 <template>
@@ -89,6 +96,15 @@ const removable = (row: RepoRow): boolean =>
                 · syncs as <code>{{ g.repo.vaultName }}</code>
               </span>
             </div>
+            <button
+              v-if="miniFiles(g).length > 1"
+              type="button"
+              class="btn btn-sm"
+              title="Show all of this repo's env files, in a small window"
+              @click="$emit('miniRepo', miniFiles(g))"
+            >
+              Mini
+            </button>
             <button
               v-if="g.repo"
               type="button"

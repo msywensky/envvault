@@ -1,30 +1,37 @@
-// Mini mode: the window shrinks to one env file (the renderer's MiniView),
-// kept above other windows unless the miniOnTop setting is off, so its Push
-// button is at hand while you work on that repo.
+// Mini mode: the window shrinks to one env file, or to all of a repo's env
+// files (the renderer's MiniView), kept above other windows unless the
+// miniOnTop setting is off, so their Push buttons are at hand while you work
+// on that repo.
 //
-// Main keeps that file's row fresh: when the file changes, when the window
-// gains focus, and once a minute. Like automatic pull, it takes the key
-// through session.withKey, which doesn't count as activity, and the row goes
-// to the renderer as EV.repoStatus, which patches it in without calling IPC.
+// Main keeps their rows fresh: when a file changes, when the window gains
+// focus, and once a minute. Like automatic pull, it takes the key through
+// session.withKey, which doesn't count as activity, and the rows go to the
+// renderer as EV.repoStatus, which patches them in without calling IPC.
 // So mini mode never keeps the vault unlocked.
 import { BrowserWindow, screen } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { envFileName } from '../core/envpath'
 import { placeWithin, type Rect, type Size } from '../core/layout'
 import { EV } from '../shared/channels'
-import { sameFile } from '../shared/envfile'
-import type { EnvFile, Layout } from '../shared/types'
+import type { Layout } from '../shared/types'
 import { getConfig } from './config'
 import { resolveEnvDir, resolveRepo } from './repos'
 import * as session from './session'
 import { listRepos } from './sync'
 import { getMainWindow } from './window'
 
-/** Content sizes: MiniView's two rows, and big enough for the push or pull dialog. */
-const MINI: Size = { width: 420, height: 101 }
+/** MiniView's header and one message or unlock row, in content pixels. */
+const HEADER = 45
+const MESSAGE = 56
+/** One env file's row in a repo's list, and how many are shown before it scrolls. */
+const FILE_ROW = 40
+const MAX_ROWS = 3
+/** Content sizes: the header alone, the header plus a message, and the review dialog. */
+const ONE_ROW: Size = { width: 540, height: HEADER }
+const TWO_ROWS: Size = { width: 540, height: HEADER + MESSAGE }
 const REVIEW: Size = { width: 600, height: 640 }
 /** Window sizes, title bar included. */
-const MINI_MIN: Size = { width: 340, height: 120 }
+const MINI_MIN: Size = { width: 540, height: 80 }
 /** The full window's minimum, as in createMainWindow. */
 const FULL_MIN: Size = { width: 720, height: 480 }
 const RECHECK_MS = 60_000
@@ -33,11 +40,11 @@ const DEBOUNCE_MS = 300
 
 interface Mini {
   win: BrowserWindow
-  file: EnvFile
+  repoName: string
+  paths: string[]
   /** Where the full window was, to go back to. */
   fullBounds: Rect
-  wasMaximized: boolean
-  watcher: FSWatcher | null
+  watchers: FSWatcher[]
   timer: NodeJS.Timeout
   onFocus: () => void
   onClosed: () => void
@@ -56,13 +63,14 @@ export async function setLayout(layout: Layout): Promise<null> {
     return null
   }
   const current = mini
-  const file = { repoName: layout.repoName, path: layout.path }
-  if (current?.win !== win) await enter(win, file)
-  else if (!isFile(current.file, file)) {
-    current.file = file
-    await watchFile(current)
+  const target = { repoName: layout.repoName, paths: layout.paths }
+  if (current?.win !== win) await enter(win, target)
+  else if (!sameTarget(current, target)) {
+    current.repoName = target.repoName
+    current.paths = [...target.paths]
+    await watchFiles(current)
   }
-  resize(win, layout.reviewing ? REVIEW : MINI)
+  resize(win, sizeFor(layout))
   win.setAlwaysOnTop((await getConfig()).miniOnTop, 'floating')
   recheck()
   return null
@@ -73,14 +81,28 @@ export function applyMiniOnTop(onTop: boolean): void {
   if (mini && !mini.win.isDestroyed()) mini.win.setAlwaysOnTop(onTop, 'floating')
 }
 
-/** True if `a` and `b` are the same env file (see sameFile). */
-const isFile = (a: EnvFile, b: EnvFile): boolean =>
-  sameFile(
-    { name: a.repoName, local: true, path: a.path, storedName: null },
-    { name: b.repoName, local: true, path: b.path, storedName: null }
-  )
+/** The content size for a mini request: the header, one message row, or a file row each. */
+function sizeFor(layout: Extract<Layout, { layout: 'mini' }>): Size {
+  if (layout.reviewing) return REVIEW
+  if (layout.paths.length === 1) return layout.compact ? ONE_ROW : TWO_ROWS
+  // Locked, the unlock form replaces the file rows.
+  if (!session.isUnlocked()) return TWO_ROWS
+  const rows = Math.min(layout.paths.length, MAX_ROWS)
+  return { width: ONE_ROW.width, height: HEADER + rows * FILE_ROW }
+}
 
-async function enter(win: BrowserWindow, file: EnvFile): Promise<void> {
+interface Target {
+  repoName: string
+  paths: string[]
+}
+
+/** True if `a` and `b` show the same repo's files (paths compared as the vault does). */
+const sameTarget = (a: Target, b: Target): boolean =>
+  a.repoName.toLowerCase() === b.repoName.toLowerCase() &&
+  a.paths.length === b.paths.length &&
+  a.paths.every((path, i) => path.toLowerCase() === b.paths[i]?.toLowerCase())
+
+async function enter(win: BrowserWindow, target: Target): Promise<void> {
   leave()
   if (win.isFullScreen()) {
     // macOS animates out of full screen; resizing before it ends is ignored.
@@ -91,9 +113,7 @@ async function enter(win: BrowserWindow, file: EnvFile): Promise<void> {
     win.setFullScreen(false)
     await left
   }
-  const wasMaximized = win.isMaximized()
   const fullBounds = win.getNormalBounds()
-  if (wasMaximized) win.unmaximize()
   win.setMinimumSize(MINI_MIN.width, MINI_MIN.height)
   const onFocus = (): void => recheck()
   const onClosed = (): void => stop()
@@ -101,16 +121,16 @@ async function enter(win: BrowserWindow, file: EnvFile): Promise<void> {
   win.once('closed', onClosed)
   mini = {
     win,
-    file,
+    repoName: target.repoName,
+    paths: [...target.paths],
     fullBounds,
-    wasMaximized,
-    watcher: null,
+    watchers: [],
     timer: setInterval(recheck, RECHECK_MS),
     onFocus,
     onClosed
   }
   mini.timer.unref()
-  await watchFile(mini)
+  await watchFiles(mini)
 }
 
 /** Back to the full window, where it was. */
@@ -125,13 +145,13 @@ function leave(): void {
   win.setAlwaysOnTop(false)
   win.setMinimumSize(FULL_MIN.width, FULL_MIN.height)
   win.setBounds(current.fullBounds)
-  if (current.wasMaximized) win.maximize()
 }
 
 function stop(): void {
   if (!mini) return
   clearInterval(mini.timer)
-  mini.watcher?.close()
+  for (const watcher of mini.watchers) watcher.close()
+  mini.watchers = []
   if (debounce) clearTimeout(debounce)
   debounce = null
   mini = null
@@ -153,34 +173,48 @@ function resize(win: BrowserWindow, size: Size): void {
 }
 
 /**
- * Watch the env file's folder for it (editors save by renaming over it, and
- * it may not exist yet). Without a watcher, focus and the timer still recheck.
+ * Watch the folders of the target's env files (editors save by renaming over
+ * them, and they may not exist yet). Without a watcher, focus and the timer
+ * still recheck.
  */
-async function watchFile(current: Mini): Promise<void> {
-  current.watcher?.close()
-  current.watcher = null
-  const file = current.file
-  let dir: string | null
+async function watchFiles(current: Mini): Promise<void> {
+  for (const watcher of current.watchers) watcher.close()
+  current.watchers = []
+  const target: Target = { repoName: current.repoName, paths: [...current.paths] }
+  const byDir = new Map<string, Set<string>>()
   try {
     const { projectsPath } = await getConfig()
     if (!projectsPath) return
-    dir = await resolveEnvDir(await resolveRepo(projectsPath, file.repoName), file.path)
+    const repoDir = await resolveRepo(projectsPath, target.repoName)
+    for (const path of target.paths) {
+      try {
+        const dir = await resolveEnvDir(repoDir, path)
+        if (!dir) continue
+        const names = byDir.get(dir)
+        if (names) names.add(envFileName(path))
+        else byDir.set(dir, new Set([envFileName(path)]))
+      } catch {
+        // A missing or symlinked folder has no watcher; the timer still rechecks.
+      }
+    }
   } catch {
     return
   }
-  // Left mini mode or switched file while resolving.
-  if (!dir || mini !== current || current.file !== file) return
-  const name = envFileName(file.path)
-  try {
-    current.watcher = watch(dir, { persistent: false }, (_event, changed) => {
-      if (changed === null || changed === name) schedule()
-    })
-    current.watcher.on('error', () => {
-      current.watcher?.close()
-      current.watcher = null
-    })
-  } catch {
-    current.watcher = null
+  // Left mini mode or switched target while resolving.
+  if (mini !== current || !sameTarget(current, target)) return
+  for (const [dir, names] of byDir) {
+    try {
+      const watcher = watch(dir, { persistent: false }, (_event, changed) => {
+        if (changed === null || names.has(changed)) schedule()
+      })
+      watcher.on('error', () => {
+        watcher.close()
+        current.watchers = current.watchers.filter((w) => w !== watcher)
+      })
+      current.watchers.push(watcher)
+    } catch {
+      // fs.watch can fail (permissions, a folder that just went away).
+    }
   }
 }
 
@@ -192,7 +226,7 @@ function schedule(): void {
   }, DEBOUNCE_MS)
 }
 
-/** Recompute the file's row and send it; one at a time, rerun if asked meanwhile. */
+/** Recompute the target's rows and send them; one at a time, rerun if asked meanwhile. */
 function recheck(): void {
   if (checking) {
     again = true
@@ -203,7 +237,7 @@ function recheck(): void {
     try {
       do {
         again = false
-        await sendRow()
+        await sendRows()
       } while (again)
     } finally {
       checking = false
@@ -211,18 +245,25 @@ function recheck(): void {
   })()
 }
 
-async function sendRow(): Promise<void> {
+async function sendRows(): Promise<void> {
   const current = mini
   if (!current || !session.isUnlocked()) return
-  const file = current.file
+  const target: Target = { repoName: current.repoName, paths: [...current.paths] }
+  const wanted = new Set(target.paths.map((path) => path.toLowerCase()))
   try {
-    const { rows } = await session.withKey((key, id) => listRepos(key, id, { only: file.repoName }))
-    // The repo's rows: one per env file. Never just the first.
-    const row = rows.find((r) =>
-      sameFile(r, { name: file.repoName, local: true, path: file.path, storedName: null })
+    const { rows } = await session.withKey((key, id) =>
+      listRepos(key, id, { only: target.repoName })
     )
-    if (row && mini === current && current.file === file && !current.win.isDestroyed()) {
-      current.win.webContents.send(EV.repoStatus, row)
+    const found = rows.filter(
+      (row) => row.local && row.path !== null && wanted.has(row.path.toLowerCase())
+    )
+    if (
+      found.length &&
+      mini === current &&
+      sameTarget(current, target) &&
+      !current.win.isDestroyed()
+    ) {
+      current.win.webContents.send(EV.repoStatus, found)
     }
   } catch {
     // Locked, not configured or unreadable: the next recheck tries again.
