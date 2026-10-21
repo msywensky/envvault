@@ -59,7 +59,7 @@ async function lockNow(): Promise<void> {
   <SetupView v-if="store.view === 'setup'" />
   <MiniView
     v-else-if="store.mini && (store.view === 'lock' || store.view === 'repos')"
-    :key="`${store.mini.repoName}\n${store.mini.path}`"
+    :key="`${store.mini.repoName}\n${store.mini.paths.join('\n')}`"
   />
   <LockScreen v-else-if="store.view === 'lock'" />
   <div v-else-if="store.view === 'repos' || store.view === 'settings'" class="shell">

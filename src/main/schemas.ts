@@ -60,7 +60,13 @@ export const VaultLocation = z.discriminatedUnion('kind', [
 
 export const LayoutReq = z.discriminatedUnion('layout', [
   z.strictObject({ layout: z.literal('full') }),
-  z.strictObject({ layout: z.literal('mini'), ...File, reviewing: z.boolean() })
+  z.strictObject({
+    layout: z.literal('mini'),
+    repoName: RepoName,
+    paths: z.array(EnvPath).min(1).max(50),
+    reviewing: z.boolean(),
+    compact: z.boolean()
+  })
 ])
 
 export const requestSchemas = {

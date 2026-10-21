@@ -143,7 +143,7 @@ export interface EnvVaultApi {
   /** Write the Claude Code skill. `replace` overwrites a SKILL.md that differs. */
   installSkill(replace: boolean): R<'skill:install'>
   removeSkill(): R<'skill:remove'>
-  /** Switch between the full window and mini mode on one env file. */
+  /** Switch between the full window and mini mode on one env file or all of a repo's. */
   setLayout(layout: Layout): R<'window:setLayout'>
   /** Called when main locks the session. Returns an unsubscribe function. */
   onLocked(callback: () => void): () => void
@@ -154,6 +154,6 @@ export interface EnvVaultApi {
   onAutoPulled(callback: (rows: RepoRow[]) => void): () => void
   /** Called with the row the envvault command just pushed. Must not trigger IPC either. */
   onCliPushed(callback: (row: RepoRow) => void): () => void
-  /** Called with mini mode's env file when main rechecks it. Must not trigger IPC either. */
-  onRepoStatus(callback: (row: RepoRow) => void): () => void
+  /** Called with mini mode's rows when main rechecks them. Must not trigger IPC either. */
+  onRepoStatus(callback: (rows: RepoRow[]) => void): () => void
 }

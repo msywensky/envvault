@@ -20,6 +20,7 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 480,
     show: false,
     title: 'EnvVault',
+    maximizable: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {

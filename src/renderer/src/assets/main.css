@@ -618,13 +618,48 @@ code,
   background: var(--surface);
 }
 
-/* One row: the status, or the unlock form (whose input sets the height). */
+/* The name followed by its status chip; the name truncates before the chip does. */
+.mini-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mini-title .badge {
+  flex: none;
+}
+
+/* One row: a message or the unlock form (whose input sets the height). */
 .mini-body {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 56px;
   padding: 11px 12px;
+}
+
+/* A repo's env files: one row each, scrolling past the three the window fits. */
+.mini-files {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.mini-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mini-row:last-child {
+  border-bottom: 0;
+}
+
+.mini-row .badge {
+  flex: none;
 }
 
 .mini .input[aria-invalid='true'] {

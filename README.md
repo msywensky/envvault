@@ -206,11 +206,13 @@ Off by default; turn it on in **Settings → Sync**. While EnvVault is unlocked,
 
 ### Mini mode
 
-Click **Mini** next to a `.env` to shrink EnvVault to a small window, two rows tall, kept above your other windows: that file's **Push** (or **Pull**) button next to the window's controls, and its status below. Hover over the status for the vault copy's version. Click **Full view** to go back.
+Click **Mini** next to a `.env` to shrink EnvVault to a small window, kept above your other windows: that file's name and status chip, its **Push** (or **Pull**) button next to the window's controls. Hover over the name for the vault copy's version. A second row appears only for a message or the unlock form. Click **Full view** to go back.
+
+A repo with several env files has a **Mini** button on its name row: the window then shows one row per file, each with its status and buttons, up to three rows without scrolling.
 
 <img src="docs/mini.png" width="422" alt="Mini mode: one repo's Push button and status">
 
-- The status updates when that `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
+- The status updates when a `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
 - A file changed on both sides shows **Merge…** or **Resolve…**, which goes back to the full window and opens the dialog there.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
