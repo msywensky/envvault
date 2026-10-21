@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
+import { FolderGit2, Lock, Moon, Settings, Sun } from 'lucide-vue-next'
 import ToastHost from './components/ToastHost.vue'
 import {
   applyAutoPulled,
@@ -11,6 +12,7 @@ import {
   run,
   store
 } from './store'
+import { theme, toggleTheme } from './theme'
 import LockScreen from './views/LockScreen.vue'
 import MiniView from './views/MiniView.vue'
 import ReposView from './views/ReposView.vue'
@@ -75,6 +77,7 @@ async function lockNow(): Promise<void> {
           :class="{ 'tab-active': store.view === 'repos' }"
           @click="store.view = 'repos'"
         >
+          <FolderGit2 />
           Repositories
         </button>
         <button
@@ -83,12 +86,26 @@ async function lockNow(): Promise<void> {
           :class="{ 'tab-active': store.view === 'settings' }"
           @click="store.view = 'settings'"
         >
+          <Settings />
           Settings
         </button>
       </nav>
       <span class="grow" />
       <span class="muted small">{{ store.settings?.machineName }}</span>
-      <button type="button" class="btn btn-sm" @click="lockNow">Lock</button>
+      <button
+        type="button"
+        class="btn btn-icon"
+        :title="theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'"
+        :aria-label="theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'"
+        @click="toggleTheme"
+      >
+        <Sun v-if="theme === 'dark'" />
+        <Moon v-else />
+      </button>
+      <button type="button" class="btn btn-sm" @click="lockNow">
+        <Lock />
+        Lock
+      </button>
     </header>
     <main class="content">
       <ReposView v-if="store.view === 'repos'" />

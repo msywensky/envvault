@@ -4,8 +4,10 @@
 // .env.local) gets a row with its name, then a row per file; files found in
 // folders that nobody has pushed are listed apart, collapsed until asked for.
 import { computed } from 'vue'
+import { Pencil, PictureInPicture2, Settings2, Trash2 } from 'lucide-vue-next'
 import { ROOT_ENV } from '../../../shared/envfile'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
+import { ACTION_ICON } from '../icons'
 import {
   ACTION_LABEL,
   absoluteTime,
@@ -74,6 +76,12 @@ const miniFiles = (g: Group): RepoRow[] =>
   g.files.filter(
     (row) => row.path !== null && row.status !== 'vault-only' && row.status !== 'excluded'
   )
+
+/**
+ * Every repo with local env files gets one Mini button on its repo row. A repo
+ * that is just its root .env has no separate row: its row is the repo's.
+ */
+const hasRepoMini = (g: Group): boolean => !plain(g) && miniFiles(g).length > 0
 </script>
 
 <template>
@@ -97,12 +105,13 @@ const miniFiles = (g: Group): RepoRow[] =>
               </span>
             </div>
             <button
-              v-if="miniFiles(g).length > 1"
+              v-if="hasRepoMini(g)"
               type="button"
               class="btn btn-sm"
               title="Show all of this repo's env files, in a small window"
               @click="$emit('miniRepo', miniFiles(g))"
             >
+              <PictureInPicture2 />
               Mini
             </button>
             <button
@@ -112,6 +121,7 @@ const miniFiles = (g: Group): RepoRow[] =>
               title="Which env files it syncs, the name it syncs as, or ignore it"
               @click="$emit('settings', g.repo)"
             >
+              <Settings2 />
               Settings…
             </button>
           </div>
@@ -155,13 +165,11 @@ const miniFiles = (g: Group): RepoRow[] =>
               type="button"
               class="btn btn-sm"
               :class="{
-                'btn-primary':
-                  i === 0 &&
-                  (line.row.status !== 'conflict' || action === 'resolve') &&
-                  !isQuiet(line.row)
+                'btn-primary': i === 0 && (line.row.status !== 'conflict' || action === 'resolve')
               }"
               @click="$emit('action', line.row, action)"
             >
+              <component :is="ACTION_ICON[action]" />
               {{ ACTION_LABEL[action] }}
             </button>
             <button
@@ -170,6 +178,7 @@ const miniFiles = (g: Group): RepoRow[] =>
               class="btn btn-sm"
               @click="$emit('edit', line.row)"
             >
+              <Pencil />
               Edit
             </button>
             <button
@@ -179,10 +188,12 @@ const miniFiles = (g: Group): RepoRow[] =>
               title="Delete the vault copy. No local file is touched."
               @click="$emit('remove', line.row)"
             >
+              <Trash2 />
               Remove…
             </button>
             <button
               v-if="
+                plain(g) &&
                 line.row.status !== 'vault-only' &&
                 line.row.status !== 'excluded' &&
                 line.row.path !== null &&
@@ -193,6 +204,7 @@ const miniFiles = (g: Group): RepoRow[] =>
               title="Show only this env file, in a small window"
               @click="$emit('mini', line.row)"
             >
+              <PictureInPicture2 />
               Mini
             </button>
             <button
@@ -202,6 +214,7 @@ const miniFiles = (g: Group): RepoRow[] =>
               title="Which env files it syncs, the name it syncs as, or ignore it"
               @click="$emit('settings', g.repo)"
             >
+              <Settings2 />
               Settings…
             </button>
           </div>

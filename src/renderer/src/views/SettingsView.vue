@@ -3,15 +3,16 @@
 // it. Every tab stays mounted, so switching keeps unsaved edits; leaving
 // Settings drops them.
 import { reactive } from 'vue'
+import { Cloud, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-vue-next'
 import SettingsCommandLine from '../components/SettingsCommandLine.vue'
 import SettingsGeneral from '../components/SettingsGeneral.vue'
 import SettingsSync from '../components/SettingsSync.vue'
 import { store, type SettingsTab } from '../store'
 
-const TABS: { id: SettingsTab; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'sync', label: 'Sync' },
-  { id: 'cli', label: 'Command line' }
+const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
+  { id: 'general', label: 'General', icon: SlidersHorizontal },
+  { id: 'sync', label: 'Sync', icon: Cloud },
+  { id: 'cli', label: 'Command line', icon: Terminal }
 ]
 
 const unsaved = reactive<Record<SettingsTab, boolean>>({ general: false, sync: false, cli: false })
@@ -55,6 +56,7 @@ function onKeydown(event: KeyboardEvent): void {
         :tabindex="store.settingsTab === tab.id ? 0 : -1"
         @click="store.settingsTab = tab.id"
       >
+        <component :is="tab.icon" />
         {{ tab.label }}
         <span v-if="unsaved[tab.id]" class="unsaved-dot" title="Unsaved changes">
           <span class="sr-only">(unsaved changes)</span>
