@@ -403,10 +403,18 @@ export interface PullResult {
  */
 export type MergeKind = 'differs' | 'local-only' | 'vault-only'
 
+/** What happened to a key on one side since this machine's last sync. */
+export type KeyChange = 'same' | 'changed' | 'added' | 'removed'
+
 /** A key the user chooses a copy for. */
 export interface MergeKey {
   key: string
   kind: MergeKind
+  /** Since the last sync, on this machine and in the vault copy; null without a base. */
+  here: KeyChange | null
+  there: KeyChange | null
+  /** The copy that changed it, when only one did; null when both did or there's no base. */
+  suggested: MergeTake | null
 }
 
 /**
@@ -435,6 +443,12 @@ export interface MergePreview {
   unmarked: string[]
   /** No key differs and none needs a marker: only formatting, comments or line endings do. */
   formatOnly: boolean
+  /** This machine's last sync of the file is known (its base), so changes have a side. */
+  hasBase: boolean
+  /** Comments and blank lines changed since the last sync, per side; null without a base. */
+  layoutChanged: { local: boolean; vault: boolean } | null
+  /** Every key changed on one side only, and comments on at most one: nothing to decide. */
+  clean: boolean
   vault: VaultInfo
   /** This machine has never synced this file. */
   neverSynced: boolean

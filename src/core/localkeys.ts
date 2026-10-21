@@ -188,3 +188,52 @@ export function keepLocal(vault: string, local: string, machine: Iterable<string
   for (const key of unset) out += `${LOCAL_MARKER}${eol}${key}=${eol}`
   return out
 }
+
+/**
+ * `layout` with each of `keys` taken from `other`: `other`'s lines verbatim
+ * in the layout's position, dropped (with a marker line above) if `other`
+ * lacks the key, or appended in `other`'s order (with `other`'s marker) if
+ * only `other` has it. Everything else stays byte for byte. The mirror of
+ * mergePull's local takes, for a merge in the local file's layout. Throws
+ * DuplicateLocalKeyError if one of `keys` is assigned twice in either file.
+ */
+export function mergeKeys(layout: string, other: string, keys: Iterable<string>): string {
+  const l = scanLines(layout)
+  const o = scanLines(other)
+  const take = new Set(keys)
+  if (take.size === 0) return layout
+  requireSingle(l, take)
+  requireSingle(o, take)
+
+  const eol = l.ends.find((e) => e !== '') ?? o.ends.find((e) => e !== '') ?? '\n'
+  /** `other`'s lines of `key`'s assignment, the last one ending in `end`. */
+  const otherLines = (key: string, end: string): string => {
+    const a = o.byKey.get(key)?.[0]
+    if (!a) return ''
+    let text = ''
+    for (let k = a.first; k < a.last; k++) text += (o.lines[k] ?? '') + (o.ends[k] ?? '')
+    return text + (o.lines[a.last] ?? '') + end
+  }
+  const dropped = l.assignments.filter((a) => take.has(a.key) && !o.byKey.has(a.key))
+  const droppedMarkers = new Set(
+    dropped.filter((a) => l.markerLines.has(a.first - 1)).map((a) => a.first - 1)
+  )
+
+  let out = l.bom
+  for (let i = 0; i < l.lines.length; i++) {
+    const a = l.starts.get(i)
+    if (droppedMarkers.has(i)) continue
+    if (a && take.has(a.key)) {
+      out += otherLines(a.key, l.ends[a.last] ?? '')
+      i = a.last
+    } else {
+      out += (l.lines[i] ?? '') + (l.ends[i] ?? '')
+    }
+  }
+  const added = o.assignments.filter((a) => take.has(a.key) && !l.byKey.has(a.key))
+  if (added.length > 0 && out !== l.bom && !out.endsWith('\n')) out += eol
+  for (const a of added) {
+    out += (o.marked.has(a.key) ? LOCAL_MARKER + eol : '') + otherLines(a.key, eol)
+  }
+  return out
+}

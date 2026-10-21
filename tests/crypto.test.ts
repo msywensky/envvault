@@ -15,10 +15,12 @@ import {
   fileTagger,
   makeKeyCheck,
   makePayload,
+  openBase,
   parseMeta,
   randomSalt,
   randomSecret,
   secretIdOf,
+  sealBase,
   secretMatches,
   serializeMeta,
   sha256Hex,
@@ -406,5 +408,41 @@ describe('format 2: a vault secret', () => {
     const withoutId: Record<string, unknown> = { ...json }
     delete withoutId['secretId']
     expect(() => parseMeta(withoutId)).toThrow(MetaInvalidError)
+  })
+})
+
+describe('merge bases', () => {
+  const ref = {
+    vaultId: '3f1c2b8e-5d4a-4c3b-9a2e-1f0e9d8c7b6a',
+    stateId: 'webapp/0123456789abcdef',
+    version: 3,
+    contentHash: 'a'.repeat(64)
+  }
+
+  it('opens only for the exact vault, file, version and hash it was sealed for', async () => {
+    const k = await key()
+    const sealed = await sealBase(k, ref, sample())
+    expect(Buffer.from(await openBase(k, ref, sealed)).toString()).toBe(
+      Buffer.from(sample()).toString()
+    )
+    expect(Buffer.from(sealed).includes('SECRET')).toBe(false)
+    for (const other of [
+      { ...ref, vaultId: '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d' },
+      { ...ref, stateId: 'webapp' },
+      { ...ref, version: 4 },
+      { ...ref, contentHash: 'b'.repeat(64) }
+    ]) {
+      await expect(openBase(k, other, sealed)).rejects.toBeInstanceOf(VaultTamperError)
+    }
+    await expect(openBase(await key(), ref, sealed)).rejects.toBeInstanceOf(VaultTamperError)
+  })
+
+  it('never opens as an entry or the settings, or the other way round', async () => {
+    const k = await key()
+    const sealed = await sealBase(k, ref, sample())
+    await expect(decryptPayload(k, 'webapp', sealed)).rejects.toBeInstanceOf(VaultTamperError)
+    await expect(decryptSettings(k, sealed)).rejects.toBeInstanceOf(VaultTamperError)
+    const root = await encryptPayload(k, 'webapp', makePayload(sample(), 3, 'm'))
+    await expect(openBase(k, ref, root)).rejects.toBeInstanceOf(VaultTamperError)
   })
 })

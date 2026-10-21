@@ -59,6 +59,10 @@ const entryAad = (repoName: string): string => `envvault:v1:${repoName}`
 const fileEntryAad = (repoId: string, tag: string): string => `envvault:file:v1:${repoId}/${tag}`
 // One settings document per vault: no entry opens as settings, or the other way round.
 const SETTINGS_AAD = 'envvault:settings:v1'
+// A base (see sealBase) is bound to the exact last sync it records. JSON, so
+// no field can run into the next.
+const baseAad = (ref: BaseRef): string =>
+  `envvault:base:v1:${JSON.stringify([ref.vaultId, ref.stateId, ref.version, ref.contentHash])}`
 const FILE_TAG_BYTES = 8
 
 async function lib(): Promise<typeof sodium> {
@@ -322,6 +326,54 @@ export function encryptSettings(key: Uint8Array, settings: object): Promise<Uint
  */
 export function decryptSettings(key: Uint8Array, bytes: Uint8Array): Promise<unknown> {
   return openJson(key, SETTINGS_AAD, bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Merge bases: what this machine last synced of each env file, kept outside
+// the vault (see main/bases.ts).
+
+/** The last sync a base records: the vault, the state.json key, and its version and hash. */
+export interface BaseRef {
+  vaultId: string
+  stateId: string
+  version: number
+  contentHash: string
+}
+
+/** The key bases are sealed with: derived from the vault key, so they open only while unlocked. */
+function baseKey(key: Uint8Array): Uint8Array {
+  return new Uint8Array(hkdfSync('sha256', key, new Uint8Array(0), 'envvault:base:v1', KEY_BYTES))
+}
+
+/** Encrypt a base, bound to `ref`. */
+export async function sealBase(
+  key: Uint8Array,
+  ref: BaseRef,
+  bytes: Uint8Array
+): Promise<Uint8Array> {
+  const k = baseKey(key)
+  try {
+    return await seal(k, baseAad(ref), bytes)
+  } finally {
+    k.fill(0)
+  }
+}
+
+/**
+ * Decrypt a base sealed for exactly `ref`. Any other vault, file, version or
+ * hash, or any tampering, is a VaultTamperError. The caller wipes the result.
+ */
+export async function openBase(
+  key: Uint8Array,
+  ref: BaseRef,
+  bytes: Uint8Array
+): Promise<Uint8Array> {
+  const k = baseKey(key)
+  try {
+    return await open(k, baseAad(ref), bytes)
+  } finally {
+    k.fill(0)
+  }
 }
 
 async function sealJson(key: Uint8Array, aad: string, value: object): Promise<Uint8Array> {
