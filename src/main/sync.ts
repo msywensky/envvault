@@ -157,6 +157,40 @@ async function recordSync(
   await saveBase(key, vaultId, id, last, bytes)
 }
 
+/**
+ * Whether a conflict's changes don't overlap, so the file is Both changed:
+ * this machine has a base for its last sync, and compareEnv calls the merge
+ * clean. For the list only; anything that goes wrong leaves it a conflict.
+ */
+async function mergesCleanly(
+  key: Uint8Array,
+  vaultId: string,
+  id: string,
+  last: LastSync,
+  repoDir: string,
+  path: string,
+  payload: Payload
+): Promise<boolean> {
+  let base: Buffer | null = null
+  let local: Buffer | null = null
+  let vault: Buffer | null = null
+  try {
+    base = await loadBase(key, vaultId, id, last)
+    if (!base) return false
+    const envDir = await resolveEnvDir(repoDir, path)
+    local = envDir ? await readEnvFile(envDir, path) : null
+    if (!local) return false
+    vault = decodeEnv(payload)
+    return compareEnv(local.toString('utf8'), vault.toString('utf8'), base.toString('utf8')).clean
+  } catch {
+    return false
+  } finally {
+    base?.fill(0)
+    local?.fill(0)
+    vault?.fill(0)
+  }
+}
+
 /** Just the file, from a request that names one. */
 const fileOf = (req: EnvFile): EnvFile => ({ repoName: req.repoName, path: req.path })
 
@@ -454,7 +488,18 @@ async function repoRows(
           }
         }
       }
-      return { ...fields, status, vault, error: null }
+      // Both sides changed, but not the same keys: a reviewed merge, not a conflict.
+      const entry = f.listed?.entry
+      const refined =
+        status === 'conflict' &&
+        entry &&
+        last &&
+        scan &&
+        !rolledBack(toInfo(entry.payload), last) &&
+        (await mergesCleanly(keys.key, vaultId, key, last, scan.dir, f.path, entry.payload))
+          ? 'both-changed'
+          : status
+      return { ...fields, status: refined, vault, error: null }
     } catch (err) {
       if (!(err instanceof AppError)) throw err
       return { ...fields, status: 'error', vault: null, error: errorInfo(err) }

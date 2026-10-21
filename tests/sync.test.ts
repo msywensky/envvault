@@ -944,9 +944,14 @@ describe('automatic pull', () => {
 
     const b2 = await machine('b')
     const { key, vaultId } = await b2.open()
+    // Different keys on each side: a merge, never automatic.
+    expect((await rows(b2))['ap1']).toBe('both-changed')
+    expect(await b2.sync.autoPull(key, vaultId, envFile('ap1'))).toBeNull()
+    // The same key on both sides: a conflict, never automatic either.
+    writeFileSync(envB('ap1'), 'A=9\nB_ONLY=1\n# envvault:local\nDB=/b\n')
     expect((await rows(b2))['ap1']).toBe('conflict')
     expect(await b2.sync.autoPull(key, vaultId, envFile('ap1'))).toBeNull()
-    expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=2\nB_ONLY=1\n# envvault:local\nDB=/b\n')
+    expect(readFileSync(envB('ap1'), 'utf8')).toBe('A=9\nB_ONLY=1\n# envvault:local\nDB=/b\n')
 
     // Resolve by hand (keep vault), then let v4 arrive automatically.
     await pullRepo(b2, 'ap1')
@@ -2148,7 +2153,8 @@ describe('resolving a conflict', { timeout: 30_000 }, () => {
     writeFileSync(envOf(mpB, 'mix'), '# mine\nSAME=1\nA=1\nB=2\n')
 
     const b = await on('b')
-    expect((await rows(b))['mix']).toBe('conflict')
+    // No key changed on both sides: Both changed (see describe('three-way')).
+    expect((await rows(b))['mix']).toBe('both-changed')
     const { key, vaultId } = await b.open()
     const preview = await b.sync.previewMerge(key, vaultId, envFile('mix'))
     expect(preview).toMatchObject({
@@ -2411,9 +2417,9 @@ describe('marking a key machine-specific', { timeout: 30_000 }, () => {
     expect(readFileSync(envOf(kpA, 'ports'), 'utf8')).toBe(`A=1\n${M}\nPORT=3000\n`)
     expect((await rows(a))['ports']).toBe('in-sync')
 
-    // B changed PORT meanwhile: a conflict with nothing to choose, which marks B's value.
+    // B changed PORT meanwhile: Both changed with nothing to choose, which marks B's value.
     const b = await on('b')
-    expect((await rows(b))['ports']).toBe('conflict')
+    expect((await rows(b))['ports']).toBe('both-changed')
     const k = await b.open()
     const preview = await b.sync.previewMerge(k.key, k.vaultId, envFile('ports'))
     expect(preview).toMatchObject({
@@ -2647,6 +2653,7 @@ describe('three-way', { timeout: 30_000 }, () => {
     )
 
     const b = await on('b')
+    expect((await rows(b))['clean']).toBe('both-changed')
     const p = await preview(b, 'clean')
     expect(p).toMatchObject({
       hasBase: true,
@@ -2676,7 +2683,9 @@ describe('three-way', { timeout: 30_000 }, () => {
     await pushRepo(await on('a'), 'both')
     writeFileSync(envOf(twB, 'both'), 'A=1\nPORT=4000\n')
 
-    const p = await preview(await on('b'), 'both')
+    const b = await on('b')
+    expect((await rows(b))['both']).toBe('conflict')
+    const p = await preview(b, 'both')
     expect(p.clean).toBe(false)
     expect(p.keys.map((k) => [k.key, k.suggested])).toEqual([
       ['A', 'vault'],
@@ -2701,6 +2710,7 @@ describe('three-way', { timeout: 30_000 }, () => {
     writeFileSync(envOf(twA, 'notes'), '# from a\nA=3\n\n# note\nB=2\n')
     await pushRepo(await on('a'), 'notes')
     writeFileSync(envOf(twB, 'notes'), '# from b\nA=2\n\n# note\nB=2\n')
+    expect((await rows(await on('b')))['notes']).toBe('conflict')
     expect(await preview(await on('b'), 'notes')).toMatchObject({
       clean: false,
       layoutChanged: { local: true, vault: true }
@@ -2721,6 +2731,7 @@ describe('three-way', { timeout: 30_000 }, () => {
     const files = readdirSync(dir)
     for (const f of files) writeFileSync(join(dir, f), Buffer.from('tampered'))
     expect(await preview(b, 'nobase')).toMatchObject({ hasBase: false, clean: false })
+    expect((await rows(b))['nobase']).toBe('conflict')
     expect((await preview(b, 'nobase')).keys.every((k) => k.suggested === null)).toBe(true)
     expect(before.size).toBe(files.length)
 

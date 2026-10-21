@@ -13,7 +13,7 @@ A desktop app (Electron + Vue 3 + TypeScript, macOS and Windows) that keeps your
 - [Install](#install)
 - [Setup](#setup)
 - [Using it](#using-it)
-  - [Resolving a conflict](#resolving-a-conflict)
+  - [Merging and resolving conflicts](#merging-and-resolving-conflicts)
   - [Machine-specific keys](#machine-specific-keys)
   - [`.env.example` checks](#envexample-checks)
   - [Monorepos](#monorepos)
@@ -42,18 +42,19 @@ Projects folder (each machine)                  Vault folder (synced by Google D
 
 The vault can also be a **private git repository** instead of a synced folder: the same files, on one branch, which EnvVault fetches and pushes itself (see [Git vaults](docs/security.md#git-vaults)).
 
-**Sync status** is three-way: local file, vault copy, and what this machine last synced. That separates "local newer", "vault newer" and "conflict". A vault copy whose version went backwards (a rollback) is shown as a conflict, never offered as a simple pull. The one exception is when it is byte-identical to your local file: then nothing would change either way, and it shows as in sync.
+**Sync status** is three-way: local file, vault copy, and what this machine last synced. That separates "local newer", "vault newer" and changes on both sides. When both sides changed, EnvVault compares them with what this machine last synced (kept encrypted, see [Merging](#merging-and-resolving-conflicts)): changes to different keys are **Both changed** and merge with a review, and only the same key changed on both sides is a **conflict**. A vault copy whose version went backwards (a rollback) is shown as a conflict, never offered as a simple pull. The one exception is when it is byte-identical to your local file: then nothing would change either way, and it shows as in sync.
 
-| Status      | Meaning                                                                                      | Action   |
-| ----------- | -------------------------------------------------------------------------------------------- | -------- |
-| In sync     | Local and vault are byte-identical, apart from machine-specific values                       | —        |
-| Local only  | Never pushed                                                                                 | Push     |
-| Local newer | Only you changed it since the last sync                                                      | Push     |
-| Vault newer | Only another machine changed it                                                              | Pull     |
-| Conflict    | Both changed, or they differ and this machine never synced them, or the vault went backwards | Resolve… |
-| Vault only  | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it   | Remove…  |
-| Excluded    | In the vault, but the repo's settings no longer sync it                                      | Remove…  |
-| No .env     | Nothing on either side                                                                       | —        |
+| Status       | Meaning                                                                                                    | Action   |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | -------- |
+| In sync      | Local and vault are byte-identical, apart from machine-specific values                                     | —        |
+| Local only   | Never pushed                                                                                               | Push     |
+| Local newer  | Only you changed it since the last sync                                                                    | Push     |
+| Vault newer  | Only another machine changed it                                                                            | Pull     |
+| Both changed | Both changed it since the last sync, but not the same keys                                                 | Merge…   |
+| Conflict     | The same key changed on both sides, or EnvVault can't tell what changed where, or the vault went backwards | Resolve… |
+| Vault only   | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it                 | Remove…  |
+| Excluded     | In the vault, but the repo's settings no longer sync it                                                    | Remove…  |
+| No .env      | Nothing on either side                                                                                     | —        |
 
 Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in **Settings → Sync**). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
 
@@ -94,11 +95,13 @@ npm run build      # typecheck and build to out/
    - **a private git repository:** **Create a new vault repository** makes a private one on your GitHub account through the GitHub CLI, or, without it, opens GitHub's new-repository page so you can paste its URL. **Select an existing one** lists your private GitHub repositories, and always takes a pasted URL (GitHub, GitLab, a server of your own). Use a repository just for the vault: EnvVault refuses one that holds other files, and one that isn't private. For a server of your own that can't be checked from outside (SSH only, say), EnvVault asks you to confirm that the repository is private, once.
      Creating it also offers **Require a setup code on every machine**, on by default and always on for a git vault. EnvVault then shows the vault's setup code once (`EV-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX`): save it in your password manager next to the master password, and type its last group to continue. You can show it again in **Settings → General**, after entering the password.
 2. **Other machines:** choose the same vault folder (wait for Drive to finish syncing first) or the same repository, and unlock it with the same password, plus the setup code the first time on each machine. EnvVault won't offer to create a vault where encrypted files already are.
-3. Push and pull from the Repositories table. For a conflict, click **Resolve…** to choose a copy for each key that differs (see below).
+3. Push and pull from the Repositories table. When both sides changed, click **Merge…** or, for a conflict, **Resolve…** (see below).
 
-### Resolving a conflict
+### Merging and resolving conflicts
 
-A conflict means both copies changed since this machine last synced, or they differ and this machine never synced them. **Resolve…** merges them key by key:
+When this machine and another both changed a file since the last sync, EnvVault compares both copies with what this machine last synced (its base, kept encrypted). If they changed different keys, the file is **Both changed**: **Merge…** shows the key names coming in from the vault copy and going out from this machine, and **Merge** writes the result to both sides, backing up your `.env` first. **Choose key by key…** opens the full table instead. Automatic pull never merges.
+
+A **conflict** means the same key changed on both sides, or EnvVault can't tell what changed where (this machine never synced the file, or last synced it with an older version of EnvVault). **Resolve…** merges the copies key by key:
 
 - Every key whose copies differ is listed by name: different values, only on this machine, or only in the vault copy. Choose which copy each one comes from. **Use this machine's for all** and **Use the vault's for all** set every key at once.
 - If a key differs because each machine should have its own value (a port, a local path), choose **Machine-specific**: your `.env` keeps your value and gets the [marker](#machine-specific-keys), and the vault copy keeps the key without a value.
@@ -127,7 +130,7 @@ DATA_DIR=/Users/me/data
 - If the vault marks a key but your `.env` doesn't, pushing uploads your value and drops the marker. The push dialog warns you first.
 - A marked key must be assigned only once in the file.
 
-You can also mark a key from the app: **Machine-specific** in the [Resolve dialog](#resolving-a-conflict) or in the [editor](#editing-the-vault-copy), or, when a pull would change a key's value, **Should any of these differ on each machine?** in the pull dialog (the button becomes **Pull and mark**). Either way the vault copy keeps the key without its value, and each machine adds the marker the next time it pulls, keeping its own value. Pull and mark writes a new version of the vault copy as well as your `.env`.
+You can also mark a key from the app: **Machine-specific** in the [Resolve dialog](#merging-and-resolving-conflicts) or in the [editor](#editing-the-vault-copy), or, when a pull would change a key's value, **Should any of these differ on each machine?** in the pull dialog (the button becomes **Pull and mark**). Either way the vault copy keeps the key without its value, and each machine adds the marker the next time it pulls, keeping its own value. Pull and mark writes a new version of the vault copy as well as your `.env`.
 
 To make a key shared again, remove its `# envvault:local` line in the `.env` on each machine, then push. Removing it in only one place isn't enough: a pull keeps a key that your `.env` marks, and the next push from that machine marks it in the vault again.
 
@@ -195,7 +198,7 @@ Click **Remove…** on a Vault only row (a repo or package that's gone), or **Re
 
 Off by default; turn it on in **Settings → Sync**. While EnvVault is unlocked, it checks every minute (and right after you unlock or save an edit) for `.env` files whose vault copy changed on another machine while your file didn't, and pulls them for you. You get a toast, and if EnvVault isn't the focused window, a system notification. macOS shows notifications only for code-signed apps, so unsigned builds (including dev runs) badge the Dock icon with the number of pulls and bounce it once instead; the badge clears when you switch to EnvVault. On Windows the taskbar button flashes if a notification can't be shown.
 
-- It never pulls a conflict, a rollback, or a `.env` that isn't git-ignored or is tracked; those keep their **Pull** button. Nor one whose folder isn't there.
+- It never pulls a file changed on both sides (Both changed or a conflict), a rollback, or a `.env` that isn't git-ignored or is tracked; those keep their **Pull** button. Nor one whose folder isn't there.
 - It creates a missing `.env` when the vault has a copy, including one you deleted.
 - It saves a backup first if backups are on, like a manual pull. A running dev server that watches `.env` may restart when the file changes.
 - It stops when EnvVault locks; it doesn't keep the vault unlocked.
@@ -209,7 +212,7 @@ Click **Mini** next to a `.env` to shrink EnvVault to a small window, two rows t
 
 - The status updates when that `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
-- A conflict shows **Resolve…**, which goes back to the full window and opens the Resolve dialog there.
+- A file changed on both sides shows **Merge…** or **Resolve…**, which goes back to the full window and opens the dialog there.
 - When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
 - **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in **Settings → General**.
 

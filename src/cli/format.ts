@@ -12,6 +12,7 @@ const STATUS: Record<Exclude<RowStatus, 'error'>, string> = {
   'local-newer': 'local newer: push to update the vault',
   'local-only': 'local only: push to add it to the vault',
   'vault-newer': 'vault newer: another machine pushed',
+  'both-changed': 'both changed: merge it in EnvVault',
   conflict: 'conflict: resolve it in EnvVault',
   'vault-only': 'vault only: its repo or folder is not in your projects folder',
   'no-env': 'no .env here or in the vault',

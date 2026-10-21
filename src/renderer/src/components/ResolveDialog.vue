@@ -77,7 +77,25 @@ const valuesLoading = ref(false)
 let valuesGen = 0
 let hideTimer: ReturnType<typeof setTimeout> | null = null
 
+// A clean merge (Both changed): reviewed as what comes in and goes out, like a
+// push or pull, until the user asks to choose key by key. Before the
+// comparison loads, the row's status says which this is.
+const merging = computed(() =>
+  preview.value ? preview.value.clean : props.repo.status === 'both-changed'
+)
+const keyByKey = ref(false)
+const summary = computed(
+  () => preview.value?.clean === true && preview.value.keys.length > 0 && !keyByKey.value
+)
+const fromVault = computed(() => preview.value?.keys.filter((k) => k.suggested === 'vault') ?? [])
+const fromHere = computed(() => preview.value?.keys.filter((k) => k.suggested === 'local') ?? [])
+const chipClass = (change: KeyChange | null): string =>
+  change === 'added' ? 'chip-added' : change === 'removed' ? 'chip-removed' : 'chip-changed'
+
 const subtitle = computed(() => {
+  if (merging.value) {
+    return 'This machine and another changed it since the last sync, but not the same keys.'
+  }
   if (!preview.value) return 'Choose which copy each key comes from.'
   return preview.value.neverSynced
     ? 'This machine has never synced this file, and the two copies differ.'
@@ -270,11 +288,12 @@ async function save(): Promise<void> {
   if (res.ok) {
     const name = fileTitle(props.repo)
     const version = `v${res.data.row.vault?.version ?? '?'}`
+    const done = merging.value ? 'Merged' : 'Resolved'
     toast(
       'success',
       res.data.backupName
-        ? `Resolved ${name} (${version}). Previous .env saved as ${res.data.backupName}.`
-        : `Resolved ${name} (${version}).`
+        ? `${done} ${name} (${version}). Previous .env saved as ${res.data.backupName}.`
+        : `${done} ${name} (${version}).`
     )
     emit('done')
   } else await failed(res.error.code, res.error.message)
@@ -317,7 +336,9 @@ watch(
     @cancel.prevent="emit('close')"
   >
     <div class="dialog-header">
-      <h2 id="resolve-title">Resolve conflict: {{ fileTitle(repo) }}</h2>
+      <h2 id="resolve-title">
+        {{ merging ? 'Merge' : 'Resolve conflict' }}: {{ fileTitle(repo) }}
+      </h2>
       <p class="muted small">{{ subtitle }}</p>
     </div>
 
@@ -335,7 +356,47 @@ watch(
         </p>
 
         <template v-else>
-          <p v-if="preview.keys.length === 0 && preview.unmarked.length" class="notice notice-info">
+          <!-- The Merge review: key names only, like the push and pull dialogs. -->
+          <template v-if="summary">
+            <div v-if="fromVault.length" class="diff-group">
+              <h3>From the vault copy ({{ fromVault.length }})</h3>
+              <div class="chips">
+                <code
+                  v-for="k in fromVault"
+                  :key="k.key"
+                  class="chip"
+                  :class="chipClass(k.there)"
+                  :title="changeLabel(k)"
+                  >{{ k.key }}</code
+                >
+              </div>
+            </div>
+            <div v-if="fromHere.length" class="diff-group">
+              <h3>From this machine ({{ fromHere.length }})</h3>
+              <div class="chips">
+                <code
+                  v-for="k in fromHere"
+                  :key="k.key"
+                  class="chip"
+                  :class="chipClass(k.here)"
+                  :title="changeLabel(k)"
+                  >{{ k.key }}</code
+                >
+              </div>
+            </div>
+            <div class="row">
+              <span class="grow muted small">
+                Each key changed on one side only, so it comes from that side. {{ sameInBoth }}
+              </span>
+              <button type="button" class="btn btn-sm" :disabled="busy" @click="keyByKey = true">
+                Choose key by key…
+              </button>
+            </div>
+          </template>
+          <p
+            v-else-if="preview.keys.length === 0 && preview.unmarked.length"
+            class="notice notice-info"
+          >
             No key needs a choice. The vault copy marks some of your keys machine-specific: saving
             keeps your values and marks them in your .env too.
           </p>
@@ -558,7 +619,7 @@ watch(
         @click="save"
       >
         <span v-if="busy" class="spinner" />
-        Save
+        {{ merging ? 'Merge' : 'Save' }}
       </button>
     </div>
   </dialog>
