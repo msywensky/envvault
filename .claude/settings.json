@@ -1,0 +1,113 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run check:*)",
+      "Bash(node scripts/verify.mjs:*)",
+      "Bash(cymbal search:*)",
+      "Bash(cymbal investigate:*)",
+      "Bash(cymbal context:*)",
+      "Bash(cymbal show:*)",
+      "Bash(cymbal outline:*)",
+      "Bash(cymbal trace:*)",
+      "Bash(cymbal impact:*)",
+      "Bash(cymbal impls:*)",
+      "Bash(cymbal refs:*)",
+      "Bash(cymbal importers:*)",
+      "Bash(cymbal changed:*)",
+      "Bash(cymbal diff:*)",
+      "Bash(cymbal structure:*)",
+      "Bash(cymbal ls:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git fetch:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git worktree list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)"
+    ],
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm start:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(cymbal hook:*)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(/**/.env)",
+      "Read(/**/.env.*)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Edit(/**/.env)",
+      "Edit(/**/.env.*)",
+      "Edit(/tests/fixtures/**)",
+      "Edit(package-lock.json)",
+      "Edit(/package-lock.json)",
+      "Edit(out/**)",
+      "Edit(dist/**)",
+      "Edit(.git/**)",
+      "Edit(/out/**)",
+      "Edit(/dist/**)",
+      "Edit(/.git/**)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(rm -rf:*)",
+      "Bash(npm publish:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/claude-hook.mjs", "lint-file"],
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/claude-hook.mjs", "guard"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/claude-hook.mjs", "typecheck"],
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

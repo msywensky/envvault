@@ -9,7 +9,7 @@
 - `tests/store.test.ts` — the `VaultStore` contract, `describe.each` over folder, memory and git stores, then store-specific behaviour.
 - `tests/vault.test.ts` — vault policy on a `MemoryStore`: states, create/open, tampering, entries, settings.
 - `tests/vaultfixture.test.ts` — opens `tests/fixtures/vault-format2` and writes on top. **Never regenerate the fixture**: a failure means existing vaults broke. `.enc` files are binary in `.gitattributes`; Prettier skips `tests/fixtures`.
-- Others: `session`/`config` (auto-lock and defaults), `bases`, `secrets` (mocked `safeStorage`), `gitprivacy`, `gitvault`, `gh` (fake `GhRunner`), `cli` (real socket), `skill`.
+- Others: `session`/`config` (auto-lock and defaults), `bases`, `secrets` (mocked `safeStorage`), `gitprivacy`, `gitvault`, `gh` (fake `GhRunner`), `cli` (real socket), `skill`, `claude-hook` (runs `scripts/claude-hook.mjs` and `scripts/verify.mjs`, the Claude Code hooks and `npm run check`).
 
 ## Caveats
 

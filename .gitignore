@@ -7,3 +7,8 @@ dist
 *.log
 .DS_Store
 .eslintcache
+
+# Claude Code: personal settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
+.cymbal/

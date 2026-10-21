@@ -16,6 +16,7 @@ npx vitest run tests/paths.test.ts           # one file
 npx vitest run tests/sync.test.ts -t "pull"  # tests matching a name
 npm run lint                                 # eslint, --max-warnings 0 (warnings fail)
 npm run typecheck                            # tsc for the node side + vue-tsc for the renderer
+npm run check                                # lint + typecheck, then tests: failures and a summary only
 npm run build                                # typecheck, electron-vite build to out/, then build:cli
 npm run build:cli                            # the envvault command only: out/cli/envvault.mjs
 npm start                                    # run the production build (strict CSP, file://)
@@ -28,6 +29,8 @@ npm run format                               # prettier
 - `ENVVAULT_PROFILE=<name>` (unpackaged runs only, i.e. `npm run dev` / `npm start`) gives the run its own `userData` folder (`<appData>/envvault-<name>`), so two "machines" can share one vault folder. `src/main/profile.ts` silently ignores names that don't match `PROFILE_RE` (`src/shared/cli.ts`, also used by the CLI's `--profile`) and falls back to the real settings, so use `npm run dev:profile` (`scripts/dev-profile.mjs`), which validates the name and refuses instead. Its regex must stay in sync with `PROFILE_RE`.
 - To inspect the running app, start it with `npx electron-vite dev --remoteDebuggingPort 9222` (or `npx electron . --remote-debugging-port=9223` after a build) and drive `window.envvault` over CDP. The packaged app refuses those switches and has DevTools off (`src/main/index.ts`, `window.ts`), so CDP works only unpackaged. When testing that CSP blocks `eval`, pass `allowUnsafeEvalBlockedByCSP: false` to `Runtime.evaluate`; it defaults to true.
 - Commit messages use conventional-commit style with a scope: `feat(core): ...`, `feat(main): ...`, `feat(ui): ...`, `chore: ...`.
+- Run `npm run check` (or `/check`) after changing code and before calling work done. Claude Code hooks (`.claude/settings.json`, `scripts/claude-hook.mjs`) lint each edited file, typecheck at the end of a turn that edited code, and block env file reads and destructive git/rm commands. `docs/claude-orchestration-plan.md` describes the setup.
+- Navigation: use cymbal for TypeScript (`investigate`, `trace`, `impact`, `changed`, `outline`, `show`) before grep. It does not index `.vue`; use Grep/Read for renderer components. For your own changes, `cymbal changed --base "$(git merge-base origin/main HEAD)" --no-federate` lists what they touch; with several worktrees, pass `--no-federate` to every cymbal command. Reviews (`/ev-review`) compute their base from the PR, since stacked PRs aren't based on `main`.
 
 ## Architecture
 
