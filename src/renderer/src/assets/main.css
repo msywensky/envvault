@@ -508,12 +508,6 @@ code,
   font-size: 12.5px;
 }
 
-/* Found in a folder, never pushed: listed apart, and quieter. */
-.quiet-toggle td {
-  padding-top: 4px;
-  padding-bottom: 10px;
-}
-
 .row-quiet td {
   color: var(--muted);
 }
