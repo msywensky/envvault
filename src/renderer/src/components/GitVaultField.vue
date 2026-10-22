@@ -104,7 +104,7 @@ const updated = (iso: string): string => {
       <div class="folder">
         <span class="folder-path" :title="current.url">{{ current.url }}</span>
         <button type="button" class="btn btn-sm" :disabled="busy" @click="changing = true">
-          Change…
+          Change
         </button>
       </div>
       <p class="muted small">

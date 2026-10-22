@@ -15,7 +15,6 @@ import type {
   Settings,
   SettingsRequest
 } from '../../shared/types'
-import { fileOf } from './status'
 
 export type View = 'loading' | 'setup' | 'lock' | 'repos' | 'settings'
 
@@ -198,23 +197,14 @@ export function applyRepoStatus(rows: RepoRow[]): void {
   patchRepos(rows)
 }
 
-/** Shrink the window to one env file. The view switches first, so it never shows squeezed. */
-export async function enterMini(row: RepoRow): Promise<void> {
-  await enterMiniTarget(row.name, [fileOf(row).path], !row.error)
-}
-
-/** Shrink the window to all of a repo's env files. */
+/** Shrink the window to all of a repo's env files. The view switches first, so it never shows squeezed. */
 export async function enterMiniRepo(rows: RepoRow[]): Promise<void> {
   const repoName = rows[0]?.name
   const paths = rows.flatMap((row) => (row.path === null ? [] : [row.path]))
   if (repoName === undefined || paths.length === 0) return
-  await enterMiniTarget(repoName, paths, false)
-}
-
-async function enterMiniTarget(repoName: string, paths: string[], compact: boolean): Promise<void> {
   store.mini = { repoName, paths }
   const res = await call(() =>
-    window.envvault.setLayout({ layout: 'mini', repoName, paths, reviewing: false, compact })
+    window.envvault.setLayout({ layout: 'mini', repoName, paths, reviewing: false })
   )
   if (!res.ok) {
     store.mini = null

@@ -64,8 +64,7 @@ export const LayoutReq = z.discriminatedUnion('layout', [
     layout: z.literal('mini'),
     repoName: RepoName,
     paths: z.array(EnvPath).min(1).max(50),
-    reviewing: z.boolean(),
-    compact: z.boolean()
+    reviewing: z.boolean()
   })
 ])
 

@@ -17,7 +17,7 @@ import RepoSettingsDialog from '../components/RepoSettingsDialog.vue'
 import RepoTable from '../components/RepoTable.vue'
 import ResolveDialog from '../components/ResolveDialog.vue'
 import SyncDialog from '../components/SyncDialog.vue'
-import { call, enterMini, enterMiniRepo, loadRepos, store, toast } from '../store'
+import { call, enterMiniRepo, loadRepos, store, toast } from '../store'
 import {
   actionsFor,
   folderName,
@@ -200,7 +200,6 @@ onMounted(async () => {
         :repos="listed.repos"
         @action="onAction"
         @edit="editing = $event"
-        @mini="enterMini"
         @mini-repo="enterMiniRepo"
         @remove="removing = $event"
         @settings="configuring = $event"
