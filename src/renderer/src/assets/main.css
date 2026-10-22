@@ -279,6 +279,18 @@ code,
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent);
 }
 
+.input[aria-invalid='true'] {
+  border-color: var(--danger-text);
+}
+
+.input[aria-invalid='true']:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger-text) 25%, transparent);
+}
+
+.field-error {
+  color: var(--danger-text);
+}
+
 .input-narrow {
   width: 110px;
 }
@@ -476,6 +488,11 @@ code,
   padding: 20px;
 }
 
+.form-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 .center-screen {
   display: grid;
   place-items: center;
@@ -514,7 +531,6 @@ code,
   font-weight: 600;
   letter-spacing: 0.02em;
   text-align: left;
-  text-transform: uppercase;
 }
 
 .table td {
@@ -534,8 +550,24 @@ code,
   white-space: nowrap;
 }
 
+/* Right-align the buttons so Mini and Settings line up whatever the first button is. */
+.table .col-actions .row,
+.repo-group .row {
+  justify-content: flex-end;
+}
+
 .row-dim td {
   color: var(--muted);
+}
+
+/* Smaller, so "v2 · acerpc" and its age stay on one line each. */
+.col-vault-copy {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.col-vault-copy .small {
+  font-size: 11.5px;
 }
 
 .repo-name {
@@ -565,6 +597,10 @@ code,
 
 .row-quiet td {
   color: var(--muted);
+}
+
+.row-quiet .file-path {
+  color: var(--text);
 }
 
 .empty {

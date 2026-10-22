@@ -73,58 +73,70 @@ async function back(): Promise<void> {
           </p>
         </div>
 
-        <FolderField
-          label="Projects folder"
-          :path="store.settings?.projectsPath ?? null"
-          hint="The folder that contains your git repositories (one level deep)."
-          :busy="busy"
-          @pick="pick('projects')"
-        />
-        <fieldset class="field">
-          <legend>Vault</legend>
-          <div class="choice">
-            <label
-              class="choice-option"
-              :class="{ 'choice-option-active': vaultKind === 'folder' }"
-            >
-              <input v-model="vaultKind" type="radio" name="vault-kind" value="folder" />
-              <span class="choice-text">
-                <strong>A synced folder</strong>
-                <span class="muted small">Google Drive, Dropbox, iCloud…</span>
-              </span>
-            </label>
-            <label class="choice-option" :class="{ 'choice-option-active': vaultKind === 'git' }">
-              <input v-model="vaultKind" type="radio" name="vault-kind" value="git" />
-              <span class="choice-text">
-                <strong>A private git repository</strong>
-                <span class="muted small">GitHub, GitLab…</span>
-              </span>
-            </label>
-          </div>
-        </fieldset>
-        <FolderField
-          v-if="vaultKind === 'folder'"
-          label="Vault folder"
-          :path="store.settings?.vault?.kind === 'folder' ? store.settings.vault.path : null"
-          hint="A folder synced between your machines, e.g. My Drive/EnvVault. It only ever holds encrypted files."
-          :busy="busy"
-          @pick="pick('vault')"
-        />
-        <GitVaultField v-else :busy="busy" @saved="savedVault" />
-        <div class="field">
-          <label for="machine-name">This machine's name</label>
-          <input
-            id="machine-name"
-            v-model="machineName"
-            class="input"
-            maxlength="64"
-            required
-            autocomplete="off"
-            spellcheck="false"
+        <section class="form-section stack">
+          <h2>Project location</h2>
+          <FolderField
+            label="Projects folder"
+            :path="store.settings?.projectsPath ?? null"
+            hint="The folder that contains your git repositories (one level deep)."
+            :busy="busy"
+            @pick="pick('projects')"
           />
-          <p v-if="nameProblem" class="muted small">{{ nameProblem }}</p>
-          <p v-else class="muted small">Shown to your other machines as "updated by".</p>
-        </div>
+        </section>
+        <section class="form-section stack">
+          <h2>Vault destination</h2>
+          <fieldset class="field">
+            <legend>Storage type</legend>
+            <div class="choice">
+              <label
+                class="choice-option"
+                :class="{ 'choice-option-active': vaultKind === 'folder' }"
+              >
+                <input v-model="vaultKind" type="radio" name="vault-kind" value="folder" />
+                <span class="choice-text">
+                  <strong>A synced folder</strong>
+                  <span class="muted small">Google Drive, Dropbox, iCloud…</span>
+                </span>
+              </label>
+              <label class="choice-option" :class="{ 'choice-option-active': vaultKind === 'git' }">
+                <input v-model="vaultKind" type="radio" name="vault-kind" value="git" />
+                <span class="choice-text">
+                  <strong>A private git repository</strong>
+                  <span class="muted small">GitHub, GitLab…</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <FolderField
+            v-if="vaultKind === 'folder'"
+            label="Vault folder"
+            :path="store.settings?.vault?.kind === 'folder' ? store.settings.vault.path : null"
+            hint="A folder synced between your machines, e.g. My Drive/EnvVault. It only ever holds encrypted files."
+            :busy="busy"
+            @pick="pick('vault')"
+          />
+          <GitVaultField v-else :busy="busy" @saved="savedVault" />
+        </section>
+        <section class="form-section stack">
+          <h2>Machine identity</h2>
+          <div class="field">
+            <label for="machine-name">This machine's name</label>
+            <input
+              id="machine-name"
+              v-model="machineName"
+              class="input"
+              maxlength="64"
+              required
+              autocomplete="off"
+              spellcheck="false"
+              :aria-invalid="!!nameProblem"
+              aria-describedby="machine-name-help"
+            />
+            <p id="machine-name-help" :class="nameProblem ? 'field-error small' : 'muted small'">
+              {{ nameProblem ?? 'Shown to your other machines as "updated by".' }}
+            </p>
+          </div>
+        </section>
 
         <div class="row">
           <button v-if="wasConfigured" type="button" class="btn" :disabled="busy" @click="back">

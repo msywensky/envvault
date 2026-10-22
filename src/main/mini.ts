@@ -84,7 +84,6 @@ export function applyMiniOnTop(onTop: boolean): void {
 /** The content size for a mini request: the header, one message row, or a file row each. */
 function sizeFor(layout: Extract<Layout, { layout: 'mini' }>): Size {
   if (layout.reviewing) return REVIEW
-  if (layout.paths.length === 1) return layout.compact ? ONE_ROW : TWO_ROWS
   // Locked, the unlock form replaces the file rows.
   if (!session.isUnlocked()) return TWO_ROWS
   const rows = Math.min(layout.paths.length, MAX_ROWS)

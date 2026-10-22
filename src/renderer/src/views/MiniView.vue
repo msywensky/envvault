@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Mini mode: one env file, or all of a repo's env files, in a small window. A
-// single file's name, status chip and Push (or Pull) button sit in the header;
-// a repo's files get a row each. Main keeps the rows fresh (EV.repoStatus, see
+// Mini mode: a repo's env files in a small window. The repo's name sits in the
+// header and every file, even a lone .env, gets a row of its own with its
+// status chip and Push (or Pull) button. Main keeps the rows fresh (EV.repoStatus, see
 // src/main/mini.ts), so nothing here polls. A push or pull still goes through
 // SyncDialog's review; the window grows while it's open. The Merge and Resolve
 // dialog doesn't fit, so Merge… and Resolve… go back to the full window and open
@@ -20,20 +20,13 @@ import {
   absoluteTime,
   actionsFor,
   fileOf,
-  fileTitle,
   relativeTime,
   rowKey,
   type RowAction
 } from '../status'
 
 const target = computed(() => store.mini)
-const single = computed(() => target.value?.paths.length === 1)
-const name = computed(() => {
-  const t = target.value
-  if (!t) return ''
-  const path = t.paths[0]
-  return path === undefined ? t.repoName : fileTitle({ name: t.repoName, path })
-})
+const name = computed(() => target.value?.repoName ?? '')
 // Matched by file, in the target's order: a repo has a row per env file.
 const rows = computed(() => {
   const t = target.value
@@ -44,21 +37,12 @@ const rows = computed(() => {
     return row ? [row] : []
   })
 })
-const row = computed(() => rows.value[0] ?? null)
 const locked = computed(() => store.view === 'lock')
 // The compact form only takes a password; a setup code needs the full lock screen.
 const canUnlockHere = computed(
   () => store.app?.vault === 'ready' && store.app.setupCode !== 'needed'
 )
 const onTop = computed(() => store.settings?.miniOnTop ?? true)
-// One row when the single file is unlocked and fine: the second row is only for
-// a message, the unlock form or the loading state. A repo's list always has it.
-const compact = computed(
-  () => single.value && !locked.value && store.reposLoaded && row.value !== null && !row.value.error
-)
-const actions = computed(() => (single.value && row.value ? actionsFor(row.value) : []))
-// Merge… or Resolve…: the dialog opens in the full window.
-const merging = computed(() => actions.value.find((a) => a === 'merge' || a === 'resolve') ?? null)
 
 interface RowView {
   row: RepoRow
@@ -84,8 +68,10 @@ const rowViews = computed<RowView[]>(() =>
 /** The vault copy's details for a row's tooltip, if it has one. */
 function vaultInfo(row: RepoRow | null): string {
   const v = row?.vault
-  if (!v) return ''
-  return `Vault copy v${v.version} from ${v.updatedBy}, ${relativeTime(v.updatedAt)} (${absoluteTime(v.updatedAt)})`
+  const copy = v
+    ? `Vault copy v${v.version} from ${v.updatedBy}, ${relativeTime(v.updatedAt)} (${absoluteTime(v.updatedAt)})`
+    : ''
+  return [row?.error?.message, copy].filter(Boolean).join('\n')
 }
 
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
@@ -104,8 +90,7 @@ async function review(repo: RepoRow, action: RowAction): Promise<void> {
       layout: 'mini',
       repoName: t.repoName,
       paths: [...t.paths],
-      reviewing: true,
-      compact: compact.value
+      reviewing: true
     })
   )
   if (!res.ok) return
@@ -130,8 +115,7 @@ async function applyLayout(reviewing: boolean): Promise<void> {
       layout: 'mini',
       repoName,
       paths: [...paths],
-      reviewing,
-      compact: compact.value
+      reviewing
     })
   )
 }
@@ -210,13 +194,6 @@ watch(locked, async (now) => {
   }
   if (!open.value) await applyLayout(false)
 })
-
-// The second row comes and goes with the message, the loading state or the
-// unlock form. Leave it alone while the review dialog owns the window's size.
-watch(compact, async () => {
-  if (open.value) return
-  await applyLayout(false)
-})
 </script>
 
 <template>
@@ -226,37 +203,9 @@ watch(compact, async () => {
       <span v-if="locked && error" class="mini-error truncate grow" role="alert" :title="error">
         {{ error }}
       </span>
-      <div v-else class="mini-title grow" :title="single ? vaultInfo(row) : ''">
+      <div v-else class="mini-title grow">
         <span class="repo-name truncate" :title="name">{{ name }}</span>
-        <StatusBadge v-if="single && !locked && row" :status="row.status" />
       </div>
-      <template v-if="!locked && single && row">
-        <button
-          v-if="merging"
-          type="button"
-          class="btn btn-sm"
-          :class="{ 'btn-primary': merging === 'merge' }"
-          :title="
-            merging === 'merge'
-              ? 'Review the merge, in the full window'
-              : 'Choose which copy each key comes from, in the full window'
-          "
-          @click="resolve(row)"
-        >
-          <component :is="ACTION_ICON[merging]" />
-          {{ ACTION_LABEL[merging] }}
-        </button>
-        <button
-          v-for="action in merging ? [] : actions"
-          :key="action"
-          type="button"
-          class="btn btn-sm btn-primary"
-          @click="review(row, action)"
-        >
-          <component :is="ACTION_ICON[action]" />
-          {{ ACTION_LABEL[action] }}
-        </button>
-      </template>
       <button
         type="button"
         class="btn btn-sm"
@@ -303,21 +252,11 @@ watch(compact, async () => {
       <span class="muted small">Locked. Use Full view to unlock.</span>
     </div>
 
-    <div v-else-if="!store.reposLoaded" class="mini-body">
+    <div v-else-if="!store.reposLoaded" class="mini-row">
       <span class="row muted"><span class="spinner" /> Loading…</span>
     </div>
 
-    <div v-else-if="single && !row" class="mini-body">
-      <span class="muted small">This .env is no longer in the projects folder.</span>
-    </div>
-
-    <div v-else-if="single && row && row.error" class="mini-body" :title="vaultInfo(row)">
-      <span class="mini-error truncate" :title="row.error.message">
-        {{ row.error.message }}
-      </span>
-    </div>
-
-    <div v-else-if="!single" class="mini-files">
+    <div v-else class="mini-files">
       <div
         v-for="line in rowViews"
         :key="rowKey(line.row)"

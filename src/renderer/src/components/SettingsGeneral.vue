@@ -94,9 +94,12 @@ async function save(): Promise<void> {
             required
             autocomplete="off"
             spellcheck="false"
+            :aria-invalid="!!nameProblem"
+            aria-describedby="settings-machine-help"
           />
-          <p v-if="nameProblem" class="muted small">{{ nameProblem }}</p>
-          <p v-else class="muted small">Other machines see it as "updated by".</p>
+          <p id="settings-machine-help" :class="nameProblem ? 'field-error small' : 'muted small'">
+            {{ nameProblem ?? 'Other machines see it as "updated by".' }}
+          </p>
         </div>
         <FolderField
           label="Projects folder"
