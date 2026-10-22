@@ -208,7 +208,7 @@ Off by default; turn it on in **Settings → Sync**. While EnvVault is unlocked,
 
 Click **Mini** next to a `.env` to shrink EnvVault to a small window, kept above your other windows: that file's name and status chip, its **Push** (or **Pull**) button next to the window's controls. Hover over the name for the vault copy's version. A second row appears only for a message or the unlock form. Click **Full view** to go back.
 
-A repo with several env files has a **Mini** button on its name row: the window then shows one row per file, each with its status and buttons, up to three rows without scrolling.
+Every repo's **Mini** button is on its repo row. A repo whose files are listed under its name shows them together in the mini window, one row per file, up to three before scrolling, instead of a Mini button on each file.
 
 <img src="docs/mini.png" width="422" alt="Mini mode: one repo's Push button and status">
 

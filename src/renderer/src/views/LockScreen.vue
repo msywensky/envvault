@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowRight, RefreshCw, Settings2, ShieldCheck, Unlock } from 'lucide-vue-next'
 import type { Result } from '../../../shared/result'
 import { call, refreshState, store } from '../store'
 import { vaultLabel } from '../vault'
@@ -169,7 +170,10 @@ onBeforeUnmount(() => {
               spellcheck="false"
             />
           </div>
-          <button type="submit" class="btn btn-primary" :disabled="!confirmed">Continue</button>
+          <button type="submit" class="btn btn-primary" :disabled="!confirmed">
+            <ArrowRight />
+            Continue
+          </button>
         </form>
 
         <!-- Existing vault: unlock. -->
@@ -218,7 +222,8 @@ onBeforeUnmount(() => {
             :disabled="busy || !password || (needsCode && !typedCode.trim())"
           >
             <span v-if="busy" class="spinner" />
-            {{ busy ? 'Unlocking…' : 'Unlock' }}
+            <Unlock v-else />
+            {{ busy ? 'Unlocking.' : 'Unlock' }}
           </button>
         </form>
 
@@ -288,7 +293,8 @@ onBeforeUnmount(() => {
           </p>
           <button type="submit" class="btn btn-primary" :disabled="busy || !canCreate">
             <span v-if="busy" class="spinner" />
-            {{ busy ? 'Creating…' : 'Create vault' }}
+            <ShieldCheck v-else />
+            {{ busy ? 'Creating.' : 'Create vault' }}
           </button>
         </form>
 
@@ -305,7 +311,10 @@ onBeforeUnmount(() => {
             Drive may still be syncing. If it was deleted, restore it from Drive's trash or version
             history. EnvVault won't create a new vault here, because that would orphan those files.
           </div>
-          <button type="button" class="btn" @click="recheck">Check again</button>
+          <button type="button" class="btn" @click="recheck">
+            <RefreshCw />
+            Check again
+          </button>
         </div>
         <div v-else-if="vault === 'folder-missing'" class="stack">
           <div v-if="git" class="notice notice-error">
@@ -315,7 +324,10 @@ onBeforeUnmount(() => {
           <div v-else class="notice notice-error">
             <strong>The vault folder was not found.</strong> Is Google Drive running and signed in?
           </div>
-          <button type="button" class="btn" @click="recheck">Check again</button>
+          <button type="button" class="btn" @click="recheck">
+            <RefreshCw />
+            Check again
+          </button>
         </div>
 
         <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
@@ -325,6 +337,7 @@ onBeforeUnmount(() => {
             {{ vaultLabel(store.settings?.vault) }}
           </span>
           <button type="button" class="btn-link btn" @click="store.view = 'setup'">
+            <Settings2 />
             Folders and vault
           </button>
         </div>

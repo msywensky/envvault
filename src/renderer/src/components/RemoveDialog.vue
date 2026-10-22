@@ -3,6 +3,7 @@
 // copy it showed, so main refuses if that copy changed meanwhile. No local
 // file is touched, here or on any other machine.
 import { onMounted, ref, watch } from 'vue'
+import { Trash2 } from 'lucide-vue-next'
 import type { RepoRow } from '../../../shared/types'
 import { call, store, toast } from '../store'
 import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
@@ -83,6 +84,7 @@ watch(
       <button type="button" class="btn" :disabled="busy" @click="emit('close')">Cancel</button>
       <button type="button" class="btn btn-danger" :disabled="busy || !repo.vault" @click="remove">
         <span v-if="busy" class="spinner" />
+        <Trash2 v-else />
         Remove from vault
       </button>
     </div>

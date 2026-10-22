@@ -3,6 +3,7 @@
 // it's ignored and which env files it syncs are kept in the vault, by that
 // name, for every machine. Patterns and names only: no values here.
 import { computed, onMounted, ref, watch } from 'vue'
+import { Check } from 'lucide-vue-next'
 import { RESERVED_NOTE, isIncluded } from '../../../shared/envrules'
 import type { RepoInfo, RepoRules } from '../../../shared/types'
 import { call, loadRepos, store, toast } from '../store'
@@ -259,6 +260,7 @@ watch(
         @click="save"
       >
         <span v-if="busy" class="spinner" />
+        <Check v-else />
         Save
       </button>
     </div>

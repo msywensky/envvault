@@ -8,10 +8,12 @@
 // it there. When the vault locks, a compact unlock form takes over; anything it
 // can't handle (a setup code, no vault yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { Lock, Maximize2, Pin, PinOff, Unlock } from 'lucide-vue-next'
 import { sameFile } from '../../../shared/envfile'
 import type { RepoRow } from '../../../shared/types'
 import StatusBadge from '../components/StatusBadge.vue'
 import SyncDialog from '../components/SyncDialog.vue'
+import { ACTION_ICON } from '../icons'
 import { call, exitMini, loadRepos, refreshState, run, store } from '../store'
 import {
   ACTION_LABEL,
@@ -241,6 +243,7 @@ watch(compact, async () => {
           "
           @click="resolve(row)"
         >
+          <component :is="ACTION_ICON[merging]" />
           {{ ACTION_LABEL[merging] }}
         </button>
         <button
@@ -250,6 +253,7 @@ watch(compact, async () => {
           class="btn btn-sm btn-primary"
           @click="review(row, action)"
         >
+          <component :is="ACTION_ICON[action]" />
           {{ ACTION_LABEL[action] }}
         </button>
       </template>
@@ -262,10 +266,16 @@ watch(compact, async () => {
         title="Keep this window above other windows"
         @click="toggleOnTop"
       >
+        <Pin v-if="onTop" />
+        <PinOff v-else />
         On top
       </button>
-      <button v-if="!locked" type="button" class="btn btn-sm" @click="lockNow">Lock</button>
+      <button v-if="!locked" type="button" class="btn btn-sm" @click="lockNow">
+        <Lock />
+        Lock
+      </button>
       <button type="button" class="btn btn-sm" title="Back to all repositories" @click="exitMini">
+        <Maximize2 />
         Full view
       </button>
     </header>
@@ -284,6 +294,7 @@ watch(compact, async () => {
       />
       <button type="submit" class="btn btn-primary" :disabled="busy || !password">
         <span v-if="busy" class="spinner" />
+        <Unlock v-else />
         Unlock
       </button>
     </form>
@@ -327,6 +338,7 @@ watch(compact, async () => {
           "
           @click="resolve(line.row)"
         >
+          <component :is="ACTION_ICON[line.merging]" />
           {{ line.mergingLabel }}
         </button>
         <button
@@ -336,6 +348,7 @@ watch(compact, async () => {
           class="btn btn-sm btn-primary"
           @click="review(line.row, action)"
         >
+          <component :is="ACTION_ICON[action]" />
           {{ ACTION_LABEL[action] }}
         </button>
       </div>

@@ -8,6 +8,7 @@
 // reloaded. A pull can mark changed keys machine-specific (pull and mark):
 // they keep this machine's values, and the vault copy is written too.
 import { computed, onMounted, ref, watch } from 'vue'
+import { Download, Upload, X } from 'lucide-vue-next'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, store, toast } from '../store'
 import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
@@ -438,9 +439,14 @@ watch(
     </div>
 
     <div class="dialog-footer">
-      <button type="button" class="btn" @click="emit('close')">Cancel</button>
+      <button type="button" class="btn" @click="emit('close')">
+        <X />
+        Cancel
+      </button>
       <button type="button" class="btn btn-primary" :disabled="!canConfirm" @click="confirm">
         <span v-if="busy" class="spinner" />
+        <Upload v-else-if="mode === 'push'" />
+        <Download v-else />
         {{ mode === 'push' ? 'Push' : marks.length ? 'Pull and mark' : 'Pull' }}
       </button>
     </div>

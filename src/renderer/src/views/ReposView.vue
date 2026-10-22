@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import {
+  Ban,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  RefreshCw,
+  Settings2,
+  Undo2
+} from 'lucide-vue-next'
 import { sameFile } from '../../../shared/envfile'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
 import EnvEditorDialog from '../components/EnvEditorDialog.vue'
@@ -158,16 +167,9 @@ onMounted(async () => {
           </template>
         </p>
       </div>
-      <button
-        type="button"
-        class="btn"
-        title="The env files every repo without its own lists syncs"
-        @click="openSyncSettings"
-      >
-        Defaults…
-      </button>
       <button type="button" class="btn" :disabled="loading" @click="refresh(true)">
         <span v-if="loading" class="spinner" />
+        <RefreshCw v-else />
         Refresh
       </button>
     </div>
@@ -176,6 +178,7 @@ onMounted(async () => {
       <span>{{ settingsError.message }}</span>
       <div v-if="settingsError.code === 'VAULT_TAMPERED'" class="row">
         <button type="button" class="btn btn-sm" @click="openSyncSettings">
+          <Settings2 />
           Reset in Settings…
         </button>
       </div>
@@ -211,6 +214,8 @@ onMounted(async () => {
         :aria-expanded="showNoEnv"
         @click="showNoEnv = !showNoEnv"
       >
+        <ChevronDown v-if="showNoEnv" />
+        <ChevronRight v-else />
         No env files ({{ noEnv.length }}) · {{ showNoEnv ? 'Hide' : 'Show' }}
       </button>
       <div v-if="showNoEnv" class="card">
@@ -232,6 +237,7 @@ onMounted(async () => {
                     title="Start a vault copy of its .env"
                     @click="editing = placeholder(repo)"
                   >
+                    <Pencil />
                     Edit
                   </button>
                   <button
@@ -241,9 +247,11 @@ onMounted(async () => {
                     title="Leave this repo alone, on every machine"
                     @click="setIgnored(repo, true)"
                   >
+                    <Ban />
                     Ignore
                   </button>
                   <button type="button" class="btn btn-sm" @click="configuring = repo">
+                    <Settings2 />
                     Settings…
                   </button>
                 </div>
@@ -261,6 +269,8 @@ onMounted(async () => {
         :aria-expanded="showIgnored"
         @click="showIgnored = !showIgnored"
       >
+        <ChevronDown v-if="showIgnored" />
+        <ChevronRight v-else />
         Ignored ({{ ignored.length }}) · {{ showIgnored ? 'Hide' : 'Show' }}
       </button>
       <div v-if="showIgnored" class="card">
@@ -286,9 +296,11 @@ onMounted(async () => {
                     :disabled="busy || !!settingsError"
                     @click="setIgnored(repo, false)"
                   >
+                    <Undo2 />
                     Stop ignoring
                   </button>
                   <button type="button" class="btn btn-sm" @click="configuring = repo">
+                    <Settings2 />
                     Settings…
                   </button>
                 </div>

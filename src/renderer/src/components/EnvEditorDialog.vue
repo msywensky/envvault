@@ -7,6 +7,7 @@
 // with the keys to mark machine-specific by name (their values then leave the
 // vault copy).
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowLeft, ArrowRight, Check, Trash2 } from 'lucide-vue-next'
 import type { RepoRow } from '../../../shared/types'
 import { envKeyProblem, fileOf, fileTitle } from '../status'
 import { call, store, toast } from '../store'
@@ -387,10 +388,12 @@ watch(
     <div class="dialog-footer">
       <template v-if="phase === 'review' || phase === 'saving'">
         <button type="button" class="btn" :disabled="phase === 'saving'" @click="phase = 'edit'">
+          <ArrowLeft />
           Back
         </button>
         <button type="button" class="btn btn-primary" :disabled="phase === 'saving'" @click="save">
           <span v-if="phase === 'saving'" class="spinner" />
+          <Check v-else />
           Save to vault
         </button>
       </template>
@@ -402,7 +405,8 @@ watch(
           title="Delete the vault copy, after asking. No local file is touched."
           @click="emit('remove')"
         >
-          Remove from vault…
+          <Trash2 />
+          Remove from vault.
         </button>
         <span class="grow" />
         <button type="button" class="btn" @click="cancel">
@@ -415,6 +419,7 @@ watch(
           :disabled="!canReview"
           @click="phase = 'review'"
         >
+          <ArrowRight />
           Review changes
         </button>
       </template>
