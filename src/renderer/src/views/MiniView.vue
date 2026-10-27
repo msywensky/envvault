@@ -8,7 +8,7 @@
 // it there. When the vault locks, a compact unlock form takes over; anything it
 // can't handle (a setup code, no vault yet) goes back to the full window too.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { Lock, Maximize2, Pin, PinOff, Unlock } from 'lucide-vue-next'
+import { Lock, Maximize2, Pin, PinOff, RefreshCw, Unlock } from 'lucide-vue-next'
 import { sameFile } from '../../../shared/envfile'
 import type { RepoRow } from '../../../shared/types'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -165,6 +165,14 @@ async function unlock(): Promise<void> {
   await refreshState()
 }
 
+// Refresh, as in the full view: ask git for the env files again.
+const reloading = ref(false)
+async function reload(): Promise<void> {
+  reloading.value = true
+  await loadRepos(true)
+  reloading.value = false
+}
+
 async function lockNow(): Promise<void> {
   await run(() => window.envvault.lock())
 }
@@ -207,25 +215,52 @@ watch(locked, async (now) => {
         <span class="repo-name truncate" :title="name">{{ name }}</span>
       </div>
       <button
+        v-if="!locked"
         type="button"
-        class="btn btn-sm"
+        class="btn btn-sm btn-icon"
+        :disabled="reloading"
+        title="Refresh: look for env files again"
+        aria-label="Refresh"
+        @click="reload"
+      >
+        <span v-if="reloading" class="spinner" />
+        <RefreshCw v-else />
+      </button>
+      <button
+        type="button"
+        class="btn btn-sm btn-icon"
         :class="{ 'btn-toggled': onTop }"
         :aria-pressed="onTop"
         :disabled="busy"
-        title="Keep this window above other windows"
+        :title="
+          onTop
+            ? 'On top: click to stop keeping this window above others'
+            : 'Keep this window above other windows'
+        "
+        aria-label="Keep on top"
         @click="toggleOnTop"
       >
         <Pin v-if="onTop" />
         <PinOff v-else />
-        On top
       </button>
-      <button v-if="!locked" type="button" class="btn btn-sm" @click="lockNow">
+      <button
+        v-if="!locked"
+        type="button"
+        class="btn btn-sm btn-icon"
+        title="Lock the vault"
+        aria-label="Lock the vault"
+        @click="lockNow"
+      >
         <Lock />
-        Lock
       </button>
-      <button type="button" class="btn btn-sm" title="Back to all repositories" @click="exitMini">
+      <button
+        type="button"
+        class="btn btn-sm btn-icon"
+        title="Full view: back to all repositories"
+        aria-label="Full view"
+        @click="exitMini"
+      >
         <Maximize2 />
-        Full view
       </button>
     </header>
 
