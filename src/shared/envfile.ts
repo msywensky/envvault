@@ -6,6 +6,25 @@ import type { RepoRow } from './types'
 /** Every repo's own .env, at its root. */
 export const ROOT_ENV = '.env'
 
+/** The file's own name, without its folders. */
+export function envFileName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+/**
+ * What a pull backs up the env file `fileName` as: .env.bak.<stamp> for .env,
+ * .env.bak.local.<stamp> for .env.local, .env.bak.@secrets.env.<stamp> for
+ * another name (no .env.<suffix> has an "@", so the two never meet). Always
+ * .env.bak.*, so the one ignore line covers them all, and reserved
+ * (isEnvFileName in src/core/envpath.ts), so they never sync.
+ */
+export function backupName(fileName: string, stamp: string): string {
+  if (fileName === ROOT_ENV) return `.env.bak.${stamp}`
+  return /^\.env(?:\.|$)/i.test(fileName)
+    ? `.env.bak.${fileName.slice(5)}.${stamp}`
+    : `.env.bak.@${fileName}.${stamp}`
+}
+
 type FileOf = Pick<RepoRow, 'name' | 'local' | 'path' | 'storedName'>
 
 /**

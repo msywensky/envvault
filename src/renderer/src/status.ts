@@ -1,4 +1,4 @@
-import { ROOT_ENV } from '../../shared/envfile'
+import { ROOT_ENV, backupName, envFileName } from '../../shared/envfile'
 import { MAX_PATTERNS, patternProblem } from '../../shared/envrules'
 import type { EnvFile, RepoInfo, RepoRow } from '../../shared/types'
 
@@ -13,6 +13,14 @@ export function fileOf(row: Pick<RepoRow, 'name' | 'path'>): EnvFile {
   if (row.path === null) throw new Error('This row has no env file.')
   return { repoName: row.name, path: row.path }
 }
+
+/** The name of a row's env file, without its folders: what pulls and .gitignore are about. */
+export const fileNameOf = (row: Pick<RepoRow, 'name' | 'path'>): string =>
+  envFileName(fileOf(row).path)
+
+/** What a pull backs a row's env file up as, with a placeholder for the time. */
+export const backupLabelOf = (row: Pick<RepoRow, 'name' | 'path'>): string =>
+  backupName(fileNameOf(row), '<timestamp>')
 
 /** A key for v-for and :key, unique per repo: a folder, or a repo only in the vault. */
 export const repoKey = (repo: Pick<RepoRow, 'name' | 'local'>): string =>

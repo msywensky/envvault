@@ -11,11 +11,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { Download, Upload, X } from 'lucide-vue-next'
 import type { PullPreview, PushPreview, RawDiffLine, RepoRow } from '../../../shared/types'
 import { call, store, toast } from '../store'
-import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
+import { absoluteTime, backupLabelOf, fileNameOf, fileOf, fileTitle, relativeTime } from '../status'
 import PullSafety from './PullSafety.vue'
 import RawDiffView from './RawDiffView.vue'
 
 const props = defineProps<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean }>()
+// The env file's own name and its backups', for the text: not always .env.
+const fileName = computed(() => fileNameOf(props.repo))
+const backupLabel = computed(() => backupLabelOf(props.repo))
 const emit = defineEmits<{ close: []; done: [] }>()
 
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -146,7 +149,7 @@ async function confirm(): Promise<void> {
       toast(
         'success',
         res.data.backupName
-          ? `Pulled ${name}${marked}. Previous .env saved as ${res.data.backupName}.`
+          ? `Pulled ${name}${marked}. Previous ${fileName.value} saved as ${res.data.backupName}.`
           : `Pulled ${name}${marked}.`
       )
       emit('done')
@@ -216,10 +219,10 @@ watch(
           mode === 'push'
             ? 'Changes the vault copy will get. Only key names are shown.'
             : rawValues
-              ? 'Changes your local .env will get, including values.'
+              ? `Changes your local ${fileName} will get, including values.`
               : rawMasked
-                ? 'Changes your local .env will get. Values are masked.'
-                : 'Changes your local .env will get. Only key names are shown.'
+                ? `Changes your local ${fileName} will get. Values are masked.`
+                : `Changes your local ${fileName} will get. Only key names are shown.`
         }}
       </p>
     </div>
@@ -305,7 +308,7 @@ watch(
         <p v-if="marks.length" class="notice notice-info">
           <strong>The vault copy is updated too.</strong>
           {{ marks.join(', ') }} {{ marks.length === 1 ? 'becomes' : 'become' }} machine-specific:
-          your .env keeps your {{ marks.length === 1 ? 'value' : 'values' }} with the
+          your {{ fileName }} keeps your {{ marks.length === 1 ? 'value' : 'values' }} with the
           <code class="marker"># envvault:local</code> marker, and a new version of the vault copy
           keeps {{ marks.length === 1 ? 'the key' : 'the keys' }} without a value. Your other
           machines keep their own values when they pull.
@@ -322,9 +325,9 @@ watch(
         </div>
         <div v-if="unmarked.length" class="notice notice-warn stack">
           <span>
-            <strong>Machine-specific in the vault, but not in your .env.</strong> Pushing uploads
-            your values for these keys and removes their marker. To keep them on this machine, add
-            <code class="marker"># envvault:local</code> above each one.
+            <strong>Machine-specific in the vault, but not in your {{ fileName }}.</strong> Pushing
+            uploads your values for these keys and removes their marker. To keep them on this
+            machine, add <code class="marker"># envvault:local</code> above each one.
           </span>
           <div class="chips">
             <code v-for="k in unmarked" :key="k" class="chip chip-changed">{{ k }}</code>
@@ -419,10 +422,10 @@ watch(
           </div>
           <p v-if="pullPreview.hasLocal && !pullPreview.sameContent" class="muted small">
             <template v-if="store.settings?.backups ?? true">
-              Your current .env will be saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+              Your current {{ fileName }} will be saved as <code>{{ backupLabel }}</code> first.
             </template>
             <template v-else
-              >Backups are off in Settings, so your current .env isn't saved.</template
+              >Backups are off in Settings, so your current {{ fileName }} isn't saved.</template
             >
           </p>
           <p class="muted small">
