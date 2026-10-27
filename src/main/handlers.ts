@@ -160,6 +160,25 @@ export function registerIpc(): void {
     return null
   })
 
+  // Only picks: the file joins the repo's settings when they are saved.
+  // Unlocked only. Like pickFolder, the dialog stays outside the queue and
+  // holds no key while it is open.
+  handle(CH.pickRepoFile, async ({ repoName }) => {
+    const dir = await session.withKey(() => sync.repoFolder(repoName))
+    const win = getMainWindow()
+    const options: Electron.OpenDialogOptions = {
+      title: 'Choose an env file to sync',
+      defaultPath: dir,
+      properties: ['openFile', 'showHiddenFiles', 'dontAddToRecent']
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const picked = result.filePaths[0]
+    if (result.canceled || !picked) return null
+    return { path: await session.withKey(() => sync.pickedPath(repoName, picked)) }
+  })
+
   // The Claude Code skill holds no secrets, so these work while locked.
   handle(CH.skillStatus, () => skill.skillStatus())
   handle(CH.installSkill, ({ replace }) => skill.installSkill(replace))

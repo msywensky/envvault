@@ -646,6 +646,39 @@ code,
   gap: 6px;
 }
 
+/* Repo settings: the files picked by hand, each with a button to drop it. */
+.field-label {
+  font-weight: 600;
+}
+
+.picked-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.picked-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picked-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.picked-files code {
+  overflow-wrap: anywhere;
+}
+
 /* ---------- badges ---------- */
 
 .badge {

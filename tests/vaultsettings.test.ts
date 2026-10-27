@@ -13,7 +13,7 @@ import {
   withRepo,
   type VaultSettings
 } from '../src/core/vaultsettings'
-import { BUILT_IN_RULES } from '../src/shared/envrules'
+import { BUILT_IN_RULES, MAX_PICKED_FILES } from '../src/shared/envrules'
 
 const doc = (over: Partial<VaultSettings> = {}): VaultSettings => ({ ...emptySettings(), ...over })
 
@@ -25,7 +25,8 @@ describe('parseSettings', () => {
       {
         ignored: true,
         include: null,
-        exclude: ['apps/legacy']
+        exclude: ['apps/legacy'],
+        files: []
       }
     )
     expect(parseSettings(JSON.parse(JSON.stringify(next)))).toEqual(next)
@@ -84,7 +85,12 @@ describe('parseSettings', () => {
       repos: { web: { ignored: true, later: 'y' }, api: { include: ['.env.local'] } }
     }
     const parsed = parseSettings(json)
-    const patched = withRepo(parsed, 'web', { ignored: false, include: null, exclude: null })
+    const patched = withRepo(parsed, 'web', {
+      ignored: false,
+      include: null,
+      exclude: null,
+      files: []
+    })
     expect(patched).toMatchObject({
       later: { x: 1 },
       defaults: { later: true },
@@ -100,36 +106,49 @@ describe('rules', () => {
     const d = withRepo(
       withDefaults(doc(), { include: ['.env', '.env.local'], exclude: ['**/fixtures'] }),
       'web',
-      { ignored: false, include: ['.env.local'], exclude: null }
+      { ignored: false, include: ['.env.local'], exclude: null, files: [] }
     )
-    expect(effectiveRules(d, 'web')).toEqual({ include: ['.env.local'], exclude: ['**/fixtures'] })
+    expect(effectiveRules(d, 'web')).toEqual({
+      include: ['.env.local'],
+      exclude: ['**/fixtures'],
+      files: []
+    })
     expect(effectiveRules(d, 'api')).toEqual({
       include: ['.env', '.env.local'],
-      exclude: ['**/fixtures']
+      exclude: ['**/fixtures'],
+      files: []
     })
-    expect(repoRules(d, 'api')).toEqual({ ignored: false, include: null, exclude: null })
+    expect(repoRules(d, 'api')).toEqual({ ignored: false, include: null, exclude: null, files: [] })
   })
 
   it('never reads a repo id from the prototype', () => {
     expect(repoRules(doc(), 'constructor')).toEqual({
       ignored: false,
       include: null,
-      exclude: null
+      exclude: null,
+      files: []
     })
-    const d = withRepo(doc(), 'constructor', { ignored: true, include: null, exclude: null })
+    const d = withRepo(doc(), 'constructor', {
+      ignored: true,
+      include: null,
+      exclude: null,
+      files: []
+    })
     expect(repoRules(d, 'constructor').ignored).toBe(true)
     expect(parseSettings(JSON.parse(JSON.stringify(d)))).toEqual(d)
   })
 
   it('drops a repo that is back to all defaults', () => {
-    const d = withRepo(doc(), 'web', { ignored: true, include: [], exclude: null })
-    expect(allRepoRules(d)).toEqual({ web: { ignored: true, include: [], exclude: null } })
-    const back = withRepo(d, 'web', { ignored: false, include: null, exclude: null })
+    const d = withRepo(doc(), 'web', { ignored: true, include: [], exclude: null, files: [] })
+    expect(allRepoRules(d)).toEqual({
+      web: { ignored: true, include: [], exclude: null, files: [] }
+    })
+    const back = withRepo(d, 'web', { ignored: false, include: null, exclude: null, files: [] })
     expect(back.repos).toEqual({})
   })
 
   it('compares settings', () => {
-    const a = { ignored: false, include: ['.env'], exclude: null }
+    const a = { ignored: false, include: ['.env'], exclude: null, files: [] }
     expect(sameRepoRules(a, { ...a, include: ['.env'] })).toBe(true)
     expect(sameRepoRules(a, { ...a, include: null })).toBe(false)
     expect(sameRepoRules(a, { ...a, ignored: true })).toBe(false)
@@ -144,5 +163,40 @@ describe('rules', () => {
       ])
     )
     expect(settingsTooLarge(doc({ repos }))).toBe(true)
+  })
+})
+
+describe('files picked by hand', () => {
+  const picked = (files: unknown): VaultSettings =>
+    parseSettings(JSON.parse(JSON.stringify(doc({ repos: { web: { files } as never } }))))
+
+  it('round-trips through a write and a read', () => {
+    const d = withRepo(doc(), 'web', {
+      ignored: false,
+      include: null,
+      exclude: null,
+      files: ['config/secrets.env']
+    })
+    expect(parseSettings(JSON.parse(JSON.stringify(d)))).toEqual(d)
+    expect(repoRules(d, 'web').files).toEqual(['config/secrets.env'])
+    expect(effectiveRules(d, 'web').files).toEqual(['config/secrets.env'])
+    const back = withRepo(d, 'web', { ignored: false, include: null, exclude: null, files: [] })
+    expect(back.repos).toEqual({})
+  })
+
+  it('drops paths this version can’t sync, and copies, instead of failing to read', () => {
+    const d = picked(['config/secrets.env', '../x.env', '.gitignore', 'CONFIG/Secrets.env'])
+    expect(repoRules(d, 'web').files).toEqual(['config/secrets.env'])
+  })
+
+  it('keeps at most MAX_PICKED_FILES', () => {
+    const d = picked(Array.from({ length: MAX_PICKED_FILES + 5 }, (_, i) => `f${i}.env`))
+    expect(repoRules(d, 'web').files).toHaveLength(MAX_PICKED_FILES)
+  })
+
+  it('tells a change of files apart', () => {
+    const a = { ignored: false, include: null, exclude: null, files: ['a.env'] }
+    expect(sameRepoRules(a, { ...a, files: ['b.env'] })).toBe(false)
+    expect(sameRepoRules(a, { ...a, files: ['a.env'] })).toBe(true)
   })
 })

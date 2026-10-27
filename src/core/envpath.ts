@@ -4,6 +4,11 @@
 // path never leaves its repo: no "." or ".." segments, no ".git", and nothing
 // Windows would read as another name (a trailing dot, a device name). Which
 // of these a repo actually syncs is up to its rules (src/shared/envrules.ts).
+//
+// Files are found by their names (.env, .env.<suffix>), but a repo's settings
+// can also name files picked by hand, with any name (config/secrets.env); a
+// file with such a name syncs only if its content is in .env format
+// (isDotenvText in ./envdiff).
 import { ROOT_ENV } from '../shared/envfile'
 import { isReservedEnvName } from '../shared/envrules'
 import { isWindowsReserved } from './paths'
@@ -19,9 +24,27 @@ const FOLDER_RE = /^[A-Za-z0-9._@+-]{1,100}$/
 // .env, or .env.<suffix> with dot-separated parts: .env.local, .env.production.local.
 const ENV_NAME_RE = /^\.env(?:\.[A-Za-z0-9_-]+)*$/
 
-/** True for a file name EnvVault can sync: .env or .env.<suffix>, except reserved names. */
+/** True for a file name EnvVault finds: .env or .env.<suffix>, except reserved names. */
 export function isEnvFileName(name: string): boolean {
   return name.length <= MAX_ENV_NAME && ENV_NAME_RE.test(name) && !isReservedEnvName(name)
+}
+
+/** True if `name` is named like the files EnvVault finds (.env, .env.<suffix>), allowed or not. */
+const isEnvLike = (name: string): boolean => /^\.env(?:\.|$)/i.test(name)
+
+/**
+ * True for any file name EnvVault can sync: one it finds (isEnvFileName), or
+ * another that a repo's settings name, except git's own files (.gitignore),
+ * templates (isReservedEnvName) and names Windows reads as something else.
+ */
+export function isSyncFileName(name: string): boolean {
+  if (isEnvLike(name)) return isEnvFileName(name)
+  return (
+    name.length <= MAX_ENV_NAME &&
+    isFolderName(name) &&
+    !name.toLowerCase().startsWith('.git') &&
+    !isReservedEnvName(name)
+  )
 }
 
 function isFolderName(name: string): boolean {
@@ -42,7 +65,7 @@ export function isEnvPath(path: string): boolean {
   const file = parts.pop()
   return (
     file !== undefined &&
-    isEnvFileName(file) &&
+    isSyncFileName(file) &&
     parts.length <= MAX_ENV_FOLDERS &&
     parts.every(isFolderName)
   )
@@ -67,11 +90,16 @@ const STAMP_RE = /^\d{8}T\d{6}Z(?:-[0-9a-f]{4})?$/
 
 /**
  * What a pull backs up the env file `fileName` as: .env.bak.<stamp> for .env,
- * .env.bak.local.<stamp> for .env.local. Always .env.bak.*, so the one ignore
- * line covers them all, and reserved (isEnvFileName), so they never sync.
+ * .env.bak.local.<stamp> for .env.local, .env.bak.@secrets.env.<stamp> for
+ * another name (no .env.<suffix> has an "@", so the two never meet). Always
+ * .env.bak.*, so the one ignore line covers them all, and reserved
+ * (isEnvFileName), so they never sync.
  */
 export function backupName(fileName: string, stamp: string): string {
-  return fileName === ROOT_ENV ? `.env.bak.${stamp}` : `.env.bak.${fileName.slice(5)}.${stamp}`
+  if (fileName === ROOT_ENV) return `.env.bak.${stamp}`
+  return isEnvLike(fileName)
+    ? `.env.bak.${fileName.slice(5)}.${stamp}`
+    : `.env.bak.@${fileName}.${stamp}`
 }
 
 /** True if `name` is one of `fileName`'s backups (and nobody else's, or a temp file). */

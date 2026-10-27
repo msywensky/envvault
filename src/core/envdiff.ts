@@ -91,6 +91,23 @@ export function parseEnv(text: string): Map<string, string> {
   return out
 }
 
+/**
+ * True if every line of `text` is blank, a comment or part of an assignment:
+ * how EnvVault tells that a file picked by hand, with a name other than
+ * .env*, is in .env format (a JSON or YAML file isn't).
+ */
+export function isDotenvText(text: string): boolean {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const covered = new Set<number>()
+  for (const { first, last } of scanEnv(lines)) {
+    for (let k = first; k <= last; k++) covered.add(k)
+  }
+  return lines.every((line, i) => {
+    const trimmed = line.trim()
+    return covered.has(i) || trimmed === '' || trimmed.startsWith('#')
+  })
+}
+
 export const MASK = '••••••••'
 
 /**

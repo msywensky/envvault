@@ -7,7 +7,12 @@ import { isBranchName } from '../core/gitremote'
 import { REPO_NAME_RE } from './gh'
 import { isValidRepoName } from '../core/paths'
 import { CH } from '../shared/channels'
-import { MAX_PATTERNS, MAX_PATTERN_LENGTH, patternProblem } from '../shared/envrules'
+import {
+  MAX_PATTERNS,
+  MAX_PATTERN_LENGTH,
+  MAX_PICKED_FILES,
+  patternProblem
+} from '../shared/envrules'
 
 const NoArgs = z.undefined()
 /** A sha256 hex digest. */
@@ -133,9 +138,11 @@ export const requestSchemas = {
     vaultName: RepoName,
     ignored: z.boolean(),
     include: Patterns.nullable(),
+    files: z.array(EnvPath).max(MAX_PICKED_FILES),
     exclude: Patterns.nullable()
   }),
   [CH.setVaultName]: z.strictObject({ repoName: RepoName, vaultName: RepoName }),
+  [CH.pickRepoFile]: z.strictObject({ repoName: RepoName }),
   [CH.saveDefaults]: z.strictObject({ include: Patterns, exclude: Patterns }),
   [CH.resetSettings]: NoArgs,
   [CH.skillStatus]: NoArgs,

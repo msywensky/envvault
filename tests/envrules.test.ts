@@ -132,6 +132,15 @@ describe('isIncluded', () => {
   })
 })
 
+describe('files picked by hand', () => {
+  it('syncs them whatever the patterns say', () => {
+    const rules = { include: ['.env'], exclude: ['**/config'], files: ['config/Secrets.env'] }
+    expect(isIncluded('config/secrets.env', rules)).toBe(true)
+    expect(isIncluded('config/.env', rules)).toBe(false)
+    expect(isIncluded('other.env', rules)).toBe(false)
+  })
+})
+
 describe('isReservedEnvName', () => {
   it('covers backups and templates, in any case', () => {
     for (const name of [

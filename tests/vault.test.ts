@@ -394,7 +394,7 @@ describe('env files in subfolders', () => {
 
 describe('repo settings', () => {
   const ignoring = (doc: VaultSettings, repoId: string): VaultSettings =>
-    withRepo(doc, repoId, { ignored: true, include: null, exclude: null })
+    withRepo(doc, repoId, { ignored: true, include: null, exclude: null, files: [] })
 
   it('starts with the built-in settings, then reads back what it wrote', async () => {
     const store = new MemoryStore()

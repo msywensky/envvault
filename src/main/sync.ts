@@ -7,17 +7,19 @@
 // Machine-specific keys (# envvault:local, see core/localkeys) are blanked in
 // what a push uploads and status hashes, and kept from the local file by a
 // pull.
-import { lstat, readdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, readdir, realpath, rm } from 'node:fs/promises'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { decodeEnv, makePayload, sha256Hex, type Payload } from '../core/crypto'
-import { diffKeys, parseEnv } from '../core/envdiff'
+import { diffKeys, isDotenvText, parseEnv } from '../core/envdiff'
 import {
   ROOT_ENV,
   backupName,
   envFileName,
   envFolders,
   envPathId,
-  isBackupOf
+  isBackupOf,
+  isEnvFileName,
+  isEnvPath
 } from '../core/envpath'
 import { applyEdits, DuplicateKeyError, EditError, editorEntries } from '../core/envedit'
 import {
@@ -31,6 +33,7 @@ import {
 import { compareExample } from '../core/example'
 import { lineDiff } from '../core/linediff'
 import { markedKeys, unmarkedKeys, type LocalTakes } from '../core/localkeys'
+import { isInside } from '../core/paths'
 import { computeStatus, needsOverwriteConfirm, nextVersion } from '../core/status'
 import {
   allRepoRules,
@@ -43,7 +46,7 @@ import {
   withRepo,
   type VaultSettings
 } from '../core/vaultsettings'
-import { isIncluded, type FileRules } from '../shared/envrules'
+import { isIncluded, isPicked, type FileRules } from '../shared/envrules'
 import type {
   EditorData,
   EnvFile,
@@ -692,6 +695,21 @@ async function checkExample(
 }
 
 const noLocalEnv = (): AppError => new AppError('ENV_NOT_FOUND', 'This repo has no .env to push.')
+
+/**
+ * ENV_NOT_DOTENV unless `bytes`, the file at `path`, is in .env format. Only
+ * files picked by hand, with other names, are checked: .env* files sync as
+ * they always have.
+ */
+function requireDotenv(path: string, bytes: Buffer): void {
+  if (isEnvFileName(envFileName(path))) return
+  if (!isDotenvText(bytes.toString('utf8'))) {
+    throw new AppError(
+      'ENV_NOT_DOTENV',
+      "This file isn't in .env format (KEY=value lines, # comments and blank lines), so EnvVault won't sync it."
+    )
+  }
+}
 const noVaultCopy = (): AppError =>
   new AppError('VAULT_ENTRY_NOT_FOUND', 'The vault has no copy of this repo.')
 
@@ -707,6 +725,7 @@ function folderFor(s: Snapshot): string {
 export function previewPush(key: Uint8Array, vaultId: string, file: EnvFile): Promise<PushPreview> {
   return withSnapshot(key, file, async (s) => {
     if (!s.local || !s.synced || !s.envDir) throw noLocalEnv()
+    requireDotenv(s.file.path, s.local)
     const last = await getLast(vaultId, s.id)
     // The raw file: machine-specific values don't belong in the example either.
     const example = checksExample(s)
@@ -730,7 +749,8 @@ export function previewPush(key: Uint8Array, vaultId: string, file: EnvFile): Pr
 
 export function push(key: Uint8Array, vaultId: string, req: PushRequest): Promise<RepoRow> {
   return withSnapshot(key, req, async (s) => {
-    if (!s.synced || !s.syncedHash) throw noLocalEnv()
+    if (!s.local || !s.synced || !s.syncedHash) throw noLocalEnv()
+    requireDotenv(s.file.path, s.local)
     checkExpected(s, req.expected)
     const last = await getLast(vaultId, s.id)
     if (needsOverwriteConfirm(s.vault, last) && !req.overwriteConfirmed) {
@@ -1448,13 +1468,18 @@ export async function envTargetAt(key: Uint8Array, dir: string, path?: string): 
   if (path !== undefined) return { repoName: at.name, path }
   const rules = effectiveRules(settings, vaultName)
   for (let n = at.folders.length; n >= 0; n--) {
-    const synced = (await envFilesIn(at.dir, at.folders.slice(0, n))).filter((p) =>
-      isIncluded(p, rules)
+    const folder = at.folders.slice(0, n).join('/')
+    const picked = (rules.files ?? []).filter(
+      (p) => envFolders(p).join('/').toLowerCase() === folder.toLowerCase()
     )
+    const found = (await envFilesIn(at.dir, at.folders.slice(0, n))).filter(
+      (p) => isIncluded(p, rules) && !isPicked(p, rules)
+    )
+    const synced = [...found, ...picked]
     const plain = synced.find((p) => envFileName(p) === ROOT_ENV)
     const only = synced.length === 1 ? synced[0] : undefined
-    const found = plain ?? only
-    if (found) return { repoName: at.name, path: found }
+    const target = plain ?? only
+    if (target) return { repoName: at.name, path: target }
     if (synced.length > 1) {
       throw new AppError(
         'ENV_AMBIGUOUS',
@@ -1463,6 +1488,46 @@ export async function envTargetAt(key: Uint8Array, dir: string, path?: string): 
     }
   }
   return { repoName: at.name, path: ROOT_ENV }
+}
+
+/** The folder of the repo `repoName`, for the dialog that picks a file in it. */
+export async function repoFolder(repoName: string): Promise<string> {
+  return resolveRepo((await configured()).projectsPath, repoName)
+}
+
+const notSyncable = (why: string): AppError =>
+  new AppError('ENV_NOT_SYNCABLE', `EnvVault can't sync that file: ${why}`)
+
+/**
+ * The path from the root of the repo `repoName` of `picked`, a file chosen in
+ * the native dialog, if EnvVault can sync it: inside the repo, a name and
+ * folders isEnvPath allows, no symlink, and in .env format. Messages never
+ * name it. Reads the file only to check its format, and wipes it.
+ */
+export async function pickedPath(repoName: string, picked: string): Promise<string> {
+  const repoDir = await repoFolder(repoName)
+  // The folder's real path, like repoDir's; the file itself must not be a link.
+  const dir = await realpath(dirname(picked)).catch(() => null)
+  if (!dir || (dir !== repoDir && !isInside(repoDir, dir))) {
+    throw notSyncable(`it isn't inside ${repoName}.`)
+  }
+  const path = relative(repoDir, join(dir, basename(picked)))
+    .split(sep)
+    .join('/')
+  if (!isEnvPath(path)) {
+    throw notSyncable(
+      "its name or folder isn't one EnvVault syncs (templates such as .env.example, git's own files, names with spaces or other characters, or more than 8 folders deep)."
+    )
+  }
+  const envDir = await resolveEnvDir(repoDir, path)
+  const bytes = envDir ? await readEnvFile(envDir, path) : null
+  if (!bytes) throw notSyncable('it no longer exists.')
+  try {
+    requireDotenv(path, bytes)
+  } finally {
+    bytes.fill(0)
+  }
+  return path
 }
 
 /** The name of the repo that contains `dir` (see envTargetAt). */
@@ -1513,7 +1578,12 @@ const stamped = (settings: VaultSettings, machineName: string): VaultSettings =>
 /** Save a repo's settings, by its vault name, for every machine. */
 export function saveRepoSettings(key: Uint8Array, req: RepoSettingsRequest): Promise<null> {
   const id = entryId(req.vaultName)
-  const rules = { ignored: req.ignored, include: req.include, exclude: req.exclude }
+  const rules = {
+    ignored: req.ignored,
+    include: req.include,
+    exclude: req.exclude,
+    files: req.files
+  }
   return changeSettings(key, (settings) =>
     sameRepoRules(repoRules(settings, id), rules) ? null : withRepo(settings, id, rules)
   )

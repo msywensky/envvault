@@ -22,6 +22,7 @@ import type {
   RemoveRequest,
   RepoList,
   RepoRow,
+  PickedFile,
   RepoSettingsRequest,
   ReviewedFile,
   SaveEditRequest,
@@ -64,6 +65,7 @@ export interface Responses {
   'repo:addGitignore': GitignoreResult
   'repo:saveSettings': null
   'repo:setVaultName': null
+  'repo:pickFile': PickedFile | null
   'vault:saveDefaults': null
   'vault:resetSettings': null
   'skill:status': SkillInfo
@@ -135,6 +137,11 @@ export interface EnvVaultApi {
   saveRepoSettings(request: RepoSettingsRequest): R<'repo:saveSettings'>
   /** Sync a folder as another name in the vault, on this machine only. */
   setVaultName(request: VaultNameRequest): R<'repo:setVaultName'>
+  /**
+   * Pick a file in a folder (`repoName`) with the native dialog, to sync by
+   * hand: its path from the repo root, or null if cancelled.
+   */
+  pickRepoFile(request: { repoName: string }): R<'repo:pickFile'>
   /** Save the env file rules repos without their own use, for every machine. */
   saveDefaults(rules: FileRules): R<'vault:saveDefaults'>
   /** Replace repo settings that failed verification with empty ones. */

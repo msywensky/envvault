@@ -5,8 +5,15 @@
 // EnvVault can add some without an older one dropping them when it writes;
 // `format` changes only for a change an older version must not misread.
 import { z } from 'zod'
-import { BUILT_IN_RULES, MAX_PATTERNS, patternProblem, type FileRules } from '../shared/envrules'
+import {
+  BUILT_IN_RULES,
+  MAX_PATTERNS,
+  MAX_PICKED_FILES,
+  patternProblem,
+  type FileRules
+} from '../shared/envrules'
 import type { RepoRules } from '../shared/types'
+import { envPathId, isEnvPath } from './envpath'
 import { isValidRepoName } from './paths'
 
 export const SETTINGS_FORMAT = 1
@@ -30,7 +37,10 @@ const Patterns = z.array(z.string().refine((p) => patternProblem(p) === null)).m
 const RepoEntrySchema = z.looseObject({
   ignored: z.boolean().optional(),
   include: Patterns.nullable().optional(),
-  exclude: Patterns.nullable().optional()
+  exclude: Patterns.nullable().optional(),
+  // Checked when read (repoRules), not here: a path a newer EnvVault allows
+  // must not make the whole document unreadable to this one.
+  files: z.array(z.string()).optional()
 })
 
 const RepoId = z.string().refine((id) => isValidRepoName(id) && id === id.toLowerCase())
@@ -81,8 +91,21 @@ export function repoRules(doc: VaultSettings, repoId: string): RepoRules {
   return {
     ignored: entry?.ignored ?? false,
     include: entry?.include ?? null,
-    exclude: entry?.exclude ?? null
+    exclude: entry?.exclude ?? null,
+    files: pickedFiles(entry?.files ?? [])
   }
+}
+
+/** The paths of `files` this version can sync, once each, at most MAX_PICKED_FILES. */
+function pickedFiles(files: readonly string[]): string[] {
+  const seen = new Set<string>()
+  return files
+    .filter((f) => {
+      if (!isEnvPath(f) || seen.has(envPathId(f))) return false
+      seen.add(envPathId(f))
+      return true
+    })
+    .slice(0, MAX_PICKED_FILES)
 }
 
 /** The rules a repo's env files are chosen by: its own lists, or else the defaults. */
@@ -90,12 +113,13 @@ export function effectiveRules(doc: VaultSettings, repoId: string): FileRules {
   const own = repoRules(doc, repoId)
   return {
     include: own.include ?? doc.defaults.include,
-    exclude: own.exclude ?? doc.defaults.exclude
+    exclude: own.exclude ?? doc.defaults.exclude,
+    files: own.files
   }
 }
 
 // The fields of a repo's entry this version knows (see withRepo).
-const REPO_FIELDS = new Set(['ignored', 'include', 'exclude'])
+const REPO_FIELDS = new Set(['ignored', 'include', 'exclude', 'files'])
 
 /** Every repo the settings say something about, by repo id. */
 export function allRepoRules(doc: VaultSettings): Record<string, RepoRules> {
@@ -114,7 +138,8 @@ export function withRepo(doc: VaultSettings, repoId: string, rules: RepoRules): 
     ...unknown,
     ...(rules.ignored ? { ignored: true } : {}),
     ...(rules.include ? { include: [...rules.include] } : {}),
-    ...(rules.exclude ? { exclude: [...rules.exclude] } : {})
+    ...(rules.exclude ? { exclude: [...rules.exclude] } : {}),
+    ...(rules.files.length ? { files: [...rules.files] } : {})
   }
   const repos = Object.fromEntries(Object.entries(doc.repos).filter(([id]) => id !== repoId))
   if (Object.keys(next).length > 0) repos[repoId] = next
@@ -134,7 +159,10 @@ const sameList = (a: readonly string[] | null, b: readonly string[] | null): boo
 
 /** True if two repos' settings are the same. */
 export const sameRepoRules = (a: RepoRules, b: RepoRules): boolean =>
-  a.ignored === b.ignored && sameList(a.include, b.include) && sameList(a.exclude, b.exclude)
+  a.ignored === b.ignored &&
+  sameList(a.include, b.include) &&
+  sameList(a.exclude, b.exclude) &&
+  sameList(a.files, b.files)
 
 /** True if two sets of rules are the same. */
 export const sameFileRules = (a: FileRules, b: FileRules): boolean =>

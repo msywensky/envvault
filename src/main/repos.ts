@@ -5,7 +5,14 @@
 import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
 import { relative, sep } from 'node:path'
-import { ROOT_ENV, envFileName, envFolders, isEnvPath } from '../core/envpath'
+import {
+  ROOT_ENV,
+  envFileName,
+  envFolders,
+  envPathId,
+  isEnvFileName,
+  isEnvPath
+} from '../core/envpath'
 import { isInside, isValidRepoName, resolveInside } from '../core/paths'
 import { sha256Hex } from '../core/crypto'
 import { isIncluded, type FileRules } from '../shared/envrules'
@@ -133,7 +140,7 @@ export async function envFilesIn(repoDir: string, folders: string[]): Promise<st
   if (!envDir) return []
   const names = await readdir(envDir).catch(() => [])
   return names
-    .filter((name) => isEnvPath(pathOf(name)))
+    .filter((name) => isEnvFileName(name) && isEnvPath(pathOf(name)))
     .sort()
     .map(pathOf)
 }
@@ -268,7 +275,8 @@ export async function listFolders(projectsPath: string): Promise<RepoFolder[]> {
 
 /**
  * Each repo's env files as they are now: its root .env and the files git
- * found in it, those its rules (`rulesFor`) include. With `find`, git is
+ * found in it, those its rules (`rulesFor`) include, and the files its rules
+ * name (picked by hand). With `find`, git is
  * asked again; without it, the files it found last time are used, so
  * background work runs no git. A repo git can't answer for gets its root
  * .env only.
@@ -289,7 +297,12 @@ export async function scanRepos(
       const others = (found.get(repo.dir) ?? []).filter(
         (path) => path !== ROOT_ENV && isIncluded(path, rules)
       )
-      const paths = [...(isIncluded(ROOT_ENV, rules) ? [ROOT_ENV] : []), ...others]
+      // Files picked by hand: git wasn't asked about their names.
+      const known = new Set(others.map(envPathId))
+      const picked = (rules.files ?? []).filter(
+        (path) => path !== ROOT_ENV && !known.has(envPathId(path))
+      )
+      const paths = [...(isIncluded(ROOT_ENV, rules) ? [ROOT_ENV] : []), ...others, ...picked]
       return {
         ...repo,
         files: await Promise.all(paths.slice(0, MAX_FILES).map((p) => scanEnvFile(repo.dir, p))),
