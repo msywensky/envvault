@@ -3,8 +3,8 @@
 // it's ignored and which env files it syncs are kept in the vault, by that
 // name, for every machine. Patterns and names only: no values here.
 import { computed, onMounted, ref, watch } from 'vue'
-import { Check } from 'lucide-vue-next'
-import { RESERVED_NOTE, isIncluded } from '../../../shared/envrules'
+import { Check, FilePlus, X } from 'lucide-vue-next'
+import { MAX_PICKED_FILES, RESERVED_NOTE, isIncluded } from '../../../shared/envrules'
 import type { RepoInfo, RepoRules } from '../../../shared/types'
 import { call, loadRepos, store, toast } from '../store'
 import { patternLines, patternListProblems, repoKey, repoNameProblem, syncsAs } from '../status'
@@ -25,7 +25,12 @@ const vaultId = computed(() => info.value.vaultName.toLowerCase())
 const defaults = computed(() => store.repoSettings?.defaults ?? { include: ['.env'], exclude: [] })
 const saved = computed(
   (): RepoRules =>
-    store.repoSettings?.repos[vaultId.value] ?? { ignored: false, include: null, exclude: null }
+    store.repoSettings?.repos[vaultId.value] ?? {
+      ignored: false,
+      include: null,
+      exclude: null,
+      files: []
+    }
 )
 const unreadable = computed(() => store.repoSettings?.error ?? null)
 
@@ -53,6 +58,7 @@ const includeText = ref('')
 const excludeText = ref('')
 const includeDefaults = ref(true)
 const excludeDefaults = ref(true)
+const files = ref<string[]>([])
 
 /** Start again from what the vault has for the repo's current vault name. */
 function reset(): void {
@@ -62,6 +68,7 @@ function reset(): void {
   excludeDefaults.value = rules.exclude === null
   includeText.value = (rules.include ?? []).join('\n')
   excludeText.value = (rules.exclude ?? []).join('\n')
+  files.value = [...rules.files]
 }
 reset()
 // Another vault name has its own settings.
@@ -70,7 +77,8 @@ watch(vaultId, reset)
 const draft = computed((): RepoRules => ({
   ignored: ignored.value,
   include: includeDefaults.value ? null : patternLines(includeText.value),
-  exclude: excludeDefaults.value ? null : patternLines(excludeText.value)
+  exclude: excludeDefaults.value ? null : patternLines(excludeText.value),
+  files: files.value
 }))
 const problems = computed(() => [
   ...(includeDefaults.value ? [] : patternListProblems(includeText.value)),
@@ -82,7 +90,8 @@ const dirty = computed(
   () =>
     draft.value.ignored !== saved.value.ignored ||
     !sameList(draft.value.include, saved.value.include) ||
-    !sameList(draft.value.exclude, saved.value.exclude)
+    !sameList(draft.value.exclude, saved.value.exclude) ||
+    !sameList(draft.value.files, saved.value.files)
 )
 
 // What the draft would sync, from the files found at the last Refresh and the vault copies.
@@ -94,14 +103,41 @@ const vaultPaths = computed(() =>
 const preview = computed(() => {
   const rules = {
     include: draft.value.include ?? defaults.value.include,
-    exclude: draft.value.exclude ?? defaults.value.exclude
+    exclude: draft.value.exclude ?? defaults.value.exclude,
+    files: draft.value.files
   }
-  const known = [...new Set([...(info.value.found ?? []), ...vaultPaths.value])].sort()
+  const known = [
+    ...new Set([...(info.value.found ?? []), ...vaultPaths.value, ...draft.value.files])
+  ].sort()
   return {
     syncs: known.filter((p) => isIncluded(p, rules)),
     dropped: vaultPaths.value.filter((p) => !isIncluded(p, rules))
   }
 })
+
+// ---- files picked by hand ----
+
+const sameFile = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
+/** Pick a file in the folder with the native dialog; main checks it and gives its path. */
+async function addFile(): Promise<void> {
+  if (busy.value || files.value.length >= MAX_PICKED_FILES) return
+  busy.value = true
+  error.value = null
+  const repoName = info.value.name
+  const res = await call(() => window.envvault.pickRepoFile({ repoName }))
+  busy.value = false
+  if (!res.ok) {
+    if (res.error.code !== 'LOCKED') error.value = res.error.message
+    return
+  }
+  const path = res.data?.path
+  if (path && !files.value.some((f) => sameFile(f, path))) files.value = [...files.value, path]
+}
+
+function removeFile(path: string): void {
+  files.value = files.value.filter((f) => f !== path)
+}
 
 async function save(): Promise<void> {
   if (busy.value || problems.value.length || !dirty.value) return
@@ -112,7 +148,8 @@ async function save(): Promise<void> {
     vaultName: info.value.vaultName,
     ignored: draft.value.ignored,
     include: draft.value.include ? [...draft.value.include] : null,
-    exclude: draft.value.exclude ? [...draft.value.exclude] : null
+    exclude: draft.value.exclude ? [...draft.value.exclude] : null,
+    files: [...draft.value.files]
   }
   // An ignored repo was never scanned: ask git about it once it isn't.
   const rescan = saved.value.ignored && !request.ignored
@@ -220,12 +257,47 @@ watch(
             :defaults="defaults.include"
             :disabled="busy || !!unreadable"
           />
+          <div class="field">
+            <div class="picked-header">
+              <span class="field-label">Files picked by hand</span>
+              <button
+                v-if="info.local"
+                type="button"
+                class="btn btn-sm"
+                :disabled="busy || !!unreadable || files.length >= MAX_PICKED_FILES"
+                @click="addFile"
+              >
+                <FilePlus />
+                Add file…
+              </button>
+            </div>
+            <ul v-if="files.length" class="picked-files">
+              <li v-for="f in files" :key="f">
+                <code>{{ f }}</code>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-icon"
+                  :title="`Stop syncing ${f}`"
+                  :aria-label="`Stop syncing ${f}`"
+                  :disabled="busy || !!unreadable"
+                  @click="removeFile(f)"
+                >
+                  <X />
+                </button>
+              </li>
+            </ul>
+            <p class="muted small">
+              Synced whatever the patterns say, with any name, as long as the file is in .env format
+              (KEY=value lines and # comments).
+              <template v-if="!info.local">Add files from a machine that has this repo.</template>
+            </p>
+          </div>
           <PatternList
             id="repo-exclude"
             v-model:text="excludeText"
             v-model:use-defaults="excludeDefaults"
             label="Env files not to sync"
-            hint="Wins over the list above. A folder covers everything in it (apps/legacy, **/fixtures)."
+            hint="Wins over Env files to sync, but not over files picked by hand. A folder covers everything in it (apps/legacy, **/fixtures)."
             :defaults="defaults.exclude"
             :disabled="busy || !!unreadable"
           />

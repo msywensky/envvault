@@ -1758,6 +1758,7 @@ describe('repo settings', { timeout: 30_000 }, () => {
       ignored: false,
       include: null,
       exclude: null,
+      files: [],
       ...rules
     })
   }
@@ -1842,7 +1843,7 @@ describe('repo settings', { timeout: 30_000 }, () => {
     const b = await on('b')
     const listed = await list(b, true)
     expect(listed.settings.repos).toEqual({
-      next: { ignored: false, include: ['.env', '.env.local'], exclude: null }
+      next: { ignored: false, include: ['.env', '.env.local'], exclude: null, files: [] }
     })
     expect(await rows(b)).toMatchObject({ next: 'in-sync', 'next/.env.local': 'vault-newer' })
     await pullRepo(b, 'next', '.env.local')
@@ -1978,7 +1979,7 @@ describe('repo settings', { timeout: 30_000 }, () => {
         const v = a.vault.vaultFor(location)
         await a.vault.withEntryKeys(key, async (keys) => {
           const { settings } = await (await v.snapshot()).settings(keys)
-          const other = { ignored: false, include: ['.env.other'], exclude: null }
+          const other = { ignored: false, include: ['.env.other'], exclude: null, files: [] }
           await v.writeSettings(keys, withRepo(settings, 'xx', other), expected)
         })
       }
@@ -2765,5 +2766,111 @@ describe('three-way', { timeout: 30_000 }, () => {
     makeRepo(twB, 'byhand', { '.gitignore': IGNORE, '.env': 'X=1\n' })
     expect((await rows(await on('b')))['byhand']).toBe('in-sync')
     expect(await basesOf(await on('b'), 'b')).toHaveLength(before + 1)
+  })
+})
+
+describe('files picked by hand', { timeout: 30_000 }, () => {
+  let vault: string
+  let location: VaultLocation
+  let pA: string
+  let pB: string
+  const IGNORE = 'config/secrets.env\n.env\n.env.bak.*\n'
+  const on = (name: 'a' | 'b'): Promise<Machine> =>
+    machine(name, { projects: name === 'a' ? pA : pB, vault: location })
+  const secrets = envFile('cfg', 'config/secrets.env')
+  const pick = async (m: Machine, file: string): Promise<string> =>
+    m.sync.pickedPath('cfg', join(m === a ? pA : pB, 'cfg', file))
+  const saveFiles = async (m: Machine, files: string[]): Promise<void> => {
+    const { key } = await m.open()
+    await m.sync.saveRepoSettings(key, {
+      vaultName: 'cfg',
+      ignored: false,
+      include: null,
+      exclude: null,
+      files
+    })
+  }
+  let a: Machine
+
+  beforeAll(async () => {
+    vault = join(root, 'picked-vault')
+    mkdirSync(vault)
+    location = { kind: 'folder', path: vault }
+    pA = join(root, 'picked-a')
+    pB = join(root, 'picked-b')
+    for (const projects of [pA, pB]) {
+      const dir = makeRepo(projects, 'cfg', { '.gitignore': IGNORE, '.env': 'R=1\n' })
+      mkdirSync(join(dir, 'config'))
+    }
+    writeFileSync(join(pA, 'cfg', 'config', 'secrets.env'), '# keys\nexport S=1\n')
+    writeFileSync(join(pA, 'cfg', 'config', 'app.json'), '{ "S": 1 }\n')
+    writeFileSync(join(pA, 'cfg', 'config', '.env.example'), 'S=\n')
+    writeFileSync(join(root, 'outside.env'), 'O=1\n')
+    a = await on('a')
+    await a.vault.vaultFor(location).create(PASSWORD)
+  })
+
+  it('checks a picked file: in the repo, a name it can sync, in .env format', async () => {
+    expect(await pick(a, 'config/secrets.env')).toBe('config/secrets.env')
+    expect(await pick(a, '.env')).toBe('.env')
+    expect(await errorCode(pick(a, 'config/app.json'))).toBe('ENV_NOT_DOTENV')
+    expect(await errorCode(pick(a, 'config/.env.example'))).toBe('ENV_NOT_SYNCABLE')
+    expect(await errorCode(pick(a, '.gitignore'))).toBe('ENV_NOT_SYNCABLE')
+    expect(await errorCode(pick(a, 'config/missing.env'))).toBe('ENV_NOT_SYNCABLE')
+    expect(await errorCode(a.sync.pickedPath('cfg', join(root, 'outside.env')))).toBe(
+      'ENV_NOT_SYNCABLE'
+    )
+  })
+
+  it('syncs a picked file between machines once it is in the settings', async () => {
+    expect((await rows(a, true))['cfg/config/secrets.env']).toBeUndefined()
+    const { key, vaultId } = await a.open()
+    expect(await errorCode(a.sync.previewPush(key, vaultId, secrets))).toBe('ENV_EXCLUDED')
+
+    await saveFiles(a, ['config/secrets.env'])
+    expect((await rows(a))['cfg/config/secrets.env']).toBe('local-only')
+    await pushRepo(a, 'cfg', false, 'config/secrets.env')
+    expect(await storedEnv(a, 'cfg', 'config/secrets.env', vault)).toBe('# keys\nexport S=1\n')
+
+    const b = await on('b')
+    expect((await rows(b, true))['cfg/config/secrets.env']).toBe('vault-newer')
+    await pullRepo(b, 'cfg', 'config/secrets.env')
+    expect(readFileSync(join(pB, 'cfg', 'config', 'secrets.env'), 'utf8')).toBe(
+      '# keys\nexport S=1\n'
+    )
+    expect((await rows(b))['cfg/config/secrets.env']).toBe('in-sync')
+  })
+
+  it('backs it up under .env.bak.@<name>', async () => {
+    writeFileSync(join(pA, 'cfg', 'config', 'secrets.env'), 'S=2\n')
+    await pushRepo(await on('a'), 'cfg', false, 'config/secrets.env')
+    const b = await on('b')
+    const backup = await pullRepo(b, 'cfg', 'config/secrets.env')
+    expect(backup).toMatch(/^\.env\.bak\.@secrets\.env\.\d{8}T\d{6}Z$/)
+    expect(readFileSync(join(pB, 'cfg', 'config', 'secrets.env'), 'utf8')).toBe('S=2\n')
+  })
+
+  it('refuses to push one that is no longer in .env format', async () => {
+    const m = await on('a')
+    writeFileSync(join(pA, 'cfg', 'config', 'secrets.env'), 'S: 3\n')
+    const { key, vaultId } = await m.open()
+    expect(await errorCode(m.sync.previewPush(key, vaultId, secrets))).toBe('ENV_NOT_DOTENV')
+    const expected = { localHash: null, vaultHash: null }
+    const push = m.sync.push(key, vaultId, { ...secrets, overwriteConfirmed: true, expected })
+    expect(await errorCode(push)).toBe('ENV_NOT_DOTENV')
+    writeFileSync(join(pA, 'cfg', 'config', 'secrets.env'), 'S=2\n')
+  })
+
+  it('is what the envvault command means in its folder', async () => {
+    const m = await on('a')
+    const { key } = await m.open()
+    expect(await m.sync.envTargetAt(key, join(pA, 'cfg', 'config'))).toEqual(secrets)
+    expect(await m.sync.envTargetAt(key, join(pA, 'cfg'))).toEqual(envFile('cfg'))
+  })
+
+  it('lists its vault copy as excluded once it is no longer picked', async () => {
+    const m = await on('a')
+    await saveFiles(m, [])
+    expect((await rows(m))['cfg/config/secrets.env']).toBe('excluded')
   })
 })

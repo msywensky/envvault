@@ -35,6 +35,8 @@ export type ErrorCode =
   | 'ENV_NOT_FILE'
   | 'ENV_TOO_LARGE'
   | 'ENV_NOT_UTF8'
+  | 'ENV_NOT_DOTENV'
+  | 'ENV_NOT_SYNCABLE'
   | 'ENV_DUPLICATE_KEY'
   | 'EDIT_INVALID'
   | 'MERGE_INVALID'

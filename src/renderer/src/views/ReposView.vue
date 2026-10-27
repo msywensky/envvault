@@ -119,7 +119,8 @@ async function setIgnored(repo: RepoInfo, on: boolean): Promise<void> {
     vaultName: repo.vaultName,
     ignored: on,
     include: own?.include ? [...own.include] : null,
-    exclude: own?.exclude ? [...own.exclude] : null
+    exclude: own?.exclude ? [...own.exclude] : null,
+    files: own ? [...own.files] : []
   }
   const res = await call(() => window.envvault.saveRepoSettings(request))
   busy.value = false

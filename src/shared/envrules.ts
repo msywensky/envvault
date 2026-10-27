@@ -8,12 +8,18 @@
 // folders, and covers everything in them: "apps/legacy", "**/fixtures". "*"
 // matches within one name, "**" any number of folders, and case is ignored,
 // as it is for paths (envPathId). A file is included if an include pattern
-// matches it and no exclude pattern does.
+// matches it and no exclude pattern does, or if it is one of the repo's
+// `files`, picked by hand: those sync whatever the patterns say.
 
 export interface FileRules {
   include: string[]
   exclude: string[]
+  /** A repo's files picked by hand, by path from its root, with any name (see isEnvPath). */
+  files?: string[]
 }
+
+/** The most files a repo can have picked by hand. */
+export const MAX_PICKED_FILES = 20
 
 /** What a repo syncs when nobody has said otherwise: every .env, in any folder. */
 export const BUILT_IN_RULES: FileRules = { include: ['.env'], exclude: [] }
@@ -98,10 +104,20 @@ export function matchesPattern(path: string, pattern: string): boolean {
   return re.test(path)
 }
 
-/** True if the rules sync the env file at `path`: an include matches, and no exclude does. */
+/** True if `path` is one of the rules' files picked by hand. */
+export function isPicked(path: string, rules: FileRules): boolean {
+  const id = path.toLowerCase()
+  return (rules.files ?? []).some((f) => f.toLowerCase() === id)
+}
+
+/**
+ * True if the rules sync the env file at `path`: it was picked by hand, or an
+ * include matches and no exclude does.
+ */
 export function isIncluded(path: string, rules: FileRules): boolean {
   return (
-    rules.include.some((p) => matchesPattern(path, p)) &&
-    !rules.exclude.some((p) => matchesPattern(path, p))
+    isPicked(path, rules) ||
+    (rules.include.some((p) => matchesPattern(path, p)) &&
+      !rules.exclude.some((p) => matchesPattern(path, p)))
   )
 }

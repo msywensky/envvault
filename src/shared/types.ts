@@ -34,6 +34,8 @@ export interface RepoRules {
   ignored: boolean
   include: string[] | null
   exclude: string[] | null
+  /** Files picked by hand (FileRules.files): synced whatever the patterns say. */
+  files: string[]
 }
 
 /** Metadata about the vault copy of one repo. No values. */
@@ -301,6 +303,11 @@ export interface RepoList {
 /** Save a repo's settings, by its vault name (for every machine that syncs it). */
 export interface RepoSettingsRequest extends RepoRules {
   vaultName: string
+}
+
+/** A file picked by hand in a repo (repo:pickFile), by its path from the repo root. */
+export interface PickedFile {
+  path: string
 }
 
 /** Sync a folder (`repoName`) as another name in the vault; its own name stops that. */

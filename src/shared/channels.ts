@@ -31,6 +31,7 @@ export const CH = {
   addGitignore: 'repo:addGitignore',
   saveRepoSettings: 'repo:saveSettings',
   setVaultName: 'repo:setVaultName',
+  pickRepoFile: 'repo:pickFile',
   saveDefaults: 'vault:saveDefaults',
   resetSettings: 'vault:resetSettings',
   skillStatus: 'skill:status',

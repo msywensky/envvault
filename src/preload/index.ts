@@ -45,9 +45,10 @@ const api: EnvVaultApi = {
   removeFromVault: ({ vaultName, path, expectedVaultHash }) =>
     invoke(CH.removeFromVault, { vaultName, path, expectedVaultHash }),
   addGitignore: ({ repoName, path }) => invoke(CH.addGitignore, { repoName, path }),
-  saveRepoSettings: ({ vaultName, ignored, include, exclude }) =>
-    invoke(CH.saveRepoSettings, { vaultName, ignored, include, exclude }),
+  saveRepoSettings: ({ vaultName, ignored, include, exclude, files }) =>
+    invoke(CH.saveRepoSettings, { vaultName, ignored, include, exclude, files }),
   setVaultName: ({ repoName, vaultName }) => invoke(CH.setVaultName, { repoName, vaultName }),
+  pickRepoFile: ({ repoName }) => invoke(CH.pickRepoFile, { repoName }),
   saveDefaults: ({ include, exclude }) => invoke(CH.saveDefaults, { include, exclude }),
   resetSettings: () => invoke(CH.resetSettings),
   skillStatus: () => invoke(CH.skillStatus),

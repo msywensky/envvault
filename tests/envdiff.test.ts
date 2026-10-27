@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MASK, diffKeys, maskEnvLines, parseEnv } from '../src/core/envdiff'
+import { MASK, diffKeys, isDotenvText, maskEnvLines, parseEnv } from '../src/core/envdiff'
 
 describe('parseEnv', () => {
   it('parses plain, quoted and exported values', () => {
@@ -206,4 +206,21 @@ describe('diffKeys', () => {
       unchanged: 0
     })
   })
+})
+
+describe('isDotenvText', () => {
+  it.each([
+    '',
+    'A=1\n',
+    '\uFEFF# comment\r\n\r\nexport A=1\r\nB="two\nlines"\n  # indented\n',
+    "A='x' # note\nB=\n"
+  ])('accepts %j', (text) => expect(isDotenvText(text)).toBe(true))
+
+  it.each([
+    '{"A": "1"}\n',
+    'A: 1\nB: 2\n',
+    'A=1\nnot an assignment\n',
+    '[section]\nA=1\n',
+    '1A=x\n'
+  ])('rejects %j', (text) => expect(isDotenvText(text)).toBe(false))
 })
