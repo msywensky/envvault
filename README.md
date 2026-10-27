@@ -60,7 +60,7 @@ Every push and pull shows a confirmation with the **key names** that will be add
 
 To see exactly what a pull would change, click **Show raw diff** in the pull dialog. It shows a line-by-line diff from your `.env` to the vault copy with every value masked (`KEY=••••••••`); comments are shown as they are. Click **Show values** to see the values; they are hidden again after a minute (see [Env values](docs/security.md#env-values)).
 
-![Resolving a conflict: a copy chosen for each key that differs, values masked](docs/conflict.png)
+![Resolving a conflict: one key changed on both sides left to choose, the others chosen for you, values masked](docs/conflict.png)
 
 ## Security
 
@@ -148,10 +148,10 @@ You can turn the checks off in **Settings → Sync**.
 
 Besides each repo's root `.env`, EnvVault syncs the `.env` in any of its folders: `apps/web/.env`, `packages/db/.env`, `supabase/functions/.env`. Variants such as `.env.local` sync too in the repos whose [settings](#repo-settings) include them.
 
-- **Found with git.** EnvVault asks git (`git ls-files`) for every env file it knows of in each repo: ignored ones, and also ones git would commit, or a committed `.env`, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh**; automatic pull and mini mode use what it found then.
+- **Found with git.** EnvVault asks git (`git ls-files`) for every env file it knows of in each repo: ignored ones, and also ones git would commit, or a committed `.env`, so you're told before a pull. Folders git ignores, such as `node_modules` or build output, are never searched. This runs when the Repositories list opens and when you click **Refresh** (in the full window or the mini window); automatic pull and the mini window's own status checks use what it found then.
 - **Listed under their repo.** A repo with only a root `.env` is one row. Otherwise its name is followed by a row per file. Files found in folders that nobody has pushed yet are listed apart, under _N .env files found in folders, not in the vault yet_, collapsed, each with a **Push** button; they don't count as needing attention.
 - **On your other machines,** a pushed file appears as Vault newer and is pulled like any other. A pull never creates a folder: if `apps/web` isn't in that machine's copy of the repo (another branch, a renamed package), the file shows as Vault only.
-- **Next to the file.** A file's backups, its `.env.example` check and its git checks are all in its own folder. **Add to .gitignore** adds the lines to the repo's root `.gitignore`, where they cover every folder.
+- **Next to the file.** A file's backups, its `.env.example` check and its git checks are all in its own folder. **Add .env to .gitignore** (named after the file being pulled) adds the lines to the repo's root `.gitignore`, where they cover every folder.
 - **Symlinks:** a `.env` under a symlinked folder is refused. A symlinked `.env` that isn't in the vault (a shared root `.env` linked into a package, say) is skipped.
 - **In the vault,** such a file is `<repo>.<tag>.file.enc`. The tag is a keyed hash of its path, so the sync folder or git host can see how many `.env` files a repo has, but not their paths. Hover over a row to see the name its vault copy has, for finding it in Drive's version history or the repository's.
 
@@ -166,8 +166,11 @@ Click **Settings…** on a repo (on its row, or next to its name when it has sev
   - Variants such as `.env.local` often hold values that differ between machines. Sync them only where they don't, or mark those keys [machine-specific](#machine-specific-keys).
   - The dialog shows which files the patterns match, from what git found at the last Refresh. Changes apply at once.
   - A vault copy the patterns no longer include stays in the vault, listed as **Excluded** with **Remove…**. It's never pushed, pulled or edited.
-  - A variant's backups are named after it (`.env.bak.local.<timestamp>`) and kept apart from the `.env`'s. Its `.env.example` check is skipped. **Add to .gitignore** adds the file's own name.
-- **Files picked by hand:** **Add file…** opens your system's file picker in the repo, so you can sync a file the patterns don't cover, with any name (`config/secrets.env`, `.envrc`). Its content must be in `.env` format (`KEY=value` lines, `# comments` and blank lines): EnvVault refuses a JSON or YAML file when you pick it and when you push it. A picked file syncs whatever the patterns say; remove it from the list to stop. It can't be a template, one of git's own files (`.gitignore`) or more than 8 folders deep, and a repo can have up to 20. Pulls need it git-ignored like any env file (**Add to .gitignore** adds its name), and its backups are named `.env.bak.@<name>.<timestamp>`, so `.env.bak.*` still covers them. Older versions of EnvVault don't sync picked files, and show their vault copies as saved by a newer EnvVault.
+  - A variant's backups are named after it (`.env.bak.local.<timestamp>`) and kept apart from the `.env`'s. Its `.env.example` check is skipped. The pull dialog names the file (**Add .env.local to .gitignore**) and adds its own name.
+- **Files picked by hand:** **Add file…** opens your system's file picker in the repo, so you can sync a file the patterns don't cover, with any name (`config/secrets.env`, `.envrc`). Its content must be in `.env` format (`KEY=value` lines, `# comments` and blank lines): EnvVault refuses a JSON or YAML file when you pick it and when you push it. A picked file syncs whatever the patterns say; remove it from the list to stop. It can't be a template, one of git's own files (`.gitignore`) or more than 8 folders deep, and a repo can have up to 20. Pulls need it git-ignored like any env file (the pull dialog offers **Add secrets.env to .gitignore**, with its name), and its backups are named `.env.bak.@<name>.<timestamp>`, so `.env.bak.*` still covers them. Older versions of EnvVault don't sync picked files, and show their vault copies as saved by a newer EnvVault.
+
+  ![A repo's settings: a file picked by hand, config/secrets.env, synced along with .env](docs/repo-settings.png)
+
 - **Ignore this repo:** EnvVault doesn't read its files, push them or pull into it, on any machine, and the command line refuses it. It moves to the collapsed **Ignored** list under the table, with **Stop ignoring**. Its vault copies stay.
 - **Sync as** (this machine only) is the name the folder's files have in the vault. Use it for a second checkout or a git worktree of a repo (`api-wt` syncing as `api`), or a folder you renamed. Each folder keeps its own sync status, so a push from one shows the other as Vault newer.
 
@@ -207,17 +210,23 @@ Off by default; turn it on in **Settings → Sync**. While EnvVault is unlocked,
 
 ### Mini mode
 
-Click **Mini** next to a `.env` to shrink EnvVault to a small window, kept above your other windows: that file's name and status chip, its **Push** (or **Pull**) button next to the window's controls. Hover over the name for the vault copy's version. A second row appears only for a message or the unlock form. Click **Full view** to go back.
+Click **Mini** on a repo's row to shrink EnvVault to a small window, kept above your other windows: the repo's name and, for each of its env files, one row with the file's status chip and its **Push** (or **Pull**) button, up to three rows before scrolling. Hover over a file's row for its vault copy's version.
 
-Every repo's **Mini** button is on its repo row. A repo whose files are listed under its name shows them together in the mini window, one row per file, up to three before scrolling, instead of a Mini button on each file.
+<img src="docs/mini.png" width="540" alt="Mini mode: the web repo's .env and a file picked by hand, each with its status and Push button, under four icon buttons">
 
-<img src="docs/mini.png" width="422" alt="Mini mode: one repo's Push button and status">
+The four icon buttons next to the repo's name (hover over one for what it does):
+
+- **Refresh** asks git for the env files again, like **Refresh** in the full window, so a file you just created shows up.
+- **On top** turns keeping the window above other windows on or off; it's highlighted while on. It's the same setting as _Keep the mini window on top_ in **Settings → General**.
+- **Lock** locks EnvVault.
+- **Full view** goes back to the full window.
+
+Also:
 
 - The status updates when a `.env` changes, when you switch to the window, and every minute. These checks don't count as activity, so they don't keep the vault unlocked.
 - **Push** still shows the review first: the window grows for it, then shrinks back.
 - A file changed on both sides shows **Merge…** or **Resolve…**, which goes back to the full window and opens the dialog there.
-- When EnvVault locks, the mini window asks for the master password. A machine that still needs the setup code unlocks in the full window.
-- **On top** turns keeping it above other windows on or off. It's the same setting as _Keep the mini window on top_ in **Settings → General**.
+- When EnvVault locks, the mini window asks for the master password in place of the files. A machine that still needs the setup code unlocks in the full window.
 
 ### Command line
 
