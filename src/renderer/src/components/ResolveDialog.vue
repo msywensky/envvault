@@ -20,10 +20,13 @@ import type {
   RepoRow
 } from '../../../shared/types'
 import { call, store, toast } from '../store'
-import { absoluteTime, fileOf, fileTitle, relativeTime } from '../status'
+import { absoluteTime, backupLabelOf, fileNameOf, fileOf, fileTitle, relativeTime } from '../status'
 import PullSafety from './PullSafety.vue'
 
 const props = defineProps<{ repo: RepoRow }>()
+// The env file's own name and its backups', for the text: not always .env.
+const fileName = computed(() => fileNameOf(props.repo))
+const backupLabel = computed(() => backupLabelOf(props.repo))
 // keep: review keeping one whole copy instead (push for local, pull for vault).
 const emit = defineEmits<{ close: []; done: []; keep: [mode: 'push' | 'pull'] }>()
 
@@ -164,7 +167,7 @@ const ownLayout = computed(() => {
 })
 const layoutNote = computed(() => {
   const lc = preview.value?.layoutChanged
-  if (ownLayout.value) return 'Comments and layout come from your .env.'
+  if (ownLayout.value) return `Comments and layout come from your ${fileName.value}.`
   if (lc?.local && lc.vault) {
     return "Comments and layout come from the vault copy: both sides changed them since the last sync, and this machine's changes to them aren't kept."
   }
@@ -292,7 +295,7 @@ async function save(): Promise<void> {
     toast(
       'success',
       res.data.backupName
-        ? `${done} ${name} (${version}). Previous .env saved as ${res.data.backupName}.`
+        ? `${done} ${name} (${version}). Previous ${fileName.value} saved as ${res.data.backupName}.`
         : `${done} ${name} (${version}).`
     )
     emit('done')
@@ -398,7 +401,7 @@ watch(
             class="notice notice-info"
           >
             No key needs a choice. The vault copy marks some of your keys machine-specific: saving
-            keeps your values and marks them in your .env too.
+            keeps your values and marks them in your {{ fileName }} too.
           </p>
           <p v-else-if="preview.keys.length === 0" class="notice notice-info">
             The two copies already match. Saving just records them as in sync.
@@ -407,7 +410,7 @@ watch(
             <div class="row">
               <span class="grow muted small">
                 <template v-if="suggested">
-                  Your .env only lacks keys the vault copy has, so they're set to
+                  Your {{ fileName }} only lacks keys the vault copy has, so they're set to
                   <strong>Add</strong>. Choose <strong>Leave out</strong> for any you removed on
                   purpose.
                 </template>
@@ -521,8 +524,8 @@ watch(
               Marked <code class="marker"># envvault:local</code>: your local values stay as they
               are.
               <template v-if="preview.unmarked.length">
-                The vault copy marks {{ preview.unmarked.join(', ') }}, so your .env gets the marker
-                too.
+                The vault copy marks {{ preview.unmarked.join(', ') }}, so your {{ fileName }} gets
+                the marker too.
               </template>
             </p>
           </div>
@@ -550,24 +553,26 @@ watch(
               Choose a copy for every key to see what saving does.
             </template>
             <template v-else-if="allFromVault && !ownLayout">
-              Saving puts the vault copy in your .env; the vault copy itself doesn't change.
+              Saving puts the vault copy in your {{ fileName }}; the vault copy itself doesn't
+              change.
             </template>
             <template v-else-if="allFromThisMachine">
-              Saving keeps your .env as it is<template v-if="addsMarkers"
+              Saving keeps your {{ fileName }} as it is<template v-if="addsMarkers"
                 >, apart from <code class="marker"># envvault:local</code> markers,</template
               >
               and makes it the new version of the vault copy.
             </template>
             <template v-else>
-              Saving writes the result to your .env and as a new version of the vault copy.
+              Saving writes the result to your {{ fileName }} and as a new version of the vault
+              copy.
               {{ layoutNote }}
             </template>
             <template v-if="!open.length && (!allFromThisMachine || addsMarkers)">
               <template v-if="store.settings?.backups ?? true">
-                Your current .env is saved as <code>.env.bak.&lt;timestamp&gt;</code> first.
+                Your current {{ fileName }} is saved as <code>{{ backupLabel }}</code> first.
               </template>
               <template v-else
-                >Backups are off in Settings, so your current .env isn't saved.</template
+                >Backups are off in Settings, so your current {{ fileName }} isn't saved.</template
               >
             </template>
           </p>
@@ -592,7 +597,7 @@ watch(
           type="button"
           class="btn"
           :disabled="busy"
-          title="Review pushing this machine's .env over the vault copy"
+          :title="`Review pushing this machine's ${fileName} over the vault copy`"
           @click="emit('keep', 'push')"
         >
           Keep this machine's file…
@@ -601,7 +606,7 @@ watch(
           type="button"
           class="btn"
           :disabled="busy"
-          title="Review pulling the vault copy over this machine's .env"
+          :title="`Review pulling the vault copy over this machine's ${fileName}`"
           @click="emit('keep', 'pull')"
         >
           Keep the vault's file…

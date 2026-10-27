@@ -9,11 +9,11 @@
 // can also name files picked by hand, with any name (config/secrets.env); a
 // file with such a name syncs only if its content is in .env format
 // (isDotenvText in ./envdiff).
-import { ROOT_ENV } from '../shared/envfile'
+import { ROOT_ENV, backupName, envFileName } from '../shared/envfile'
 import { isReservedEnvName } from '../shared/envrules'
 import { isWindowsReserved } from './paths'
 
-export { ROOT_ENV }
+export { ROOT_ENV, backupName, envFileName }
 
 /** At most this many folders between the repo root and the file. */
 export const MAX_ENV_FOLDERS = 8
@@ -76,31 +76,12 @@ export function envFolders(path: string): string[] {
   return path.split('/').slice(0, -1)
 }
 
-/** The file's own name, without its folders. */
-export function envFileName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
-}
-
 /** How paths are compared, and named in the vault: case-insensitively, like the filesystems. */
 export const envPathId = (path: string): string => path.toLowerCase()
 
 // A backup's timestamp (see backupStamp in main/sync.ts), with -<4 hex> if
 // that name was taken.
 const STAMP_RE = /^\d{8}T\d{6}Z(?:-[0-9a-f]{4})?$/
-
-/**
- * What a pull backs up the env file `fileName` as: .env.bak.<stamp> for .env,
- * .env.bak.local.<stamp> for .env.local, .env.bak.@secrets.env.<stamp> for
- * another name (no .env.<suffix> has an "@", so the two never meet). Always
- * .env.bak.*, so the one ignore line covers them all, and reserved
- * (isEnvFileName), so they never sync.
- */
-export function backupName(fileName: string, stamp: string): string {
-  if (fileName === ROOT_ENV) return `.env.bak.${stamp}`
-  return isEnvLike(fileName)
-    ? `.env.bak.${fileName.slice(5)}.${stamp}`
-    : `.env.bak.@${fileName}.${stamp}`
-}
 
 /** True if `name` is one of `fileName`'s backups (and nobody else's, or a temp file). */
 export function isBackupOf(fileName: string, name: string): boolean {
