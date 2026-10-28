@@ -36,6 +36,7 @@ const removing = ref<RepoRow | null>(null)
 const configuring = ref<RepoInfo | null>(null)
 const showNoEnv = ref(false)
 const showIgnored = ref(false)
+const showVaultOnly = ref(false)
 const busy = ref(false)
 
 const rowsOf = computed(() => {
@@ -52,8 +53,12 @@ const noEnv = computed(() =>
   )
 )
 const ignored = computed(() => store.repoInfo.filter((r) => r.ignored))
+/** Repos with vault copies but no folder in the projects folder. */
+const vaultOnly = computed(() =>
+  store.repoInfo.filter((r) => !r.ignored && !r.local && !noEnv.value.includes(r))
+)
 const listed = computed(() => {
-  const apart = new Set(noEnv.value.map(repoKey))
+  const apart = new Set([...noEnv.value, ...vaultOnly.value].map(repoKey))
   return {
     rows: store.repos.filter((r) => !apart.has(repoKey(r))),
     repos: store.repoInfo.filter((r) => !r.ignored && !apart.has(repoKey(r)))
@@ -202,7 +207,6 @@ onMounted(async () => {
         @action="onAction"
         @edit="editing = $event"
         @mini-repo="enterMiniRepo"
-        @remove="removing = $event"
         @settings="configuring = $event"
       />
     </div>
@@ -251,6 +255,44 @@ onMounted(async () => {
                     Ignore
                   </button>
                   <button type="button" class="btn btn-sm" @click="configuring = repo">
+                    <Settings2 />
+                    Settings…
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="store.reposLoaded && vaultOnly.length" class="repo-section">
+      <button
+        type="button"
+        class="btn-link small"
+        :aria-expanded="showVaultOnly"
+        @click="showVaultOnly = !showVaultOnly"
+      >
+        <ChevronDown v-if="showVaultOnly" />
+        <ChevronRight v-else />
+        Only in the vault ({{ vaultOnly.length }}) · {{ showVaultOnly ? 'Hide' : 'Show' }}
+      </button>
+      <div v-if="showVaultOnly" class="card">
+        <table class="table">
+          <tbody>
+            <tr v-for="repo in vaultOnly" :key="repoKey(repo)" class="row-dim">
+              <td>
+                <div class="repo-name">{{ repo.name }}</div>
+                <div class="small">{{ copies(repo.copies) }}, not in your projects folder</div>
+              </td>
+              <td class="col-actions">
+                <div class="row">
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    title="Its settings, and removing its vault copies"
+                    @click="configuring = repo"
+                  >
                     <Settings2 />
                     Settings…
                   </button>
