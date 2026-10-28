@@ -2,7 +2,7 @@
 // The repos and their env files. Every repo gets a row with its name, then a
 // row per file (even when it is just the root .env).
 import { computed } from 'vue'
-import { Pencil, PictureInPicture2, Settings2, Trash2 } from 'lucide-vue-next'
+import { Pencil, PictureInPicture2, Settings2 } from 'lucide-vue-next'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
 import { ACTION_ICON } from '../icons'
 import {
@@ -23,7 +23,6 @@ defineEmits<{
   action: [row: RepoRow, action: RowAction]
   edit: [row: RepoRow]
   miniRepo: [rows: RepoRow[]]
-  remove: [row: RepoRow]
   settings: [repo: RepoInfo]
 }>()
 
@@ -56,12 +55,6 @@ const lines = (g: Group): Line[] => g.files.map((row) => ({ row }))
 
 const storedTitle = (row: RepoRow): string | undefined =>
   row.storedName ? `Stored in the vault as ${row.storedName}` : undefined
-
-/** Only in the vault here, or not synced by the repo's settings: there to be removed. */
-const removable = (row: RepoRow): boolean =>
-  (row.status === 'vault-only' || row.status === 'excluded') &&
-  row.vault !== null &&
-  row.path !== null
 
 /** The group's files that mini mode can show: the local ones with a path. */
 const miniFiles = (g: Group): RepoRow[] =>
@@ -107,7 +100,7 @@ const hasRepoMini = (g: Group): boolean => miniFiles(g).length > 0
               v-if="g.repo"
               type="button"
               class="btn btn-sm"
-              title="Which env files it syncs, the name it syncs as, or ignore it"
+              title="Which env files it syncs, the name it syncs as, ignore it, or remove vault copies"
               @click="$emit('settings', g.repo)"
             >
               <Settings2 />
@@ -160,16 +153,6 @@ const hasRepoMini = (g: Group): boolean => miniFiles(g).length > 0
             >
               <Pencil />
               Edit
-            </button>
-            <button
-              v-if="removable(line.row)"
-              type="button"
-              class="btn btn-sm"
-              title="Delete the vault copy. No local file is touched."
-              @click="$emit('remove', line.row)"
-            >
-              <Trash2 />
-              Remove…
             </button>
           </div>
         </td>

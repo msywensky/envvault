@@ -206,6 +206,17 @@ code,
   color: var(--surface);
 }
 
+/* A dangerous action that isn't the dialog's answer: red only on hover (see .danger-zone). */
+.btn-danger-outline {
+  color: var(--danger-text);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  border-color: var(--danger-text);
+  background: var(--danger-text);
+  color: var(--surface);
+}
+
 .btn-sm {
   height: 28px;
   padding: 0 10px;
@@ -1291,4 +1302,31 @@ fieldset.field > legend {
   .spinner {
     animation-duration: 2s;
   }
+}
+
+/* ---------- danger zone (repo settings) ---------- */
+
+.danger-zone h3 {
+  color: var(--danger-text);
+}
+
+.danger-box {
+  border: 1px solid var(--danger-text);
+  border-radius: 8px;
+}
+
+.danger-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 14px;
+}
+
+.danger-item + .danger-item {
+  border-top: 1px solid var(--border);
+}
+
+.danger-item p {
+  margin: 2px 0 0;
 }

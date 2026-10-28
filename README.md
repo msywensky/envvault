@@ -44,17 +44,17 @@ The vault can also be a **private git repository** instead of a synced folder: t
 
 **Sync status** is three-way: local file, vault copy, and what this machine last synced. That separates "local newer", "vault newer" and changes on both sides. When both sides changed, EnvVault compares them with what this machine last synced (kept encrypted, see [Merging](#merging-and-resolving-conflicts)): changes to different keys are **Both changed** and merge with a review, and only the same key changed on both sides is a **conflict**. A vault copy whose version went backwards (a rollback) is shown as a conflict, never offered as a simple pull. The one exception is when it is byte-identical to your local file: then nothing would change either way, and it shows as in sync.
 
-| Status       | Meaning                                                                                                    | Action   |
-| ------------ | ---------------------------------------------------------------------------------------------------------- | -------- |
-| In sync      | Local and vault are byte-identical, apart from machine-specific values                                     | —        |
-| Local only   | Never pushed                                                                                               | Push     |
-| Local newer  | Only you changed it since the last sync                                                                    | Push     |
-| Vault newer  | Only another machine changed it                                                                            | Pull     |
-| Both changed | Both changed it since the last sync, but not the same keys                                                 | Merge…   |
-| Conflict     | The same key changed on both sides, or EnvVault can't tell what changed where, or the vault went backwards | Resolve… |
-| Vault only   | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it                 | Remove…  |
-| Excluded     | In the vault, but the repo's settings no longer sync it                                                    | Remove…  |
-| No .env      | Nothing on either side                                                                                     | —        |
+| Status       | Meaning                                                                                                    | Action               |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | -------------------- |
+| In sync      | Local and vault are byte-identical, apart from machine-specific values                                     | —                    |
+| Local only   | Never pushed                                                                                               | Push                 |
+| Local newer  | Only you changed it since the last sync                                                                    | Push                 |
+| Vault newer  | Only another machine changed it                                                                            | Pull                 |
+| Both changed | Both changed it since the last sync, but not the same keys                                                 | Merge…               |
+| Conflict     | The same key changed on both sides, or EnvVault can't tell what changed where, or the vault went backwards | Resolve…             |
+| Vault only   | In the vault, but the repo isn't in your projects folder, or the file's folder isn't in it                 | Remove… in Settings… |
+| Excluded     | In the vault, but the repo's settings no longer sync it                                                    | Remove… in Settings… |
+| No .env      | Nothing on either side                                                                                     | —                    |
 
 Every push and pull shows a confirmation with the **key names** that will be added, removed or changed, never their values. Pushing over a vault copy that someone else changed needs an explicit "overwrite anyway". A pull first saves your current `.env` as `.env.bak.<timestamp>` and keeps the 3 newest backups per file, deleting older ones (change the number or turn backups off in **Settings → Sync**). Backups are plaintext like `.env`. Git ignores them, but other tools don't read `.gitignore`: add `.env.bak.*` to a `.dockerignore` too.
 
@@ -165,16 +165,18 @@ Click **Settings…** on a repo (on its row, or next to its name when it has sev
   - Never synced, whatever the patterns say: templates (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`, also after another name, as in `.env.local.example`) and EnvVault's own backups (`.env.bak.*`). Variants git tracks, such as a committed `.env.development`, aren't listed either: git already syncs them.
   - Variants such as `.env.local` often hold values that differ between machines. Sync them only where they don't, or mark those keys [machine-specific](#machine-specific-keys).
   - The dialog shows which files the patterns match, from what git found at the last Refresh. Changes apply at once.
-  - A vault copy the patterns no longer include stays in the vault, listed as **Excluded** with **Remove…**. It's never pushed, pulled or edited.
+  - A vault copy the patterns no longer include stays in the vault, listed as **Excluded**. It's never pushed, pulled or edited; remove it in the **Danger zone** below.
   - A variant's backups are named after it (`.env.bak.local.<timestamp>`) and kept apart from the `.env`'s. Its `.env.example` check is skipped. The pull dialog names the file (**Add .env.local to .gitignore**) and adds its own name.
 - **Files picked by hand:** **Add file…** opens your system's file picker in the repo, so you can sync a file the patterns don't cover, with any name (`config/secrets.env`, `.envrc`). Its content must be in `.env` format (`KEY=value` lines, `# comments` and blank lines): EnvVault refuses a JSON or YAML file when you pick it and when you push it. A picked file syncs whatever the patterns say; remove it from the list to stop. It can't be a template, one of git's own files (`.gitignore`) or more than 8 folders deep, and a repo can have up to 20. Pulls need it git-ignored like any env file (the pull dialog offers **Add secrets.env to .gitignore**, with its name), and its backups are named `.env.bak.@<name>.<timestamp>`, so `.env.bak.*` still covers them. Older versions of EnvVault don't sync picked files, and show their vault copies as saved by a newer EnvVault.
 
-  ![A repo's settings: a file picked by hand, config/secrets.env, synced along with .env](docs/repo-settings.png)
+  ![A repo's settings: a file picked by hand, config/secrets.env, synced along with .env, and the Danger zone with Remove… for the vault copy](docs/repo-settings.png)
 
 - **Ignore this repo:** EnvVault doesn't read its files, push them or pull into it, on any machine, and the command line refuses it. It moves to the collapsed **Ignored** list under the table, with **Stop ignoring**. Its vault copies stay.
 - **Sync as** (this machine only) is the name the folder's files have in the vault. Use it for a second checkout or a git worktree of a repo (`api-wt` syncing as `api`), or a folder you renamed. Each folder keeps its own sync status, so a push from one shows the other as Vault newer.
 
-Repos with no env files on either side are listed apart too, under **No env files**, with **Edit** (to start a vault copy), **Ignore** and **Settings…**.
+- **Danger zone**, at the bottom, in red: **Remove…** next to each of the repo's vault copies (see [Removing a vault copy](#removing-a-vault-copy)).
+
+Repos with no env files on either side are listed apart too, under **No env files**, with **Edit** (to start a vault copy), **Ignore** and **Settings…**. Repos that are only in the vault (not in your projects folder) are under **Only in the vault**, collapsed, each with **Settings…**.
 
 If the settings in the vault fail verification, EnvVault uses the built-in ones (every `.env` syncs, no repo is ignored) and offers **Reset settings…**. Settings saved by a newer EnvVault are left alone until you update this one.
 
@@ -191,8 +193,9 @@ Click **Edit** on a `.env` to change its vault copy in a table of keys and value
 
 ### Removing a vault copy
 
-Click **Remove…** on a Vault only row (a repo or package that's gone), or **Remove from vault…** in the editor, to delete a file's vault copy.
+To delete a file's vault copy, open the repo's **Settings…** and click **Remove…** next to it in the **Danger zone** at the bottom, or click **Remove from vault…** in the editor. For a repo that's gone from your projects folder, its **Settings…** is under **Only in the vault**, below the table.
 
+- Any vault copy of the repo can be removed there, not only Vault only and Excluded ones; the other machines then see theirs as never pushed.
 - It asks first, and deletes only the copy it showed you: if another machine changed it meanwhile, nothing is removed.
 - No `.env` is changed or deleted, on this machine or any other. A machine that still has the file shows it as never pushed and can push it again, which continues its version numbers.
 - A git vault keeps old copies in its history, and Drive keeps deleted files in its trash for a while.

@@ -1,14 +1,25 @@
 <script setup lang="ts">
 // A repo's settings. Which name it syncs as is this machine's alone; whether
 // it's ignored and which env files it syncs are kept in the vault, by that
-// name, for every machine. Patterns and names only: no values here.
+// name, for every machine. Patterns and names only: no values here. Its
+// Danger zone removes vault copies (RemoveDialog confirms each one).
 import { computed, onMounted, ref, watch } from 'vue'
-import { Check, FilePlus, X } from 'lucide-vue-next'
+import { Check, FilePlus, Trash2, X } from 'lucide-vue-next'
 import { MAX_PICKED_FILES, RESERVED_NOTE, isIncluded } from '../../../shared/envrules'
-import type { RepoInfo, RepoRules } from '../../../shared/types'
+import type { RepoInfo, RepoRow, RepoRules } from '../../../shared/types'
 import { call, loadRepos, store, toast } from '../store'
-import { patternLines, patternListProblems, repoKey, repoNameProblem, syncsAs } from '../status'
+import {
+  absoluteTime,
+  patternLines,
+  patternListProblems,
+  relativeTime,
+  repoKey,
+  repoNameProblem,
+  rowKey,
+  syncsAs
+} from '../status'
 import PatternList from './PatternList.vue'
+import RemoveDialog from './RemoveDialog.vue'
 
 const props = defineProps<{ repo: RepoInfo }>()
 const emit = defineEmits<{ close: [] }>()
@@ -137,6 +148,23 @@ async function addFile(): Promise<void> {
 
 function removeFile(path: string): void {
   files.value = files.value.filter((f) => f !== path)
+}
+
+// ---- danger zone ----
+
+/** The repo's vault copies that can be removed: readable ones, with a path. */
+const vaultCopies = computed(() =>
+  store.repos.filter(
+    (r) => repoKey(r) === repoKey(info.value) && r.vault !== null && r.path !== null
+  )
+)
+const removing = ref<RepoRow | null>(null)
+
+async function removed(): Promise<void> {
+  removing.value = null
+  await loadRepos()
+  // A repo only in the vault is gone with its last copy.
+  if (!store.repoInfo.some((r) => repoKey(r) === repoKey(props.repo))) emit('close')
 }
 
 async function save(): Promise<void> {
@@ -320,6 +348,41 @@ watch(
         </template>
       </section>
 
+      <section
+        v-if="saved.ignored ? info.copies > 0 : vaultCopies.length > 0"
+        class="stack danger-zone"
+      >
+        <h3>Danger zone</h3>
+        <div class="danger-box">
+          <p v-if="saved.ignored" class="danger-item muted small">
+            Stop ignoring this repo to remove its vault copies.
+          </p>
+          <div v-for="row in vaultCopies" v-else :key="rowKey(row)" class="danger-item">
+            <div class="grow">
+              <strong
+                >Remove <code>{{ row.path }}</code> from the vault</strong
+              >
+              <p v-if="row.vault" class="muted small">
+                v{{ row.vault.version }} from {{ row.vault.updatedBy }},
+                <span :title="absoluteTime(row.vault.updatedAt)">{{
+                  relativeTime(row.vault.updatedAt)
+                }}</span
+                >. Deletes it for every machine; no local file is touched.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-sm btn-danger-outline"
+              :disabled="busy"
+              @click="removing = row"
+            >
+              <Trash2 />
+              Remove…
+            </button>
+          </div>
+        </div>
+      </section>
+
       <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
     </div>
 
@@ -336,5 +399,13 @@ watch(
         Save
       </button>
     </div>
+
+    <RemoveDialog
+      v-if="removing"
+      :key="rowKey(removing)"
+      :repo="removing"
+      @close="removing = null"
+      @done="removed"
+    />
   </dialog>
 </template>

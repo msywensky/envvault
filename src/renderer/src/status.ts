@@ -98,7 +98,7 @@ export const STATUS_HINT: Record<RowStatus, string> = {
     "Both sides changed the same key, or they differ and this machine can't tell which changed what.",
   error: 'Something is wrong with this repo or its vault copy.',
   excluded:
-    "In the vault, but this repo's settings don't sync it. Remove the vault copy, or change the settings."
+    "In the vault, but this repo's settings don't sync it. Change the settings, or remove the vault copy in the repo's Settings."
 }
 
 /** Which buttons a row offers (see the status table in the README). */
