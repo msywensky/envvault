@@ -18,15 +18,7 @@ import RepoTable from '../components/RepoTable.vue'
 import ResolveDialog from '../components/ResolveDialog.vue'
 import SyncDialog from '../components/SyncDialog.vue'
 import { call, enterMiniRepo, loadRepos, store, toast } from '../store'
-import {
-  actionsFor,
-  folderName,
-  isQuiet,
-  repoKey,
-  rowKey,
-  syncsAs,
-  type RowAction
-} from '../status'
+import { actionsFor, folderName, repoKey, rowKey, syncsAs, type RowAction } from '../status'
 
 const loading = ref(false)
 const open = ref<{ repo: RepoRow; mode: 'push' | 'pull'; conflict: boolean } | null>(null)
@@ -65,9 +57,8 @@ const placeholder = (repo: RepoInfo): RepoRow | null => rowsOf.value.get(repoKey
 const settingsError = computed(() => store.repoSettings?.error ?? null)
 
 const counts = computed(() => {
-  // Files found but never pushed are only suggestions.
   const needsAction = listed.value.rows.filter(
-    (r) => !isQuiet(r) && (r.status === 'error' || actionsFor(r).length > 0)
+    (r) => r.status === 'error' || actionsFor(r).length > 0
   ).length
   return { total: store.repoInfo.filter((r) => !r.ignored).length, needsAction }
 })
