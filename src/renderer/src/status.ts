@@ -71,13 +71,6 @@ export function fileTitle(row: Pick<RepoRow, 'name' | 'path'>): string {
   return row.path === null || row.path === ROOT_ENV ? row.name : `${row.name}/${row.path}`
 }
 
-/**
- * An env file found in a folder of a repo that nobody has pushed yet: listed
- * quietly, apart from the files that sync, and never counted as needing
- * attention. A file at the repo's root (.env, .env.local) is never quiet.
- */
-export const isQuiet = (row: RepoRow): boolean =>
-  row.path !== null && row.path.includes('/') && row.status === 'local-only'
 export type RowAction = 'push' | 'pull' | 'merge' | 'resolve' | 'keep-local' | 'keep-vault'
 
 export const STATUS_LABEL: Record<RowStatus, string> = {

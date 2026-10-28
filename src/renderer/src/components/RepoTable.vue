@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // The repos and their env files. Every repo gets a row with its name, then a
-// row per file (even when it is just the root .env); files found in folders
-// that nobody has pushed are listed apart, collapsed until asked for.
+// row per file (even when it is just the root .env).
 import { computed } from 'vue'
 import { Pencil, PictureInPicture2, Settings2, Trash2 } from 'lucide-vue-next'
 import type { RepoInfo, RepoRow } from '../../../shared/types'
@@ -11,7 +10,6 @@ import {
   absoluteTime,
   actionsFor,
   canEdit,
-  isQuiet,
   relativeTime,
   repoKey,
   rowKey,
@@ -52,7 +50,7 @@ const groups = computed(() => {
   return [...byRepo.values()]
 })
 
-/** A group's rows in order: its files, then the quiet list's toggle and, if open, the list. */
+/** A group's rows in order: one per file. */
 type Line = { row: RepoRow }
 const lines = (g: Group): Line[] => g.files.map((row) => ({ row }))
 
@@ -122,10 +120,7 @@ const hasRepoMini = (g: Group): boolean => miniFiles(g).length > 0
         v-for="line in lines(g)"
         :key="rowKey(line.row)"
         class="file-row"
-        :class="{
-          'row-dim': line.row.status === 'vault-only' || line.row.status === 'excluded',
-          'row-quiet': isQuiet(line.row)
-        }"
+        :class="{ 'row-dim': line.row.status === 'vault-only' || line.row.status === 'excluded' }"
       >
         <td :title="storedTitle(line.row)">
           <div v-if="line.row.path !== null" class="file-path">{{ line.row.path }}</div>
